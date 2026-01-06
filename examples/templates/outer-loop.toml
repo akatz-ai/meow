@@ -70,5 +70,10 @@ id = "restart"
 description = "Loop back to process next batch of work"
 type = "restart"
 needs = ["run-inner"]
-# Continue looping while there are open epics
-condition = "not all_epics_closed() and iteration < max_iterations"
+# Shell-based condition: continue while open epics exist and under iteration limit
+condition = """
+  # Check for open epics
+  bd list --type=epic --status=open --format=count 2>/dev/null | grep -q '^[1-9]' && \
+  # Check iteration limit
+  test $(jq -r '.iteration // 0' .beads/molecules/meow-state.json 2>/dev/null || echo 0) -lt 100
+"""

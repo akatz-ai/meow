@@ -14,7 +14,11 @@ This document provides the complete technical specification for the Molecular Ex
 8. [Human Gates](#human-gates)
 9. [Task Selection](#task-selection)
 10. [Error Handling](#error-handling)
-11. [Multi-Agent Considerations](#multi-agent-considerations)
+11. [Parallel Fork-Join](#parallel-fork-join)
+12. [Multi-Agent Orchestration](#multi-agent-orchestration)
+13. [Git Worktrees](#git-worktrees)
+14. [Handoff Context](#handoff-context)
+15. [Shell-Based Conditions](#shell-based-conditions)
 
 ---
 
@@ -79,6 +83,22 @@ dependencies:
   - type: blocks
     depends_on: "bd-x1y2z3"
 parent: "bd-epic-001"  # For rollup
+
+# Parallel execution (new)
+parallel: true | false          # Can run in parallel with siblings
+parallel_group: "review-test"   # Group ID for parallel siblings
+spawn_mode: clone | fresh       # clone = --resume, fresh = new context
+
+# Conditions (new)
+condition: "shell command"      # Shell command that must exit 0 to proceed
+
+# Handoff context (new)
+handoff:
+  status: success | failure | partial
+  summary: "What was accomplished"
+  artifacts: ["path/to/file"]
+  next_steps: ["What the next agent should do"]
+  context: { key: value }       # Arbitrary data for parent
 ```
 
 ### Molecule
@@ -94,12 +114,26 @@ parent_molecule: "meta-mol-001"  # Stack parent
 parent_step: "task-1"  # Which step in parent this represents
 status: in_progress
 current_step: "write-tests"  # Active step
+iteration: 1  # For loop molecules
 children:
   - "mol-impl-001.load-context"
   - "mol-impl-001.write-tests"
   - "mol-impl-001.verify-fail"
   - "mol-impl-001.implement"
   - "mol-impl-001.commit"
+
+# Session tracking (new)
+session:
+  id: "session-uuid"            # Claude session ID
+  tmux_session: "meow-mol-001"  # tmux session name
+  worktree: "/path/to/worktree" # Git worktree path
+  branch: "meow/mol-impl-001"   # Auto-generated branch
+  checkpoint_id: "checkpoint-X" # For --resume
+  spawn_mode: clone | fresh     # How this session was started
+  parent_session: "session-Y"   # Session that spawned this one
+
+# Completion signal (new)
+terminal_step: "commit"         # Last step - completion triggers parent resume
 ```
 
 ### Template
@@ -947,71 +981,721 @@ meta-mol-001.error-triage CREATED
 
 ---
 
-## Multi-Agent Considerations
+## Parallel Fork-Join
 
-While MEOW Stack is designed for single-agent operation, it supports multi-agent scenarios.
+MEOW Stack supports true parallel execution where multiple Claude instances work simultaneously on independent tasks.
 
-### Work Partitioning
+### Parallel Step Marking
 
-Use `bv --robot-triage-by-track` to partition work:
+Steps can be marked as parallel-capable in templates or when baking molecules:
 
-```json
-{
-  "tracks": [
-    {
-      "track_id": "backend",
-      "top_pick": "bd-task-001",
-      "tasks": ["bd-task-001", "bd-task-002"]
-    },
-    {
-      "track_id": "frontend",
-      "top_pick": "bd-task-005",
-      "tasks": ["bd-task-005", "bd-task-006"]
-    }
-  ]
-}
+```toml
+[[steps]]
+id = "review"
+description = "Review code changes"
+template = "review"
+parallel = true                  # Can run in parallel
+parallel_group = "validation"    # Group ID for joining
+
+[[steps]]
+id = "test"
+description = "Run test suite"
+template = "test"
+parallel = true
+parallel_group = "validation"    # Same group = parallel siblings
+
+[[steps]]
+id = "merge"
+description = "Merge changes"
+needs = ["review", "test"]       # Join point - waits for both
 ```
 
-Each agent works on a different track → no conflicts.
+### Fork-Join Execution Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          PARALLEL FORK-JOIN MODEL                               │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  Sequential execution:      task-1 ──▶ task-2 ──▶ task-3                        │
+│                                                                                 │
+│  Parallel fork-join:                                                            │
+│                                                                                 │
+│                            ┌──▶ review ──┐                                      │
+│        task-1 ──▶ fork ────┤             ├──▶ join ──▶ merge                    │
+│                            └──▶ test ────┘                                      │
+│                                                                                 │
+│  Complex DAG:                                                                   │
+│                                                                                 │
+│                  ┌──▶ review ──┐       ┌──▶ e2e ────┐                           │
+│        impl ─────┤             ├──▶ J1 ┤            ├──▶ J2 ──▶ deploy          │
+│                  ├──▶ unit ────┤       └──▶ perf ───┘                           │
+│                  └──▶ lint ────┘                                                │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Spawn Modes
+
+When forking, each parallel branch can be spawned in different modes:
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `clone` | `claude --resume <checkpoint>` | Shared context, agents understand full history |
+| `fresh` | `claude --prompt <template>` | Clean context, independent work |
+
+```toml
+[[steps]]
+id = "review"
+parallel = true
+spawn_mode = "clone"      # Inherit parent context via --resume
+
+[[steps]]
+id = "benchmark"
+parallel = true
+spawn_mode = "fresh"      # Start fresh with template prompt only
+template = "benchmark"    # Required for fresh mode
+```
+
+**Default**: `clone` (shared context) unless step has a `template` field, then `fresh`.
+
+### Parallel Execution Trace
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  PARALLEL FORK                                                               ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Session A (parent) at step: fork-validation                                 ║
+║  Parallel group: "validation" → [review, test]                               ║
+║                                                                              ║
+║  1. Save checkpoint: checkpoint-A-after-implement                            ║
+║  2. Record fork state:                                                       ║
+║     {                                                                        ║
+║       "fork_id": "fork-validation-001",                                      ║
+║       "parallel_group": "validation",                                        ║
+║       "branches": ["review", "test"],                                        ║
+║       "parent_session": "session-A",                                         ║
+║       "checkpoint": "checkpoint-A-after-implement",                          ║
+║       "join_step": "merge"                                                   ║
+║     }                                                                        ║
+║  3. Spawn Session B (review) in worktree: ~/worktrees/meow-review-001        ║
+║  4. Spawn Session C (test) in worktree: ~/worktrees/meow-test-001            ║
+║  5. Session A EXITS (not waiting - no token waste)                           ║
+║                                                                              ║
+║  Status: Parent suspended, children running in parallel                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  PARALLEL EXECUTION                                                          ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  Session B (review)              │  Session C (test)                         ║
+║  ─────────────────────           │  ─────────────────                        ║
+║  Worktree: meow-review-001       │  Worktree: meow-test-001                  ║
+║  Branch: meow/review-001         │  Branch: meow/test-001                    ║
+║  Mode: clone (--resume)          │  Mode: clone (--resume)                   ║
+║                                  │                                           ║
+║  Executes review molecule...     │  Executes test molecule...                ║
+║  ├─ load-diff                    │  ├─ setup-env                             ║
+║  ├─ check-style                  │  ├─ run-unit                              ║
+║  ├─ check-security               │  ├─ run-integration                       ║
+║  └─ write-review                 │  └─ report-results                        ║
+║                                  │                                           ║
+║  Completes first!                │  Still running...                         ║
+║  Writes handoff, closes terminal │                                           ║
+║  Orchestrator: 1/2 complete      │  Completes!                               ║
+║                                  │  Writes handoff, closes terminal          ║
+║                                  │  Orchestrator: 2/2 complete → JOIN        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  PARALLEL JOIN                                                               ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  All branches complete. Orchestrator triggers join:                          ║
+║                                                                              ║
+║  1. Collect handoff context from both branches                               ║
+║  2. Merge git branches (or flag conflicts for human)                         ║
+║  3. Resume Session A: claude --resume checkpoint-A-after-implement           ║
+║  4. Inject handoff context into resumed session                              ║
+║  5. Session A continues with "merge" step                                    ║
+║                                                                              ║
+║  Session A sees:                                                             ║
+║    - Review handoff: "LGTM, minor style issues fixed"                        ║
+║    - Test handoff: "All 147 tests passing, 92% coverage"                     ║
+║    - Merged code from both branches                                          ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Join Conditions
+
+The join step can specify different completion conditions:
+
+```toml
+[[steps]]
+id = "merge"
+needs = ["review", "test", "lint"]
+join_condition = "all"         # Wait for all (default)
+
+[[steps]]
+id = "fast-path"
+needs = ["primary", "backup"]
+join_condition = "any"         # Continue when first completes
+
+[[steps]]
+id = "quorum"
+needs = ["node-1", "node-2", "node-3"]
+join_condition = "2_of_3"      # Wait for 2 of 3
+```
+
+### Failure Handling in Parallel
+
+```toml
+[meta]
+parallel_failure_mode = "fail_fast"  # or: continue, isolate
+
+# fail_fast: If any branch fails, abort siblings and join
+# continue: Let other branches complete, report partial results
+# isolate: Failed branch doesn't affect others, join proceeds
+```
+
+---
+
+## Multi-Agent Orchestration
+
+MEOW Stack uses a lightweight **orchestrator daemon** (not Claude) to manage multiple Claude sessions.
+
+### Orchestrator Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           MEOW ORCHESTRATOR                                     │
+│                                                                                 │
+│  A lightweight daemon (Go binary) that manages Claude session lifecycle        │
+│                                                                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  RESPONSIBILITIES                                                       │   │
+│  ├─────────────────────────────────────────────────────────────────────────┤   │
+│  │                                                                         │   │
+│  │  1. SESSION SPAWNING                                                    │   │
+│  │     • Create tmux sessions for molecules                                │   │
+│  │     • Launch claude with --resume or fresh prompt                       │   │
+│  │     • Create git worktrees for isolation                                │   │
+│  │     • Track session → molecule mapping                                  │   │
+│  │                                                                         │   │
+│  │  2. COMPLETION MONITORING                                               │   │
+│  │     • Watch beads for terminal step closure                             │   │
+│  │     • Detect parallel join points                                       │   │
+│  │     • Handle session crashes/timeouts                                   │   │
+│  │                                                                         │   │
+│  │  3. PARENT RESUME                                                       │   │
+│  │     • When children complete, resume suspended parent                   │   │
+│  │     • Inject handoff context into resumed session                       │   │
+│  │     • Merge worktree branches                                           │   │
+│  │                                                                         │   │
+│  │  4. RESOURCE MANAGEMENT                                                 │   │
+│  │     • File reservations via mcp_agent_mail                              │   │
+│  │     • Worktree cleanup after completion                                 │   │
+│  │     • Session limits and throttling                                     │   │
+│  │                                                                         │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  STATE STORAGE                                                          │   │
+│  ├─────────────────────────────────────────────────────────────────────────┤   │
+│  │                                                                         │   │
+│  │  .beads/molecules/orchestrator.json:                                    │   │
+│  │  {                                                                      │   │
+│  │    "sessions": {                                                        │   │
+│  │      "session-A": {                                                     │   │
+│  │        "molecule": "meta-mol-001",                                      │   │
+│  │        "status": "suspended",                                           │   │
+│  │        "checkpoint": "checkpoint-A-after-impl",                         │   │
+│  │        "tmux": "meow-meta-001",                                         │   │
+│  │        "worktree": null,                                                │   │
+│  │        "waiting_for": ["review-mol-001", "test-mol-001"],               │   │
+│  │        "fork_id": "fork-validation-001"                                 │   │
+│  │      },                                                                 │   │
+│  │      "session-B": {                                                     │   │
+│  │        "molecule": "review-mol-001",                                    │   │
+│  │        "status": "active",                                              │   │
+│  │        "tmux": "meow-review-001",                                       │   │
+│  │        "worktree": "/home/user/worktrees/meow-review-001",              │   │
+│  │        "branch": "meow/review-001",                                     │   │
+│  │        "parent_session": "session-A"                                    │   │
+│  │      }                                                                  │   │
+│  │    },                                                                   │   │
+│  │    "forks": {                                                           │   │
+│  │      "fork-validation-001": {                                           │   │
+│  │        "branches": ["session-B", "session-C"],                          │   │
+│  │        "completed": ["session-B"],                                      │   │
+│  │        "join_step": "merge"                                             │   │
+│  │      }                                                                  │   │
+│  │    }                                                                    │   │
+│  │  }                                                                      │   │
+│  │                                                                         │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Completion Detection
+
+The orchestrator monitors beads for the **terminal step** of each molecule:
+
+```yaml
+# Molecule definition
+mol-review-001:
+  terminal_step: "write-review"  # Last step in molecule
+  children:
+    - "mol-review-001.load-diff"
+    - "mol-review-001.check-style"
+    - "mol-review-001.write-review"  # ← When this closes, molecule is complete
+```
+
+**Completion signal**: When `terminal_step` status becomes `closed`:
+
+```bash
+# Orchestrator polls or watches beads
+bd show mol-review-001.write-review --format json | jq '.status'
+# → "closed" means molecule complete
+```
+
+Or via file watch:
+
+```bash
+# Orchestrator watches for .done file
+~/.meow/molecules/mol-review-001.done
+```
+
+### Session Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         SESSION STATES                                          │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  SPAWNING ──▶ ACTIVE ──┬──▶ COMPLETED                                           │
+│                        │                                                        │
+│                        ├──▶ SUSPENDED (waiting for children)                    │
+│                        │        │                                               │
+│                        │        └──▶ RESUMED ──▶ ACTIVE                         │
+│                        │                                                        │
+│                        ├──▶ FAILED                                              │
+│                        │                                                        │
+│                        └──▶ TIMED_OUT                                           │
+│                                                                                 │
+│  State transitions:                                                             │
+│  • SPAWNING: Orchestrator creating tmux session, worktree                       │
+│  • ACTIVE: Claude running, executing steps                                      │
+│  • SUSPENDED: Claude exited, checkpoint saved, awaiting children                │
+│  • RESUMED: Claude restarted with --resume, children complete                   │
+│  • COMPLETED: Molecule finished, handoff written, cleanup pending               │
+│  • FAILED: Error during execution, needs intervention                           │
+│  • TIMED_OUT: Exceeded time limit, killed                                       │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Spawning Commands
+
+```bash
+# Orchestrator spawns a session
+meow-orchestrator spawn \
+  --molecule mol-review-001 \
+  --mode clone \
+  --parent-checkpoint checkpoint-A \
+  --worktree ~/worktrees/meow-review-001 \
+  --branch meow/review-001
+
+# Internally runs:
+tmux new-session -d -s meow-review-001 \
+  "cd ~/worktrees/meow-review-001 && claude --resume checkpoint-A --prompt 'Execute review molecule mol-review-001'"
+```
 
 ### File Reservations
 
-Use mcp_agent_mail file reservations:
+Parallel agents use mcp_agent_mail for file coordination:
 
 ```bash
-# Agent claims files before editing
-am lease --path "src/auth/**" --duration 1h --agent GreenLake
+# Session B (review) reserves review-related files
+am lease --path "*.md" --path "docs/**" --duration 30m --agent review-001
 
-# Other agents see the reservation
-am leases
-# → src/auth/** held by GreenLake (expires in 45m)
+# Session C (test) reserves test-related files
+am lease --path "tests/**" --path "*.test.js" --duration 30m --agent test-001
+
+# No conflicts - different file patterns
 ```
 
-### Molecule Ownership
+---
 
-Each molecule is owned by one agent:
+## Git Worktrees
+
+Each spawned Claude session operates in its own **git worktree** for complete isolation.
+
+### Worktree Structure
+
+```
+~/                                    # Home directory
+├── projects/
+│   └── myapp/                        # Main repository
+│       ├── .git/                     # Git directory
+│       ├── .beads/                   # Beads state
+│       └── src/                      # Source code
+│
+└── worktrees/                        # MEOW worktrees
+    └── myapp/                        # Per-project worktree directory
+        ├── meow-review-001/          # Session B worktree
+        │   ├── .git → ../../../projects/myapp/.git
+        │   ├── .beads → ../../../projects/myapp/.beads  # Symlink!
+        │   └── src/                  # Own copy of source
+        │
+        ├── meow-test-001/            # Session C worktree
+        │   ├── .git → ...
+        │   ├── .beads → ...          # Shared beads state
+        │   └── src/
+        │
+        └── meow-impl-002/            # Another session
+            └── ...
+```
+
+### Branch Naming Convention
+
+Auto-generated branch names follow the pattern:
+
+```
+meow/<molecule-id>[-<suffix>]
+
+Examples:
+  meow/mol-impl-001
+  meow/review-001
+  meow/test-001-retry-1
+```
+
+### Worktree Creation
+
+```bash
+# Orchestrator creates worktree for new session
+WORKTREE_PATH=~/worktrees/myapp/meow-review-001
+BRANCH_NAME=meow/review-001
+
+# Create worktree with new branch from current HEAD
+git worktree add -b $BRANCH_NAME $WORKTREE_PATH HEAD
+
+# Symlink beads directory (shared state)
+ln -s $(pwd)/.beads $WORKTREE_PATH/.beads
+
+# Session operates in worktree
+cd $WORKTREE_PATH
+claude --resume checkpoint-A
+```
+
+### Branch Merging at Join
+
+When parallel branches complete, the orchestrator merges:
+
+```bash
+# At join point, merge all parallel branches
+git checkout main  # or parent branch
+
+# Merge each branch
+git merge --no-ff meow/review-001 -m "Merge review from mol-review-001"
+git merge --no-ff meow/test-001 -m "Merge test from mol-test-001"
+
+# If conflicts, create conflict-resolution gate
+# Otherwise, cleanup worktrees
+git worktree remove ~/worktrees/myapp/meow-review-001
+git worktree remove ~/worktrees/myapp/meow-test-001
+git branch -d meow/review-001
+git branch -d meow/test-001
+```
+
+### Conflict Handling
 
 ```yaml
-mol-impl-001:
-  owner: GreenLake
-  started_by: GreenLake
-  started_at: 2026-01-06T10:00:00Z
+# If merge conflicts detected:
+conflict_gate:
+  type: gate
+  title: "Merge Conflict: review-001 + test-001"
+  description: |
+    Conflict in files:
+    - src/auth/login.js
+    - tests/auth.test.js
+
+    Branches:
+    - meow/review-001: style fixes
+    - meow/test-001: new test cases
+
+  resolution_options:
+    - keep_review
+    - keep_test
+    - manual_merge
 ```
 
-Other agents can observe but not modify.
+---
 
-### Coordination Messages
+## Handoff Context
 
-Agents coordinate via mcp_agent_mail:
+When a child molecule completes, it writes **handoff context** for the parent to consume.
+
+### Handoff Structure
+
+```yaml
+# Written by child session before exit
+handoff:
+  molecule_id: "mol-review-001"
+  status: success | failure | partial
+
+  summary: |
+    Code review complete. Found 3 minor issues, all fixed.
+    No security concerns. Style is consistent.
+
+  artifacts:
+    - path: "review-report.md"
+      type: "report"
+    - path: "src/auth/login.js"
+      type: "modified"
+
+  next_steps:
+    - "Proceed with merge"
+    - "Run integration tests"
+
+  context:
+    issues_found: 3
+    issues_fixed: 3
+    coverage_delta: "+2.3%"
+    review_time_minutes: 12
+
+  warnings:
+    - "Large function in auth/login.js:142 - consider refactoring"
+
+  blocking_issues: []
+```
+
+### Writing Handoff
+
+Claude writes handoff as the final action before molecule completion:
 
 ```bash
-# Agent completing work
-am send --to BlueTower --subject "Auth module ready" \
-  --body "Completed bd-task-001, bd-task-002. Ready for integration."
+# Template instruction for terminal step
+[[steps]]
+id = "complete"
+description = "Write handoff and close molecule"
+instructions = """
+Before closing this molecule, write handoff context:
 
-# Agent receiving handoff
-am inbox
-# → Message from GreenLake: Auth module ready
+bd update {{molecule_id}} --handoff "$(cat <<'EOF'
+status: success
+summary: |
+  [Summarize what was accomplished]
+artifacts:
+  - path: [files modified/created]
+next_steps:
+  - [What parent should do next]
+context:
+  [key]: [value]
+EOF
+)"
+
+Then close the terminal step:
+bd close {{molecule_id}}.{{terminal_step}}
+"""
+```
+
+### Reading Handoff
+
+Parent session receives handoff when resumed:
+
+```bash
+# Orchestrator injects handoff into resume prompt
+claude --resume checkpoint-A --prompt "
+Children completed. Handoff context:
+
+## mol-review-001 (success)
+$(bd show mol-review-001 --handoff)
+
+## mol-test-001 (success)
+$(bd show mol-test-001 --handoff)
+
+Continue with step: merge
+"
+```
+
+### Handoff Aggregation
+
+For parallel joins, handoffs are aggregated:
+
+```yaml
+# Aggregated handoff at join
+aggregated_handoff:
+  fork_id: "fork-validation-001"
+  overall_status: success  # all succeeded
+
+  branches:
+    - molecule: mol-review-001
+      status: success
+      summary: "Review complete, 3 issues fixed"
+
+    - molecule: mol-test-001
+      status: success
+      summary: "All 147 tests passing"
+
+  combined_artifacts:
+    - review-report.md
+    - test-results.json
+    - coverage.html
+
+  combined_context:
+    review_issues: 3
+    tests_passed: 147
+    coverage: "92%"
+
+  merge_status: clean  # or: conflicts
+```
+
+---
+
+## Shell-Based Conditions
+
+Conditions in MEOW Stack are **shell commands** that must exit 0 (success) to proceed.
+
+### Condition Syntax
+
+```toml
+[[steps]]
+id = "deploy"
+description = "Deploy to production"
+condition = "test $(date +%u) -lt 6"  # Only Mon-Fri
+
+[[steps]]
+id = "run-e2e"
+condition = "curl -s http://localhost:3000/health | grep -q 'ok'"
+```
+
+### Condition Evaluation
+
+The orchestrator/executor evaluates conditions by running them as shell commands:
+
+```bash
+# Evaluate condition
+if eval "$condition"; then
+  # Condition passed, execute step
+else
+  # Condition failed, skip step
+fi
+```
+
+### Built-in Condition Helpers
+
+MEOW provides helper scripts for common conditions:
+
+```bash
+# .meow/bin/meow-condition
+
+# Check if all tasks in epic are closed
+meow-condition all-closed bd-epic-001
+
+# Check if any task is blocked
+meow-condition any-blocked bd-epic-001
+
+# Check if file exists
+meow-condition file-exists coverage.html
+
+# Check if tests pass
+meow-condition tests-pass pytest
+
+# Check if branch is clean
+meow-condition git-clean
+
+# Check if API returns success
+meow-condition api-ok http://localhost:3000/health
+```
+
+### Condition Examples
+
+```toml
+# Continue only if no open blockers
+[[steps]]
+id = "start-feature"
+condition = "! bd list --status=blocked --parent={{epic_id}} | grep -q ."
+
+# Only run if coverage above threshold
+[[steps]]
+id = "approve-pr"
+condition = "test $(jq '.coverage' coverage.json) -ge 80"
+
+# Time-based gate
+[[steps]]
+id = "deploy-prod"
+condition = """
+  # Only during business hours, not Friday
+  hour=$(date +%H)
+  dow=$(date +%u)
+  test $hour -ge 9 && test $hour -lt 17 && test $dow -lt 5
+"""
+
+# External API check
+[[steps]]
+id = "proceed-if-approved"
+condition = "curl -s https://api.example.com/approval/{{pr_id}} | jq -e '.approved'"
+
+# Git-based condition
+[[steps]]
+id = "merge-to-main"
+condition = """
+  git fetch origin main
+  git merge-base --is-ancestor origin/main HEAD
+"""
+
+# Custom script
+[[steps]]
+id = "run-after-validation"
+condition = "./.meow/conditions/validate-schema.sh"
+```
+
+### Condition in Loops
+
+For restart steps, condition determines whether to continue looping:
+
+```toml
+[[steps]]
+id = "restart"
+type = "restart"
+condition = """
+  # Continue while: open epics exist AND under iteration limit
+  bd list --type=epic --status=open | grep -q . && \
+  test $(cat .beads/molecules/meow-state.json | jq '.iteration') -lt 100
+"""
+```
+
+### Condition in Gates
+
+Human gates can use conditions for auto-approval:
+
+```toml
+[[steps]]
+id = "auto-approve-if-green"
+type = "conditional-gate"
+auto_approve_condition = """
+  # Auto-approve if all tests pass and coverage > 90%
+  jq -e '.passed == true and .coverage >= 90' test-results.json
+"""
+# If condition passes: auto-close gate
+# If condition fails: wait for human
+```
+
+### Condition Timeout
+
+Conditions have a default timeout to prevent hanging:
+
+```toml
+[[steps]]
+id = "wait-for-service"
+condition = "curl -s --max-time 30 http://localhost:3000/health"
+condition_timeout = 60  # seconds
 ```
 
 ---
@@ -1026,5 +1710,9 @@ MEOW Stack provides:
 4. **Intelligent selection** — PageRank-weighted task scoring
 5. **Human-in-the-loop** — First-class gates, not interruptions
 6. **Unified semantics** — One execution model for loops, gates, workflows
+7. **Parallel fork-join** — True multi-agent parallelism with clone/fresh spawn modes
+8. **Git worktree isolation** — Each agent works in its own worktree and branch
+9. **Handoff context** — Structured data passing between parent and child agents
+10. **Shell-based conditions** — Flexible gating via arbitrary shell commands
 
-The result is a **workflow system that thinks in molecules** — from the outer orchestration loop down to individual TDD steps, all using the same primitives, all surviving crashes, all resumable.
+The result is a **multi-agent workflow system that thinks in molecules** — from the outer orchestration loop down to parallel execution branches, all using the same primitives, all surviving crashes, all resumable. Parent agents don't waste tokens waiting — they suspend and resume when children complete, with full context handoff.
