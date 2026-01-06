@@ -1,0 +1,194 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HUMAN GATE TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# Human review checkpoint. Pauses execution until human approves.
+#
+# Flow:
+#   1. Prepare summary - summarize completed work
+#   2. Notify - send notification to human reviewer
+#   3. Await approval - BLOCK until human closes this step
+#   4. Record decision - log human's decision and notes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[meta]
+name = "human-gate"
+version = "1.0.0"
+description = "Human review checkpoint"
+author = "meow-stack"
+
+# This template requires human interaction
+requires_human = true
+fits_in_context = true
+estimated_minutes = 5  # Claude's part; human time varies
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Variables
+# ───────────────────────────────────────────────────────────────────────────────
+
+[variables]
+gate_name = { required = false, default = "Review Checkpoint", description = "Name for this gate" }
+notify_channels = { required = false, default = "all", description = "Notification channels: all, slack, email, desktop" }
+completed_items = { required = false, description = "List of completed items for summary" }
+require_explicit_approval = { required = false, default = true, type = "bool", description = "Require explicit approval vs auto-continue on timeout" }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Steps
+# ───────────────────────────────────────────────────────────────────────────────
+
+[[steps]]
+id = "prepare-summary"
+description = "Summarize completed work for the reviewer"
+instructions = """
+## Prepare Review Summary
+
+Create a comprehensive summary of work completed since the last gate.
+
+### Summary Structure:
+
+#### 🎯 Completed Tasks
+{{#each completed_items}}
+- {{this}}
+{{/each}}
+
+List each task/feature that was completed:
+- Task ID and title
+- Brief description of what was done
+- Any notable decisions or trade-offs
+
+#### ✅ Tests
+- Number of tests added/modified
+- Test coverage status
+- Any skipped or pending tests
+
+#### 📝 Key Decisions
+Document important decisions made:
+- Technical choices (why X over Y)
+- Deferred items (what was intentionally skipped)
+- Assumptions made
+
+#### ⚠️ Concerns or Risks
+Highlight anything the reviewer should pay attention to:
+- Areas of uncertainty
+- Potential breaking changes
+- Technical debt introduced
+
+#### ❓ Questions for Reviewer
+List any questions that need human input:
+- Design decisions needing confirmation
+- Unclear requirements
+- Scope questions
+
+### Output:
+Write the summary to this step's notes for the reviewer to see.
+"""
+
+[[steps]]
+id = "notify"
+description = "Send notification to human reviewer"
+needs = ["prepare-summary"]
+action = "notify"
+instructions = """
+## Send Review Notification
+
+Notify the human that a review checkpoint has been reached.
+
+### Notification Content:
+
+```
+🚦 MEOW Gate: {{gate_name}}
+
+Work is ready for your review.
+
+Summary: [link to prepare-summary notes]
+
+To approve: meow approve
+To approve with notes: meow approve --notes "your notes"
+To reject: meow reject --notes "reason"
+To view details: meow status
+
+Waiting since: {{timestamp}}
+```
+
+### Channels:
+Send via: {{notify_channels}}
+
+### Note:
+The executor will handle the actual notification delivery.
+This step records that notification should be sent.
+"""
+
+[[steps]]
+id = "await-approval"
+description = "Wait for human to review and approve"
+type = "blocking-gate"
+needs = ["notify"]
+instructions = """
+## Awaiting Human Approval
+
+⏸️ **EXECUTION PAUSED**
+
+The workflow is now paused, waiting for human review.
+
+### What the Human Should Do:
+1. Read the summary from prepare-summary step
+2. Review the actual changes (git diff, test results, etc.)
+3. Decide: approve, reject, or request changes
+
+### To Continue:
+Human runs one of:
+```bash
+meow approve                          # Approve and continue
+meow approve --notes "LGTM"           # Approve with notes
+meow reject --notes "Need X"          # Reject with feedback
+meow reject --rework "step-id"        # Reject and request rework
+```
+
+### Timeout Behavior:
+{{#if require_explicit_approval}}
+No timeout - explicit approval required.
+{{else}}
+Auto-continues after 24 hours if no response.
+{{/if}}
+
+### This Step Closes When:
+Human explicitly closes it via meow approve/reject.
+"""
+
+[[steps]]
+id = "record-decision"
+description = "Record the human's decision and any notes"
+needs = ["await-approval"]
+instructions = """
+## Record Human Decision
+
+Document the human's decision for audit trail.
+
+### Record:
+- **Decision**: Approved / Rejected / Rework Requested
+- **Reviewer**: [from closing action]
+- **Timestamp**: [when gate was closed]
+- **Notes**: [any notes provided]
+- **Wait Duration**: [time from notify to approval]
+
+### Format:
+```yaml
+gate: {{gate_name}}
+molecule: {{molecule_id}}
+decision: [approved|rejected|rework]
+reviewer: [human identifier]
+reviewed_at: [timestamp]
+wait_duration_minutes: [number]
+notes: |
+  [human's notes]
+rework_steps: [if applicable]
+```
+
+### If Rejected:
+- Note the rejection reason
+- If rework requested, the executor will handle step reset
+
+### Update Bead:
+```bash
+bd update {{step_id}} --notes "[decision record]"
+```
+"""

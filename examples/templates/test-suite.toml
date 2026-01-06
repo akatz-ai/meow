@@ -1,0 +1,269 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST-SUITE TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# Comprehensive test execution workflow.
+#
+# Flow:
+#   1. Setup - prepare test environment
+#   2. Unit tests - run unit test suite
+#   3. Integration tests - run integration tests
+#   4. E2E tests - run end-to-end tests (if applicable)
+#   5. Coverage - generate coverage report
+#   6. Report - summarize results
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[meta]
+name = "test-suite"
+version = "1.0.0"
+description = "Comprehensive test execution workflow"
+author = "meow-stack"
+
+fits_in_context = true
+estimated_minutes = 15
+
+on_error = "inject-gate"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Variables
+# ───────────────────────────────────────────────────────────────────────────────
+
+[variables]
+test_framework = { required = false, default = "auto", description = "Test framework to use" }
+run_e2e = { required = false, default = false, type = "bool", description = "Run E2E tests (can be slow)" }
+coverage_threshold = { required = false, default = 80, type = "int", description = "Minimum coverage percentage" }
+fail_on_coverage = { required = false, default = false, type = "bool", description = "Fail if coverage below threshold" }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Steps
+# ───────────────────────────────────────────────────────────────────────────────
+
+[[steps]]
+id = "setup"
+description = "Prepare test environment"
+instructions = """
+## Test Environment Setup
+
+Ensure the test environment is ready.
+
+### Environment Checks:
+```bash
+# Check test dependencies
+{{test_framework}} --version  # or equivalent
+
+# Ensure test database (if applicable)
+# Ensure test fixtures
+# Ensure environment variables
+```
+
+### Common Setup Tasks:
+- [ ] Test dependencies installed
+- [ ] Test database initialized/reset
+- [ ] Environment variables configured
+- [ ] Mock services running (if needed)
+- [ ] Fixtures prepared
+
+### Clean State:
+```bash
+# Clear any cached test results
+# Reset test database to known state
+```
+
+### If Setup Fails:
+Document what's missing and fail early. Don't proceed with broken setup.
+"""
+
+[[steps]]
+id = "unit-tests"
+description = "Run unit test suite"
+needs = ["setup"]
+instructions = """
+## Run Unit Tests
+
+Execute the unit test suite.
+
+### Command:
+```bash
+{{test_framework}} tests/unit/ -v  # Adjust path as needed
+```
+
+### What to Check:
+- ✓ All tests pass
+- ✓ No unexpected skips
+- ✓ No warnings that indicate issues
+- ✓ Reasonable execution time
+
+### Test Output:
+Record:
+- Total tests run
+- Passed / Failed / Skipped
+- Execution time
+- Any notable warnings
+
+### If Tests Fail:
+1. Note which tests failed
+2. Check if failures are related to recent changes
+3. Distinguish between new failures and pre-existing issues
+4. Record failure details for reporting
+"""
+validation = "unit_tests_pass"
+
+[[steps]]
+id = "integration-tests"
+description = "Run integration test suite"
+needs = ["unit-tests"]
+instructions = """
+## Run Integration Tests
+
+Execute integration tests that verify component interactions.
+
+### Command:
+```bash
+{{test_framework}} tests/integration/ -v  # Adjust path as needed
+```
+
+### Integration Test Scope:
+- API endpoint tests
+- Database interaction tests
+- External service integration tests
+- Component integration tests
+
+### What to Check:
+- ✓ All integration tests pass
+- ✓ No flaky tests (run twice if uncertain)
+- ✓ Timeouts appropriate
+- ✓ Test isolation (no test pollution)
+
+### Record:
+- Tests run and results
+- Any environment-specific issues
+- Performance observations
+"""
+validation = "integration_tests_pass"
+
+[[steps]]
+id = "e2e-tests"
+description = "Run end-to-end tests"
+needs = ["integration-tests"]
+condition = "{{run_e2e}}"
+instructions = """
+## Run End-to-End Tests
+
+Execute full E2E test suite.
+
+### Command:
+```bash
+# Playwright, Cypress, Selenium, etc.
+{{e2e_framework}} run  # Adjust as needed
+```
+
+### E2E Test Scope:
+- Critical user journeys
+- Authentication flows
+- Key business processes
+- Cross-browser (if configured)
+
+### What to Check:
+- ✓ All E2E tests pass
+- ✓ Screenshots/videos captured for failures
+- ✓ No flakiness
+- ✓ Reasonable execution time
+
+### Performance Notes:
+E2E tests are slow. Record timing for future reference.
+"""
+timeout_minutes = 30
+validation = "e2e_tests_pass"
+
+[[steps]]
+id = "coverage"
+description = "Generate test coverage report"
+needs = ["integration-tests"]
+instructions = """
+## Generate Coverage Report
+
+Measure test coverage across the codebase.
+
+### Command:
+```bash
+{{test_framework}} --cov=src --cov-report=term-missing
+```
+
+### Coverage Metrics:
+- **Line coverage**: % of lines executed
+- **Branch coverage**: % of branches taken
+- **Function coverage**: % of functions called
+
+### Thresholds:
+- Target: {{coverage_threshold}}%
+- {{#if fail_on_coverage}}Failing if below threshold{{else}}Warning if below threshold{{/if}}
+
+### Report Output:
+```
+Module                  Coverage
+─────────────────────────────────
+src/auth/               85%
+src/api/                92%
+src/services/           78%  ⚠️ Below threshold
+─────────────────────────────────
+TOTAL                   84%
+```
+
+### Identify Gaps:
+- Which modules need more tests?
+- Any critical code paths uncovered?
+- New code coverage vs overall?
+"""
+
+[[steps]]
+id = "report"
+description = "Summarize test results"
+needs = ["coverage"]
+instructions = """
+## Test Summary Report
+
+Create a comprehensive test summary.
+
+### Report Format:
+
+```markdown
+# Test Suite Report
+
+## Summary
+| Metric | Value |
+|--------|-------|
+| Unit Tests | ✅ 142 passed |
+| Integration Tests | ✅ 38 passed |
+| E2E Tests | {{#if run_e2e}}✅ 15 passed{{else}}⏭️ Skipped{{/if}} |
+| Coverage | 84% (target: {{coverage_threshold}}%) |
+| Total Time | 2m 34s |
+
+## Details
+
+### Unit Tests
+- 142 tests in 45 files
+- 0 failures, 2 skipped
+- Execution time: 12s
+
+### Integration Tests
+- 38 tests in 12 files
+- 0 failures, 0 skipped
+- Execution time: 1m 45s
+
+### Coverage by Module
+| Module | Coverage | Status |
+|--------|----------|--------|
+| auth | 85% | ✅ |
+| api | 92% | ✅ |
+| services | 78% | ⚠️ |
+
+### Recommendations
+- Increase coverage in `services/` module
+- Consider adding E2E tests for checkout flow
+
+## Conclusion
+✅ **All tests passing. Safe to proceed.**
+```
+
+### Record:
+Save this report in step notes for the human gate summary.
+"""

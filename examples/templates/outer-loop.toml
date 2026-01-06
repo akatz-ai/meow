@@ -1,0 +1,74 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# OUTER LOOP TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# The master orchestration loop. This is the top-level molecule that drives
+# the entire MEOW workflow.
+#
+# Flow:
+#   1. Analyze project state and pick next high-impact work
+#   2. Bake a meta-molecule for the selected work batch
+#   3. Execute the meta-molecule (descends into tasks)
+#   4. Loop back if more work remains
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[meta]
+name = "outer-loop"
+version = "1.0.0"
+description = "Master orchestration loop for MEOW Stack"
+author = "meow-stack"
+
+# This is a loop template - it restarts until condition is false
+type = "loop"
+max_iterations = 100
+
+# Loop-level error handling
+on_error = "inject-gate"
+error_gate_template = "error-triage"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Variables
+# ───────────────────────────────────────────────────────────────────────────────
+
+[variables]
+# Gate frequency: insert human gate every N tasks/epics
+gate_frequency = { required = false, default = 1, type = "int", description = "Insert human gate every N epics" }
+
+# Task selection strategy
+selection_strategy = { required = false, default = "bv-triage", enum = ["bv-triage", "priority", "fifo"], description = "How to select next work" }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Steps
+# ───────────────────────────────────────────────────────────────────────────────
+
+[[steps]]
+id = "analyze-pick"
+description = "Analyze project state and select next high-impact work"
+template = "analyze-pick"
+# Variables passed to child template
+variables = { strategy = "{{selection_strategy}}" }
+
+[[steps]]
+id = "bake-meta"
+description = "Create meta-molecule for selected work batch"
+needs = ["analyze-pick"]
+template = "bake-meta"
+variables = {
+  selected_tasks = "{{output.analyze-pick.selected_tasks}}",
+  selected_epic = "{{output.analyze-pick.selected_epic}}",
+  gate_frequency = "{{gate_frequency}}"
+}
+
+[[steps]]
+id = "run-inner"
+description = "Execute the meta-molecule"
+needs = ["bake-meta"]
+# Dynamic template reference - uses the molecule created by bake-meta
+template = "{{output.bake-meta.molecule_id}}"
+
+[[steps]]
+id = "restart"
+description = "Loop back to process next batch of work"
+type = "restart"
+needs = ["run-inner"]
+# Continue looping while there are open epics
+condition = "not all_epics_closed() and iteration < max_iterations"

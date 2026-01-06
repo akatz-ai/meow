@@ -1,0 +1,205 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ANALYZE-PICK TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# Intelligent task selection using beads_viewer scoring.
+#
+# Flow:
+#   1. Run bv --robot-triage to get scored recommendations
+#   2. Analyze context beyond pure scores
+#   3. Select a batch of related tasks for the next meta-molecule
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[meta]
+name = "analyze-pick"
+version = "1.0.0"
+description = "Analyze project state and select next high-impact work"
+author = "meow-stack"
+
+fits_in_context = true
+estimated_minutes = 10
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Variables
+# ───────────────────────────────────────────────────────────────────────────────
+
+[variables]
+strategy = { required = false, default = "bv-triage", enum = ["bv-triage", "priority", "fifo", "manual"] }
+max_batch_size = { required = false, default = 3, type = "int", description = "Maximum tasks to select per batch" }
+prefer_epic_completion = { required = false, default = true, type = "bool", description = "Prefer tasks that complete an epic" }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Steps
+# ───────────────────────────────────────────────────────────────────────────────
+
+[[steps]]
+id = "run-triage"
+description = "Run bv --robot-triage to get scored task recommendations"
+instructions = """
+## Run Beads Viewer Triage
+
+Execute beads_viewer in robot mode to get intelligent task recommendations.
+
+### Command:
+```bash
+bv --robot-triage
+```
+
+### Parse the JSON output:
+
+#### Quick Reference
+```json
+{
+  "quick_ref": {
+    "total_open": N,
+    "actionable": N,
+    "top_picks": [...]
+  }
+}
+```
+
+#### Recommendations
+Each recommendation includes:
+- `id`: Bead ID
+- `title`: Task title
+- `score`: Composite score (0-1)
+- `score_breakdown`: Contribution of each factor
+- `reasons`: Why this is recommended
+- `unblocks_ids`: What this enables
+- `suggested_action`: What to do
+
+#### Score Factors:
+- **PageRank** (0.22): Recursive dependency importance
+- **Betweenness** (0.20): Bottleneck importance
+- **BlockerRatio** (0.13): Direct blocking count
+- **Priority** (0.10): Explicit priority
+- **TimeToImpact** (0.10): Critical path depth
+- **Urgency** (0.10): Time sensitivity
+- **Risk** (0.10): Volatility signals
+- **Staleness** (0.05): Age
+
+#### Project Health
+```json
+{
+  "project_health": {
+    "counts": { "total": N, "open": N, "blocked": N },
+    "graph": { "has_cycles": bool },
+    "velocity": { "closed_last_7_days": N }
+  }
+}
+```
+
+### Output:
+Save the full triage output in step notes for reference.
+"""
+
+[[steps]]
+id = "analyze-context"
+description = "Consider project context beyond pure scores"
+needs = ["run-triage"]
+instructions = """
+## Contextual Analysis
+
+Consider factors that bv --robot-triage doesn't know about.
+
+### Check Current Momentum:
+```bash
+bd list --status=in_progress
+```
+- Are there tasks already in progress?
+- Should we finish those first?
+- Any context we'd lose by switching?
+
+### Check Epic Progress:
+```bash
+bd list --type=epic --status=open
+```
+- Which epics are closest to completion?
+- Would completing a few more tasks close an epic?
+- Epic completion = natural review point
+
+### Check Dependencies:
+- Are there hard technical dependencies bv missed?
+- Does order matter for integration reasons?
+- Any shared resources or conflicts?
+
+### Check External Factors:
+- Any deadlines or time-sensitive items?
+- Human requests or priorities not in beads?
+- Upcoming releases or milestones?
+
+### Risk Assessment:
+- Any high-risk tasks that need early attention?
+- Tasks that might uncover unknowns?
+- Integration points that could cause issues?
+
+### Document:
+Note any context that should influence selection beyond pure scores.
+"""
+
+[[steps]]
+id = "select-batch"
+description = "Select the batch of tasks for the next meta-molecule"
+needs = ["analyze-context"]
+output = "selection"
+instructions = """
+## Select Task Batch
+
+Choose 1-{{max_batch_size}} related tasks for the next meta-molecule.
+
+### Selection Criteria:
+
+1. **High Impact First**
+   - Use bv scores as primary signal
+   - Consider unblocks count (what does this enable?)
+
+2. **Coherent Batch**
+   - Tasks should be related (same epic, same area)
+   - Minimize context switching
+   - Logical grouping for review
+
+3. **Epic Completion**
+   {{#if prefer_epic_completion}}
+   - Prefer tasks that complete an epic
+   - Natural stopping point for human review
+   {{/if}}
+
+4. **Context Window Fit**
+   - Batch should be completable in one meta-molecule
+   - Account for test-suite and human-gate overhead
+
+### Decision Process:
+
+1. Start with bv's top recommendation
+2. Check if adding related tasks completes an epic
+3. Verify batch is coherent and sized appropriately
+4. Document rationale
+
+### Output Format:
+
+```yaml
+selected_tasks:
+  - id: bd-task-001
+    title: "Create registration endpoint"
+    score: 0.85
+    reason: "Highest PageRank, unblocks 3 tasks"
+  - id: bd-task-002
+    title: "Add email validation"
+    score: 0.72
+    reason: "Same epic, completes User Registration"
+
+selected_epic: bd-epic-001
+epic_will_complete: true
+
+rationale: |
+  Selected both User Registration tasks because:
+  1. bd-task-001 is highest scoring
+  2. bd-task-002 completes the epic
+  3. Natural review checkpoint after epic completion
+
+batch_complexity: medium
+estimated_steps: 12  # 2 tasks × 6 implement steps
+```
+
+### Record Selection:
+Write the selection output to step notes. The bake-meta step will use this.
+"""
