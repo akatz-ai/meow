@@ -1,30 +1,32 @@
 # MEOW Stack MVP Specification
 
-This document specifies the implementation of MEOW Stack (Molecular Expression Of Work), a durable, recursive, composable workflow system for AI agent orchestration. Built on a **primitives-first architecture** where 6 orthogonal bead types enable arbitrary workflow composition.
+This document specifies the implementation of MEOW Stack (Molecular Expression Of Work), a durable, recursive, composable workflow system for AI agent orchestration. Built on a **primitives-first architecture** where 6 orthogonal primitive types compose into arbitrary workflows. The type system includes 8 total bead types: the 6 primitives plus `gate` (human approval) and `collaborative` (interactive conversation) as specialized task variants.
 
 > **Design Principle**: The orchestrator is dumb; the templates are smart. All workflow complexity lives in composable templates, not hardcoded orchestrator logic.
 
 ## Table of Contents
 
 1. [Design Philosophy](#design-philosophy)
-2. [The 6 Primitive Bead Types](#the-6-primitive-bead-types)
-3. [Output Binding](#output-binding)
-4. [Task Outputs with Validation](#task-outputs-with-validation)
-5. [Ephemeral Beads (Wisps)](#ephemeral-beads-wisps)
-6. [Orchestrator Architecture](#orchestrator-architecture)
-7. [Template System](#template-system)
-8. [Agent Management](#agent-management)
-9. [Execution Model](#execution-model)
-10. [Composable Templates](#composable-templates)
-11. [Complete Execution Trace](#complete-execution-trace)
-12. [CLI Commands](#cli-commands)
-13. [State Management](#state-management)
-14. [Future: Parallelization](#future-parallelization)
-15. [Implementation Phases](#implementation-phases)
-16. [Error Handling](#error-handling)
-17. [Crash Recovery](#crash-recovery)
-18. [Debugging and Observability](#debugging-and-observability)
-19. [Integration Patterns](#integration-patterns)
+2. [Beads Integration Strategy](#beads-integration-strategy)
+3. [The 6 Primitive Bead Types](#the-6-primitive-bead-types)
+4. [Output Binding](#output-binding)
+5. [Task Outputs with Validation](#task-outputs-with-validation)
+6. [Three-Tier Bead Architecture](#three-tier-bead-architecture)
+7. [Module System](#module-system)
+8. [Orchestrator Architecture](#orchestrator-architecture)
+9. [Template System](#template-system)
+10. [Agent Management](#agent-management)
+11. [Execution Model](#execution-model)
+12. [Composable Templates](#composable-templates)
+13. [Complete Execution Trace](#complete-execution-trace)
+14. [CLI Commands](#cli-commands)
+15. [State Management](#state-management)
+16. [Future: Parallelization](#future-parallelization)
+17. [Implementation Phases](#implementation-phases)
+18. [Error Handling](#error-handling)
+19. [Crash Recovery](#crash-recovery)
+20. [Debugging and Observability](#debugging-and-observability)
+21. [Integration Patterns](#integration-patterns)
 
 ---
 
@@ -113,22 +115,125 @@ The `condition` primitive is deceptively powerful because **shell commands can b
 
 ---
 
+## Beads Integration Strategy
+
+> **Decision**: MEOW Stack layers its workflow system **on top of upstream beads** rather than maintaining a fork. Both CLIs coexist and operate on the same data.
+
+### Rationale
+
+Forking beads is unnecessary because:
+
+1. **JSON is schema-flexible** - MEOW can add fields to `issues.jsonl` that upstream `bd` will ignore but preserve
+2. **ID prefix separation** - MEOW workflow beads use `meow-*` prefix, naturally separating them from work beads (`bd-*`)
+3. **CLI separation** - `meow` CLI handles workflow operations; `bd` CLI handles traditional issue tracking
+
+### How Coexistence Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         BEADS INTEGRATION MODEL                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  .beads/issues.jsonl  ←──────────────────────────────────────────────┐      │
+│  ┌─────────────────────────────────────────────────────────────────┐ │      │
+│  │ {"id":"bd-task-123","title":"Implement auth",...}               │ │      │
+│  │ {"id":"meow-abc.load-context","tier":"wisp","hook_bead":...}    │ │      │
+│  │ {"id":"meow-abc.write-tests","tier":"wisp",...}                 │ │      │
+│  └─────────────────────────────────────────────────────────────────┘ │      │
+│              ┌───────────────┴───────────────┐                       │      │
+│              ▼                               ▼                       │      │
+│  ┌───────────────────────┐      ┌───────────────────────┐           │      │
+│  │     bd CLI            │      │     meow CLI          │           │      │
+│  │  (upstream beads)     │      │  (MEOW orchestrator)  │           │      │
+│  ├───────────────────────┤      ├───────────────────────┤           │      │
+│  │ • bd ready            │      │ • meow prime          │           │      │
+│  │ • bd list             │      │ • meow close          │           │      │
+│  │ • bd create           │      │ • meow run            │           │      │
+│  ├───────────────────────┤      ├───────────────────────┤           │      │
+│  │ Sees: All beads       │      │ Sees: All beads       │           │      │
+│  │ Ignores: MEOW fields  │      │ Understands: Tiers,   │           │      │
+│  │ (tier, condition_spec)│      │ specs, workflows      │           │      │
+│  └───────────────────────┘      └───────────────────────┘           │      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### ID Prefix Convention
+
+| Prefix | Source | Visible in `bd ready` | Visible in `meow prime` |
+|--------|--------|----------------------|------------------------|
+| `bd-*` | Traditional beads (`bd create`) | Yes | No (unless selected as work bead) |
+| `meow-*` | MEOW workflows | No (filtered by prefix) | Yes (wisps and orchestrator beads) |
+
+### What Each CLI Handles
+
+| Operation | Use `bd` | Use `meow` |
+|-----------|----------|------------|
+| Create work beads | `bd create --title "..."` | - |
+| View work backlog | `bd ready`, `bv --robot-triage` | - |
+| Run workflow on work bead | - | `meow run implement-tdd --work-bead bd-123` |
+| See current workflow step | - | `meow prime` |
+| Close workflow step | - | `meow close meow-abc.step-1` |
+| Close work bead | `bd close bd-123` | (or via workflow's final step) |
+
+### MEOW-Specific Fields
+
+MEOW extends the JSON schema with fields that upstream `bd` ignores:
+
+```json
+{
+  "id": "meow-abc123.load-context",
+  "title": "Load context for bd-task-456",
+  "status": "open",
+  "tier": "wisp",
+  "hook_bead": "bd-task-456",
+  "source_workflow": "implement-tdd",
+  "workflow_id": "meow-abc123",
+  "condition_spec": null,
+  "outputs": {}
+}
+```
+
+---
+
 ## The 6 Primitive Bead Types
 
-The orchestrator recognizes exactly 6 bead types. Everything else is built from these.
+The orchestrator recognizes exactly 6 primitive bead types. Everything else is built from these. Additionally, `gate` and `collaborative` are specialized task variants that modify agent behavior.
 
 ### Overview
 
-| Primitive | Executor | Description |
-|-----------|----------|-------------|
-| `task` | Claude | Regular work bead—Claude executes and closes (with optional validated outputs) |
+| Type | Executor | Description |
+|------|----------|-------------|
+| `task` | Agent | Regular work bead—agent executes and closes, auto-continues via stop hook |
+| `collaborative` | Agent | Interactive step—agent pauses for human conversation, no auto-continue |
+| `gate` | Human | Approval checkpoint—no assignee, human closes via `meow approve` |
 | `condition` | Orchestrator | Evaluate shell command (can block!), expand on_true or on_false |
 | `stop` | Orchestrator | Kill an agent's tmux session |
 | `start` | Orchestrator | Spawn an agent in tmux (with optional resume from session) |
 | `code` | Orchestrator | Execute arbitrary shell code (with output capture) |
 | `expand` | Orchestrator | Expand a template into beads at this point |
 
-### Why 6 Instead of 8?
+### Task Variants: gate and collaborative
+
+The `gate` and `collaborative` types are specialized task variants that modify agent behavior:
+
+| Type | Assignee | Auto-continue | Who closes | Use case |
+|------|----------|---------------|------------|----------|
+| `task` | Required | Yes (Ralph Wiggum loop) | Agent | Normal autonomous work |
+| `collaborative` | Required | No (pauses for conversation) | Agent | Design review, clarification |
+| `gate` | None | No | Human | Approval checkpoints |
+
+**The `collaborative` type** enables human-in-the-loop interaction. When an agent reaches a collaborative step:
+1. Agent executes the step (presents information, asks questions)
+2. Agent's stop hook fires, BUT...
+3. `meow prime --format prompt` returns **empty output** for in-progress collaborative steps
+4. No prompt injection → Claude waits naturally for user input
+5. User and agent converse freely
+6. When done, agent runs `meow close <step-id>`
+7. Next stop hook fires, normal flow resumes
+
+**The `gate` type** is for human approval points. Gates have no assignee—the orchestrator waits for a human to run `meow approve` or `meow reject`.
+
+### Why 6 Primitives + 2 Variants?
 
 The original design had `checkpoint` and `resume` as separate primitives. After analysis, we collapsed these:
 
@@ -770,110 +875,295 @@ Example:
 
 ---
 
-## Ephemeral Beads (Wisps)
+## Three-Tier Bead Architecture
 
-Ephemeral beads are **operational machinery** that gets cleaned up after completion. This prevents workflow steps from cluttering the work bead history.
+All beads live in the same storage for durability and crash recovery. Tiers are distinguished by an **explicit `Tier` field**, not computed from labels.
 
-### The Problem
+### Tier Overview
 
-When you expand a template like `implement-tdd`, it creates 5-7 step beads. Each step gets tracked. After completion, you have 5-7 closed beads cluttering your bead history.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          BEAD VISIBILITY MODEL                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  TIER 1: WORK BEADS (Persistent Deliverables)                               │
+│  ────────────────────────────────────────────                               │
+│  Purpose:     Actual deliverables from PRD breakdown                        │
+│  Examples:    "Implement auth endpoint", "Fix login bug"                    │
+│  Created by:  Humans, PRD breakdown, `bd create`                            │
+│  Visible via: `bd ready`, `bv --robot-triage`, `bd list`                    │
+│  Agent role:  SELECTS from these based on priority/impact                   │
+│  Persistence: Permanent, exported to JSONL, git-synced                      │
+│  Tier value:  "work"                                                        │
+│                                                                             │
+│  TIER 2: WORKFLOW BEADS (Wisps - Ephemeral Guidance)                        │
+│  ───────────────────────────────────────────────────                        │
+│  Purpose:     Procedural guidance - HOW to do work                          │
+│  Examples:    "Load context", "Write tests", "Commit changes"               │
+│  Created by:  Template expansion (`expand`, `condition` branches)           │
+│  Visible via: `meow prime`, `meow steps`                                    │
+│  Agent role:  EXECUTES these step-by-step                                   │
+│  Persistence: Durable in DB until burned, NOT exported to JSONL             │
+│  Tier value:  "wisp"                                                        │
+│                                                                             │
+│  TIER 3: ORCHESTRATOR BEADS (Infrastructure - Invisible)                    │
+│  ───────────────────────────────────────────────────────                    │
+│  Purpose:     Workflow machinery - control flow, agent lifecycle            │
+│  Examples:    "start-worker", "check-tests", "expand-implement"             │
+│  Created by:  Template expansion (non-task primitives)                      │
+│  Visible via: NEVER shown to agents, only debug views                       │
+│  Agent role:  NONE - orchestrator handles exclusively                       │
+│  Persistence: Durable in DB until burned, NOT exported to JSONL             │
+│  Tier value:  "orchestrator"                                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-For **work beads** (actual tasks), this is fine—you want the audit trail.
+### Tier as Explicit Field
 
-For **workflow beads** (the steps of `implement-tdd`), it's noise.
+The tier is stored directly on the bead, not computed from labels:
 
-### The Solution: Ephemeral Flag
+```go
+type BeadTier string
 
-Templates can mark their expanded beads as ephemeral:
+const (
+    TierWork        BeadTier = "work"        // Permanent deliverables
+    TierWisp        BeadTier = "wisp"        // Agent workflow steps
+    TierOrchestrator BeadTier = "orchestrator" // Infrastructure machinery
+)
+```
+
+Benefits:
+- O(1) tier lookup (vs O(n) label scanning)
+- Self-documenting and explicit
+- Validated at creation time
+- Simpler filtering logic everywhere
+
+### Bead Status (Simplified)
+
+Three statuses only:
+
+```go
+const (
+    StatusOpen       BeadStatus = "open"        // Ready to be worked on
+    StatusInProgress BeadStatus = "in_progress" // Currently being executed
+    StatusClosed     BeadStatus = "closed"      // Completed
+)
+```
+
+Status transitions:
+```
+open → in_progress → closed
+  ↑                    │
+  └────────────────────┘  (reopen if needed)
+```
+
+### Metadata Fields by Tier
+
+#### Tier 1: Work Beads
 
 ```yaml
-id: "bd-expand-impl"
-type: expand
-template: "implement-tdd"
-ephemeral: true  # These beads are operational, not work items
-variables:
-  work_bead: "bd-task-123"  # The ACTUAL work bead
+id: "gt-123"
+tier: "work"
+issue_type: task | feature | bug | epic | chore
+status: open | in_progress | closed
+# No source_workflow - not from a template
+# No hook_bead - IS a work bead
 ```
 
-Or templates can declare themselves ephemeral:
+#### Tier 2: Workflow Beads (Wisps)
 
-```toml
-# implement-tdd.toml
-[meta]
-name = "implement-tdd"
-ephemeral = true  # Default: all steps from this template are ephemeral
-
-[[steps]]
-id = "load-context"
-type = "task"
-# ...
+```yaml
+id: "meow-abc.load-context"
+tier: "wisp"
+issue_type: task
+status: open | in_progress | closed
+source_workflow: "implement-tdd"
+workflow_id: "meow-abc"
+hook_bead: "gt-123"           # The work bead being implemented
+assignee: "claude-2"          # The agent executing this wisp
 ```
 
-### Behavior
+#### Tier 3: Orchestrator Beads
 
-When `ephemeral: true`:
-- Beads get labeled: `meow:ephemeral`
-- They execute normally
-- After the template completes, they can be auto-cleaned
-- They don't show in `bd list` by default (need `--include-ephemeral`)
-- The original work bead remains and gets updated
-
-### Example Flow
-
-```
-1. Claude selects bd-task-001 to implement
-2. expand implement-tdd (ephemeral: true)
-   → Creates: load-context, write-tests, implement, verify, commit
-   → All labeled meow:ephemeral
-3. Child claude executes all steps
-4. On completion, ephemeral steps get cleaned
-5. bd-task-001 remains, now marked closed with notes
+```yaml
+id: "meow-abc.start-worker"
+tier: "orchestrator"
+issue_type: start | stop | condition | expand | code
+status: open | closed         # Auto-closed by orchestrator
+source_workflow: "implement-tdd"
+workflow_id: "meow-abc"
+# No assignee - orchestrator handles
 ```
 
-### Template Definition
+### Automatic Tier Detection
 
-```toml
-# call-implement.toml
-[meta]
-name = "call-implement"
-ephemeral = true  # All steps are operational machinery
+When a template is baked, the baker automatically determines each bead's tier:
 
-[variables]
-work_bead = { required = true, type = "bead_id" }
-
-[[steps]]
-id = "setup-worktree"
-type = "code"
-# ...
-
-[[steps]]
-id = "close-work-bead"
-type = "code"
-code = |
-  bd close {{work_bead}} --notes "Implemented via implement-tdd template"
-needs = ["verify-pass", "commit"]
+```go
+func (b *Baker) determineTier(step *Step, workflow *Workflow) BeadTier {
+    switch step.Type {
+    case "task", "collaborative":
+        if workflow.Ephemeral {
+            return TierWisp
+        }
+        return TierWork
+    case "gate":
+        return TierOrchestrator
+    default:
+        return TierOrchestrator
+    }
+}
 ```
 
-### Cleanup Options
+The key insight: **if a workflow is marked `ephemeral = true`, all its tasks become wisps.**
+
+### The Two-View Model
+
+Agents have TWO simultaneous views:
+
+1. **Wisp view** (`meow prime`) - "What step am I on?"
+2. **Work view** (`bd ready`, `bv --robot-triage`) - "What work beads exist?"
+
+The agent can freely query work beads while executing wisp steps. The wisp tells them HOW, the work beads tell them WHAT.
+
+### Cleanup (Burning Wisps)
+
+When wisps get burned:
+- On workflow completion (all beads in workflow are closed)
+- NOT on agent stop (agent might resume)
+- NOT on work bead close (workflow machinery still needed)
 
 ```bash
 # Manual cleanup
 meow clean --ephemeral
 
 # Automatic cleanup (in config)
-# .meow/config.toml
 [cleanup]
 ephemeral = "on_complete"  # on_complete | manual | never
 ```
 
-### Work Beads vs Ephemeral Beads
+---
 
-| Aspect | Work Beads | Ephemeral Beads |
-|--------|------------|-----------------|
-| Purpose | Actual deliverables | Workflow machinery |
-| Audit trail | Permanent | Cleaned up |
-| Visibility | Default in `bd list` | Hidden by default |
-| Examples | "Implement user auth" | "load-context", "write-tests" |
+## Module System
+
+Templates use a **module format** where files contain one or more named workflows.
+
+### File Format
+
+```toml
+# work-module.meow.toml
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN WORKFLOW (Default Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════
+
+[main]
+name = "work-loop"
+description = "Main work selection and execution loop"
+
+[main.variables]
+agent = { required = true, type = "string", description = "Agent ID" }
+
+[[main.steps]]
+id = "select-work"
+type = "task"
+title = "Select next work bead"
+assignee = "{{agent}}"
+instructions = "Run bv --robot-triage and pick the highest priority task"
+
+[[main.steps]]
+id = "do-work"
+type = "expand"
+template = ".implement"   # Local reference
+variables = { work_bead = "{{select-work.outputs.work_bead}}" }
+needs = ["select-work"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IMPLEMENT WORKFLOW (Helper - Called by main)
+# ═══════════════════════════════════════════════════════════════════════════
+
+[implement]
+name = "implement"
+description = "TDD implementation workflow"
+ephemeral = true          # All steps from this workflow are wisps
+internal = true           # Cannot be called from outside this file
+hooks_to = "work_bead"    # Links all wisps to this variable's value
+
+[implement.variables]
+work_bead = { required = true, type = "bead_id" }
+
+[[implement.steps]]
+id = "load-context"
+type = "task"
+title = "Load context for {{work_bead}}"
+instructions = "Read the task and identify relevant files"
+assignee = "{{agent}}"
+
+[[implement.steps]]
+id = "write-tests"
+type = "task"
+title = "Write failing tests"
+assignee = "{{agent}}"
+needs = ["load-context"]
+```
+
+### The `main` Convention
+
+When running a module file:
+
+```bash
+meow run work-module.meow.toml           # Runs [main] workflow
+meow run work-module.meow.toml#implement # Runs [implement] workflow explicitly
+```
+
+- `[main]` is the default entry point
+- If `[main]` doesn't exist, error unless explicit `#workflow` specified
+
+### Reference Syntax
+
+| Reference | Resolution |
+|-----------|------------|
+| `.implement` | Same file, workflow named `implement` |
+| `.implement.verify` | Same file, workflow `implement`, step `verify` (partial execution) |
+| `helpers#tdd` | File `helpers.meow.toml`, workflow named `tdd` |
+| `helpers` | File `helpers.meow.toml`, workflow `main` |
+| `./subdir/util.meow.toml#helper` | Relative path |
+
+### Workflow Properties
+
+```toml
+[workflow-name]
+name = "human-readable-name"     # Required
+description = "..."              # Optional
+ephemeral = true                 # All expanded beads are wisps (default: false)
+internal = true                  # Cannot be called from outside this file (default: false)
+hooks_to = "variable_name"       # Links all wisps to this variable's bead ID value
+
+[workflow-name.variables]
+var_name = { required = true, type = "bead_id", description = "..." }
+var_with_default = { default = "value", type = "string" }
+
+[[workflow-name.steps]]
+# ... step definitions
+```
+
+### The `hooks_to` Property
+
+**Explicit HookBead linking** via workflow-level declaration:
+
+```toml
+[implement]
+hooks_to = "work_bead"  # All wisps from this workflow link to {{work_bead}}
+```
+
+When the baker creates wisps from this workflow, it sets:
+```go
+bead.HookBead = vars["work_bead"]  // e.g., "gt-123"
+```
+
+This replaces magic variable name detection. The link is explicit and documented in the workflow definition.
 
 ---
 
