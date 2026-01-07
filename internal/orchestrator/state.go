@@ -65,9 +65,18 @@ func (p *StatePersister) AcquireLock() error {
 	}
 
 	// Write our PID to the lock file
-	file.Truncate(0)
-	file.Seek(0, 0)
-	fmt.Fprintf(file, "%d\n", os.Getpid())
+	if err := file.Truncate(0); err != nil {
+		file.Close()
+		return fmt.Errorf("truncating lock file: %w", err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		file.Close()
+		return fmt.Errorf("seeking lock file: %w", err)
+	}
+	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+		file.Close()
+		return fmt.Errorf("writing PID to lock file: %w", err)
+	}
 
 	p.lockFile = file
 	return nil

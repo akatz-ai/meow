@@ -35,6 +35,11 @@ func (s *FileBeadStore) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.loadLocked()
+}
+
+// loadLocked performs the actual load (caller must hold the lock).
+func (s *FileBeadStore) loadLocked() error {
 	issuesPath := filepath.Join(s.beadsDir, "issues.jsonl")
 	file, err := os.Open(issuesPath)
 	if err != nil {
@@ -262,7 +267,8 @@ func (s *FileBeadStore) writeLocked() error {
 // Reload re-reads beads from disk.
 func (s *FileBeadStore) Reload(ctx context.Context) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.loaded = false
-	s.mu.Unlock()
-	return s.Load(ctx)
+	return s.loadLocked()
 }

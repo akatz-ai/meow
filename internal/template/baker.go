@@ -204,13 +204,25 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 		}
 
 		if step.OnTrue != nil {
-			spec.OnTrue = b.expansionTargetToTypes(step.OnTrue)
+			target, err := b.expansionTargetToTypes(step.OnTrue)
+			if err != nil {
+				return fmt.Errorf("converting on_true: %w", err)
+			}
+			spec.OnTrue = target
 		}
 		if step.OnFalse != nil {
-			spec.OnFalse = b.expansionTargetToTypes(step.OnFalse)
+			target, err := b.expansionTargetToTypes(step.OnFalse)
+			if err != nil {
+				return fmt.Errorf("converting on_false: %w", err)
+			}
+			spec.OnFalse = target
 		}
 		if step.OnTimeout != nil {
-			spec.OnTimeout = b.expansionTargetToTypes(step.OnTimeout)
+			target, err := b.expansionTargetToTypes(step.OnTimeout)
+			if err != nil {
+				return fmt.Errorf("converting on_timeout: %w", err)
+			}
+			spec.OnTimeout = target
 		}
 
 		// For blocking-gate type, set a blocking condition
@@ -240,9 +252,9 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 }
 
 // expansionTargetToTypes converts template ExpansionTarget to types.ExpansionTarget.
-func (b *Baker) expansionTargetToTypes(et *ExpansionTarget) *types.ExpansionTarget {
+func (b *Baker) expansionTargetToTypes(et *ExpansionTarget) (*types.ExpansionTarget, error) {
 	if et == nil {
-		return nil
+		return nil, nil
 	}
 
 	result := &types.ExpansionTarget{
@@ -256,14 +268,13 @@ func (b *Baker) expansionTargetToTypes(et *ExpansionTarget) *types.ExpansionTarg
 		for i, step := range et.Inline {
 			data, err := json.Marshal(step)
 			if err != nil {
-				// This shouldn't happen for valid InlineStep structs
-				continue
+				return nil, fmt.Errorf("marshaling inline step %q: %w", step.ID, err)
 			}
 			result.Inline[i] = data
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // BakeInline converts inline steps into beads.
