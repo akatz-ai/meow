@@ -781,6 +781,58 @@ func TestOrchestrator_StartOrResume_RecoverOrchestratorBead(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_StartOrResume_RecoverUnassignedTask(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, ".meow", "state")
+
+	// Create existing state
+	persister := NewStatePersister(stateDir)
+	existingState := &OrchestratorState{
+		Version:    "1",
+		WorkflowID: "crash-workflow",
+		PID:        99999,
+	}
+	if err := persister.SaveState(existingState); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newMockBeadStoreWithList()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add an in-progress task bead with NO assignee
+	// This could happen if orchestrator crashed after marking in_progress but before agent claimed it
+	taskBead := &types.Bead{
+		ID:     "bd-task-orphan",
+		Type:   types.BeadTypeTask,
+		Title:  "Orphaned task with no assignee",
+		Status: types.BeadStatusInProgress,
+		// No assignee - no agent is working on this
+	}
+	store.beads[taskBead.ID] = taskBead
+
+	ctx := context.Background()
+	startCfg := &StartupConfig{
+		StateDir: stateDir,
+	}
+
+	err := orch.StartOrResume(ctx, startCfg)
+	if err != nil {
+		t.Fatalf("StartOrResume() error = %v", err)
+	}
+	defer orch.ReleaseLock()
+
+	// Verify unassigned task was reset to open
+	if store.beads["bd-task-orphan"].Status != types.BeadStatusOpen {
+		t.Errorf("Bead status = %s, want open (unassigned task recovered)", store.beads["bd-task-orphan"].Status)
+	}
+}
+
 func TestOrchestrator_StartOrResume_LockConflict(t *testing.T) {
 	dir := t.TempDir()
 	stateDir := filepath.Join(dir, ".meow", "state")

@@ -44,6 +44,8 @@ type AgentManager interface {
 // TemplateExpander expands templates into beads.
 type TemplateExpander interface {
 	// Expand loads a template and creates beads from it.
+	// parentBead may be nil for root-level expansions (e.g., initial workflow template).
+	// When parentBead is nil, the created beads have no parent reference.
 	Expand(ctx context.Context, spec *types.ExpandSpec, parentBead *types.Bead) error
 }
 
@@ -198,22 +200,22 @@ func (o *Orchestrator) recoverFromCrash(ctx context.Context, prevState *Orchestr
 	// Check each bead's assignee
 	for _, bead := range inProgressBeads {
 		if bead.Assignee == "" {
-			// Orchestrator bead (condition, code, expand, etc.)
-			// These should be reset since the orchestrator crashed mid-execution
-			if bead.Type != types.BeadTypeTask {
-				o.logger.Info("resetting orchestrator bead",
-					"id", bead.ID,
-					"type", bead.Type,
-				)
-				bead.Status = types.BeadStatusOpen
-				if err := o.store.Update(ctx, bead); err != nil {
-					return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
-				}
+			// No assignee - this is either an orchestrator bead (condition, code, expand)
+			// or an unassigned task. Either way, reset it since:
+			// - Orchestrator beads: the orchestrator crashed mid-execution
+			// - Unassigned tasks: no agent is working on it
+			o.logger.Info("resetting unassigned in-progress bead",
+				"id", bead.ID,
+				"type", bead.Type,
+			)
+			bead.Status = types.BeadStatusOpen
+			if err := o.store.Update(ctx, bead); err != nil {
+				return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
 			}
 			continue
 		}
 
-		// Task bead - check if the assigned agent is still running
+		// Bead has an assignee - check if the assigned agent is still running
 		running, err := o.agents.IsRunning(ctx, bead.Assignee)
 		if err != nil {
 			o.logger.Warn("error checking agent status",
@@ -265,15 +267,9 @@ func (o *Orchestrator) expandInitialTemplate(ctx context.Context, startCfg *Star
 		Template: startCfg.Template,
 	}
 
-	// Create a synthetic parent bead to anchor the expansion
-	parentBead := &types.Bead{
-		ID:     "workflow-root",
-		Type:   types.BeadTypeExpand,
-		Title:  "Workflow: " + startCfg.WorkflowID,
-		Status: types.BeadStatusOpen,
-	}
-
-	if err := o.expander.Expand(ctx, expandSpec, parentBead); err != nil {
+	// Pass nil as parent - this is the root of the workflow, there's no parent bead.
+	// The expander should handle nil parent gracefully (top-level beads have no parent).
+	if err := o.expander.Expand(ctx, expandSpec, nil); err != nil {
 		return err
 	}
 
