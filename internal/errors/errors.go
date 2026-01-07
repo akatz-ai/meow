@@ -3,6 +3,7 @@ package errors
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -293,17 +294,21 @@ func IOWriteError(path string, err error) *MeowError {
 		WithDetail("path", path)
 }
 
-// Is checks if an error is a MeowError with the given code.
-func Is(err error, code string) bool {
-	if merr, ok := err.(*MeowError); ok {
+// HasCode checks if an error is a MeowError with the given code.
+// It handles wrapped errors by unwrapping to find a MeowError.
+func HasCode(err error, code string) bool {
+	var merr *MeowError
+	if errors.As(err, &merr) {
 		return merr.Code == code
 	}
 	return false
 }
 
 // Code returns the error code if err is a MeowError, empty string otherwise.
+// It handles wrapped errors by unwrapping to find a MeowError.
 func Code(err error) string {
-	if merr, ok := err.(*MeowError); ok {
+	var merr *MeowError
+	if errors.As(err, &merr) {
 		return merr.Code
 	}
 	return ""

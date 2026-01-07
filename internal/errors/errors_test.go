@@ -3,6 +3,7 @@ package errors
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -152,16 +153,22 @@ func TestWrapf(t *testing.T) {
 	}
 }
 
-func TestIs(t *testing.T) {
+func TestHasCode(t *testing.T) {
 	err := New("TEST_001", "test")
-	if !Is(err, "TEST_001") {
-		t.Error("Is(err, TEST_001) = false, want true")
+	if !HasCode(err, "TEST_001") {
+		t.Error("HasCode(err, TEST_001) = false, want true")
 	}
-	if Is(err, "TEST_002") {
-		t.Error("Is(err, TEST_002) = true, want false")
+	if HasCode(err, "TEST_002") {
+		t.Error("HasCode(err, TEST_002) = true, want false")
 	}
-	if Is(errors.New("not meow"), "TEST_001") {
-		t.Error("Is(regular error) = true, want false")
+	if HasCode(errors.New("not meow"), "TEST_001") {
+		t.Error("HasCode(regular error) = true, want false")
+	}
+
+	// Test wrapped error
+	wrapped := fmt.Errorf("outer: %w", err)
+	if !HasCode(wrapped, "TEST_001") {
+		t.Error("HasCode should find code in wrapped error")
 	}
 }
 
@@ -172,6 +179,12 @@ func TestCode(t *testing.T) {
 	}
 	if got := Code(errors.New("regular")); got != "" {
 		t.Errorf("Code(regular) = %s, want empty", got)
+	}
+
+	// Test wrapped error
+	wrapped := fmt.Errorf("outer: %w", err)
+	if got := Code(wrapped); got != "TEST_001" {
+		t.Errorf("Code(wrapped) = %s, want TEST_001", got)
 	}
 }
 

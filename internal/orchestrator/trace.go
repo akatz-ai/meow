@@ -39,6 +39,24 @@ type TraceEntry struct {
 	Error      string         `json:"error,omitempty"`
 }
 
+// TracerInterface defines the interface for execution tracers.
+type TracerInterface interface {
+	Log(entry TraceEntry) error
+	LogStart(template string) error
+	LogResume(tickCount int) error
+	LogBake(template string, beadCount int) error
+	LogSpawn(agentID string, details map[string]any) error
+	LogDispatch(beadID, beadType string, details map[string]any) error
+	LogConditionEval(beadID string, result bool, details map[string]any) error
+	LogExpand(beadID, template string, childCount int) error
+	LogClose(beadID, beadType string, outputs map[string]any) error
+	LogStop(agentID string, graceful bool) error
+	LogShutdown(reason string) error
+	LogError(beadID string, err error) error
+	Close() error
+	Path() string
+}
+
 // Tracer logs execution traces to a JSONL file.
 type Tracer struct {
 	mu         sync.Mutex
@@ -151,15 +169,17 @@ func (t *Tracer) LogDispatch(beadID, beadType string, details map[string]any) er
 
 // LogConditionEval traces condition evaluation.
 func (t *Tracer) LogConditionEval(beadID string, result bool, details map[string]any) error {
-	if details == nil {
-		details = make(map[string]any)
+	// Copy details to avoid mutating the input
+	merged := make(map[string]any)
+	for k, v := range details {
+		merged[k] = v
 	}
-	details["result"] = result
+	merged["result"] = result
 	return t.Log(TraceEntry{
 		Action:   TraceActionConditionEval,
 		BeadID:   beadID,
 		BeadType: "condition",
-		Details:  details,
+		Details:  merged,
 	})
 }
 
@@ -208,6 +228,12 @@ func (t *Tracer) LogError(beadID string, err error) error {
 		Error:  err.Error(),
 	})
 }
+
+// Compile-time interface checks
+var (
+	_ TracerInterface = (*Tracer)(nil)
+	_ TracerInterface = (*NullTracer)(nil)
+)
 
 // NullTracer is a tracer that discards all entries.
 type NullTracer struct{}

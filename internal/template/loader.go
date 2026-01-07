@@ -95,7 +95,8 @@ func (l *Loader) loadFromEmbedded(filename string) (*Template, error) {
 		return nil, fmt.Errorf("no embedded templates")
 	}
 
-	path := filepath.Join(l.EmbeddedDir, filename)
+	// embed.FS always uses forward slashes, regardless of OS
+	path := l.EmbeddedDir + "/" + filename
 	data, err := EmbeddedFS.ReadFile(path)
 	if err != nil {
 		return nil, err
