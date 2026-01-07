@@ -198,37 +198,9 @@ func (t *Template) GetRequiredVariables() map[string]Var {
 // StepOrder returns a topologically sorted list of step IDs.
 // Returns an error if there are cycles.
 func (t *Template) StepOrder() ([]string, error) {
-	// Build adjacency list
-	deps := make(map[string][]string)
-	for _, step := range t.Steps {
-		deps[step.ID] = step.Needs
-	}
-
 	// Kahn's algorithm for topological sort
+	// In-degree = number of dependencies each step has
 	inDegree := make(map[string]int)
-	for _, step := range t.Steps {
-		if _, ok := inDegree[step.ID]; !ok {
-			inDegree[step.ID] = 0
-		}
-		for _, need := range step.Needs {
-			inDegree[step.ID]++
-			_ = need
-		}
-	}
-
-	// Actually count in-degrees
-	for id := range deps {
-		inDegree[id] = 0
-	}
-	for id, needs := range deps {
-		_ = id
-		for _, need := range needs {
-			_ = need
-		}
-	}
-
-	// Re-implement properly
-	inDegree = make(map[string]int)
 	for _, step := range t.Steps {
 		inDegree[step.ID] = len(step.Needs)
 	}

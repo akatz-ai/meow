@@ -477,3 +477,85 @@ func TestBaker_BuiltinVariables(t *testing.T) {
 		t.Errorf("expected bead_id substitution, got %q", bead.Description)
 	}
 }
+
+func TestBaker_BakeInline_VariableSubstitution(t *testing.T) {
+	steps := []InlineStep{
+		{ID: "inline-1", Type: "task", Description: "Task for {{task_name}}", Instructions: "Implement {{task_name}}"},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+	baker.VarContext.SetVariable("task_name", "authentication")
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+
+	bead := beads[0]
+	if bead.Title != "Task for authentication" {
+		t.Errorf("expected variable substitution in title, got %q", bead.Title)
+	}
+	if bead.Description != "Implement authentication" {
+		t.Errorf("expected variable substitution in description, got %q", bead.Description)
+	}
+}
+
+func TestBaker_BakeInline_UndefinedVariable(t *testing.T) {
+	steps := []InlineStep{
+		{ID: "inline-1", Type: "task", Description: "Task for {{undefined_var}}"},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	_, err := baker.BakeInline(steps, "parent-123")
+	if err == nil {
+		t.Fatal("expected error for undefined variable in inline step")
+	}
+	if !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("expected undefined variable error, got: %v", err)
+	}
+}
+
+func TestBaker_ConditionWithInlineSteps(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Steps: []Step{
+			{
+				ID:          "check",
+				Description: "Check condition",
+				Condition:   "test -f /tmp/flag",
+				OnTrue: &ExpansionTarget{
+					Inline: []InlineStep{
+						{ID: "action-1", Type: "task", Description: "Do action"},
+					},
+				},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	result, err := baker.Bake(tmpl)
+	if err != nil {
+		t.Fatalf("Bake failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.ConditionSpec == nil {
+		t.Fatal("expected ConditionSpec")
+	}
+	if bead.ConditionSpec.OnTrue == nil {
+		t.Fatal("expected OnTrue")
+	}
+	// Inline steps should be serialized
+	if len(bead.ConditionSpec.OnTrue.Inline) != 1 {
+		t.Errorf("expected 1 inline step, got %d", len(bead.ConditionSpec.OnTrue.Inline))
+	}
+}

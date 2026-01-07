@@ -3,6 +3,7 @@ package template
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -244,11 +245,25 @@ func (b *Baker) expansionTargetToTypes(et *ExpansionTarget) *types.ExpansionTarg
 		return nil
 	}
 
-	return &types.ExpansionTarget{
+	result := &types.ExpansionTarget{
 		Template:  et.Template,
 		Variables: et.Variables,
-		// Note: Inline steps are handled separately during expansion
 	}
+
+	// Serialize inline steps to json.RawMessage for storage
+	if len(et.Inline) > 0 {
+		result.Inline = make([]json.RawMessage, len(et.Inline))
+		for i, step := range et.Inline {
+			data, err := json.Marshal(step)
+			if err != nil {
+				// This shouldn't happen for valid InlineStep structs
+				continue
+			}
+			result.Inline[i] = data
+		}
+	}
+
+	return result
 }
 
 // BakeInline converts inline steps into beads.
@@ -268,6 +283,30 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 
 	// Second pass: create beads
 	for i, step := range steps {
+		beadID := stepToID[step.ID]
+
+		// Set step-specific builtins for substitution
+		b.VarContext.SetBuiltin("step_id", step.ID)
+		b.VarContext.SetBuiltin("bead_id", beadID)
+
+		// Substitute variables in description and instructions
+		description := step.Description
+		instructions := step.Instructions
+		if description != "" {
+			var err error
+			description, err = b.VarContext.Substitute(description)
+			if err != nil {
+				return nil, fmt.Errorf("substitute description in inline step %q: %w", step.ID, err)
+			}
+		}
+		if instructions != "" {
+			var err error
+			instructions, err = b.VarContext.Substitute(instructions)
+			if err != nil {
+				return nil, fmt.Errorf("substitute instructions in inline step %q: %w", step.ID, err)
+			}
+		}
+
 		// Translate dependencies
 		var needs []string
 		for _, need := range step.Needs {
@@ -285,10 +324,10 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 		}
 
 		bead := &types.Bead{
-			ID:          stepToID[step.ID],
+			ID:          beadID,
 			Type:        beadType,
-			Title:       step.Description,
-			Description: step.Instructions,
+			Title:       description,
+			Description: instructions,
 			Status:      types.BeadStatusOpen,
 			Assignee:    b.Assignee,
 			Needs:       needs,

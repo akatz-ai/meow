@@ -148,7 +148,7 @@ func validateSteps(t *Template, name string, result *ValidationResult) {
 		// Validate step type if set
 		if step.Type != "" {
 			valid := map[string]bool{
-				"blocking-gate": true, "restart": true, "":  true,
+				"blocking-gate": true, "restart": true,
 			}
 			if !valid[step.Type] {
 				result.Add(name, step.ID, "type",
