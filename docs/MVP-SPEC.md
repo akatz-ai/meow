@@ -7,7 +7,7 @@ This document specifies the minimal viable implementation of MEOW Stack, based o
 ## Table of Contents
 
 1. [Design Philosophy](#design-philosophy)
-2. [The 9 Primitive Bead Types](#the-9-primitive-bead-types)
+2. [The 8 Primitive Bead Types](#the-8-primitive-bead-types)
 3. [Orchestrator Architecture](#orchestrator-architecture)
 4. [Template System](#template-system)
 5. [Agent Management](#agent-management)
@@ -32,7 +32,7 @@ MEOW Stack is built on a fundamental principle: **minimize orchestrator complexi
 - Clone vs fresh spawn modes
 - Worktree management
 
-We provide **9 primitive bead types** that users compose into templates. The orchestrator is a simple state machine that recognizes these primitives and executes them. Everything else—including context management, refresh logic, call/return semantics, and worktree handling—is **user-defined template composition**.
+We provide **8 primitive bead types** that users compose into templates. The orchestrator is a simple state machine that recognizes these primitives and executes them. Everything else—including context management, refresh logic, call/return semantics, worktree handling, and even human approval gates—is **user-defined template composition**.
 
 ### Benefits
 
@@ -63,17 +63,16 @@ And `refresh`, `call`, `loop` are just templates that compose primitives.
 
 ---
 
-## The 9 Primitive Bead Types
+## The 8 Primitive Bead Types
 
-The orchestrator recognizes exactly 9 bead types. Everything else is built from these.
+The orchestrator recognizes exactly 8 bead types. Everything else is built from these.
 
 ### Overview
 
 | Primitive | Executor | Description |
 |-----------|----------|-------------|
 | `task` | Claude | Regular work bead—Claude executes and closes |
-| `condition` | Orchestrator | Evaluate shell command, expand on_true or on_false |
-| `gate` | External | Wait for external signal (human approval) |
+| `condition` | Orchestrator | Evaluate shell command (can block!), expand on_true or on_false |
 | `stop` | Orchestrator | Kill an agent's tmux session |
 | `start` | Orchestrator | Spawn an agent in tmux with `meow prime` |
 | `checkpoint` | Orchestrator | Save agent's session for later resume |
@@ -98,11 +97,14 @@ status: open
 
 **Orchestrator behavior**: Ensure assigned agent is running, wait for Claude to close the bead.
 
-#### `condition` — Branching and Looping
+#### `condition` — Branching, Looping, and Waiting
 
 Evaluate a shell command. If exit code is 0 (true), expand `on_true` template. Otherwise expand `on_false` template.
 
+**Key insight**: Shell commands can block. The orchestrator doesn't care if a condition takes 1ms or 1 hour to evaluate. This means `condition` subsumes what other systems call "gates" or "waits"—human approval, API polling, timers, webhooks—are all just blocking shell commands.
+
 ```yaml
+# Simple branch
 id: "bd-cond-001"
 type: condition
 condition: "bd list --type=task --status=open | grep -q ."
@@ -112,29 +114,56 @@ on_false:
   template: "finalize"
 ```
 
+```yaml
+# Human approval gate (blocking)
+id: "bd-approve-001"
+type: condition
+condition: "meow wait-approve --bead {{bead_id}} --timeout 24h"
+on_true:
+  inline: []  # Approved, continue
+on_false:
+  template: "handle-rejection"
+```
+
+```yaml
+# Wait for CI (blocking)
+id: "bd-ci-001"
+type: condition
+condition: "gh run watch $RUN_ID --exit-status"
+on_true:
+  inline: []  # CI passed
+on_false:
+  template: "handle-ci-failure"
+```
+
+```yaml
+# Timer/cooldown (blocking)
+id: "bd-wait-001"
+type: condition
+condition: "sleep 300 && exit 0"
+on_true:
+  inline: []  # Continue after 5 minutes
+on_false:
+  inline: []  # Never reached
+```
+
 **Orchestrator behavior**:
 1. Pause the current agent (don't advance it)
-2. Execute `condition` as shell command
+2. Execute `condition` as shell command (may block indefinitely)
 3. Based on exit code, expand appropriate template
 4. Auto-close this bead
 5. Continue (agent will see newly expanded beads)
 
-**Use cases**: Loops, branching, context checks, goal-oriented workflows.
+**Use cases**: Loops, branching, context checks, goal-oriented workflows, human approval gates, API waits, timers, webhooks.
 
-#### `gate` — External Wait
+**Helper CLIs for common waits**:
+| Command | Behavior |
+|---------|----------|
+| `meow wait-approve --bead <id>` | Block until `meow approve <id>` is run |
+| `meow wait-file <path>` | Block until file exists |
+| `meow wait-api <url> --until "jq expr"` | Poll API until condition met |
 
-Pause execution until an external signal (typically human approval).
-
-```yaml
-id: "bd-gate-001"
-type: gate
-title: "Await human review"
-auto_close_condition: null  # Or shell command for auto-approval
-```
-
-**Orchestrator behavior**: Stop processing, wait for `meow approve` command.
-
-**Use cases**: Human review checkpoints, external API waits, manual triggers.
+These are conveniences—any blocking shell command works.
 
 #### `stop` — Kill Agent Session
 
@@ -276,19 +305,18 @@ The orchestrator is a **simple event loop** that:
 │  │                                                                            │ │
 │  │      if bead is None:                                                      │ │
 │  │          if allDone(): return     // No open beads, no active agents       │ │
-│  │          sleep(100ms)             // Waiting on gate or agent              │ │
+│  │          sleep(100ms)             // Waiting on condition or agent         │ │
 │  │          continue                                                          │ │
 │  │                                                                            │ │
 │  │      switch bead.type:                                                     │ │
-│  │          case "task":      waitForClaudeToClose(bead)                      │ │
-│  │          case "condition": evalAndExpand(bead)                             │ │
-│  │          case "gate":      waitForExternalSignal(bead)                     │ │
-│  │          case "stop":      killAgent(bead.agent); close(bead)              │ │
-│  │          case "start":     spawnAgent(bead.agent); close(bead)             │ │
+│  │          case "task":       waitForClaudeToClose(bead)                     │ │
+│  │          case "condition":  evalAndExpand(bead)  // may block!             │ │
+│  │          case "stop":       killAgent(bead.agent); close(bead)             │ │
+│  │          case "start":      spawnAgent(bead.agent); close(bead)            │ │
 │  │          case "checkpoint": saveCheckpoint(bead.agent); close(bead)        │ │
-│  │          case "resume":    resumeAgent(bead.agent); close(bead)            │ │
-│  │          case "code":      execShell(bead.code); close(bead)               │ │
-│  │          case "expand":    expandTemplate(bead); close(bead)               │ │
+│  │          case "resume":     resumeAgent(bead.agent); close(bead)           │ │
+│  │          case "code":       execShell(bead.code); close(bead)              │ │
+│  │          case "expand":     expandTemplate(bead); close(bead)              │ │
 │  │                                                                            │ │
 │  └────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                  │
@@ -695,6 +723,41 @@ agent = "{{parent}}"
 needs = ["cleanup-worktree"]
 ```
 
+### Example: `human-gate` Template
+
+Human approval gate using blocking condition:
+
+```toml
+# .meow/templates/human-gate.toml
+[meta]
+name = "human-gate"
+description = "Wait for human approval before continuing"
+
+[variables]
+bead_id = { required = true }
+timeout = { default = "24h" }
+
+[[steps]]
+id = "prepare-summary"
+type = "task"
+title = "Prepare work summary for review"
+description = "Document what was done and what approval is needed"
+assignee = "{{agent}}"
+
+[[steps]]
+id = "await-approval"
+type = "condition"
+needs = ["prepare-summary"]
+condition = "meow wait-approve --bead {{bead_id}} --timeout {{timeout}}"
+on_true:
+  inline = []  # Approved, continue workflow
+on_false:
+  inline = [
+    { id = "handle-rejection", type = "task",
+      title = "Address rejection feedback and retry" }
+  ]
+```
+
 ### Example: `context-check` Template
 
 User-defined context management:
@@ -993,8 +1056,9 @@ Let's trace through `meow run work-loop --var agent=claude-1`:
 |---------|-------------|
 | `meow init` | Initialize .meow directory with default templates |
 | `meow run <template>` | Bake template and start orchestrator |
-| `meow status` | Show current state: agents, active beads, stack |
-| `meow approve` | Close current gate bead |
+| `meow status` | Show current state: agents, active beads |
+| `meow approve <bead>` | Unblock a `meow wait-approve` condition |
+| `meow reject <bead>` | Reject a `meow wait-approve` condition (with optional reason) |
 | `meow stop` | Gracefully stop orchestrator |
 
 ### Agent Commands (Claude uses these)
@@ -1107,15 +1171,16 @@ The `needs` array creates implicit join points.
 
 ### Phase 1: Core Orchestrator (MVP)
 
-**Goal**: Single-agent execution with all 9 primitives.
+**Goal**: Single-agent execution with all 8 primitives.
 
 - [ ] Go binary: `meow` CLI
 - [ ] Template parser (TOML → beads)
 - [ ] Orchestrator main loop
-- [ ] All 9 primitive handlers
+- [ ] All 8 primitive handlers
 - [ ] Agent state management
 - [ ] tmux session management
 - [ ] `meow prime` / `meow close` integration
+- [ ] `meow wait-approve` / `meow approve` for human gates
 - [ ] Basic crash recovery
 
 **Deliverable**: Can run a simple loop workflow with one agent.
@@ -1140,7 +1205,7 @@ The `needs` array creates implicit join points.
 - [ ] Comprehensive error handling
 - [ ] Detailed logging and tracing
 - [ ] `meow status` / `meow agents` / `meow trace`
-- [ ] Gate timeout and escalation
+- [ ] Condition timeout handling
 - [ ] Integration tests
 
 **Deliverable**: Reliable single-agent orchestration.
@@ -1161,20 +1226,19 @@ The `needs` array creates implicit join points.
 
 ## Summary
 
-MEOW Stack MVP is built on **9 primitive bead types**:
+MEOW Stack MVP is built on **8 primitive bead types**:
 
 | # | Primitive | Purpose |
 |---|-----------|---------|
 | 1 | `task` | Claude-executed work |
-| 2 | `condition` | Branching and looping |
-| 3 | `gate` | External wait (human approval) |
-| 4 | `stop` | Kill agent session |
-| 5 | `start` | Spawn agent |
-| 6 | `checkpoint` | Save for resume |
-| 7 | `resume` | Resume from checkpoint |
-| 8 | `code` | Arbitrary shell execution |
-| 9 | `expand` | Template composition |
+| 2 | `condition` | Branching, looping, and waiting (can block for gates) |
+| 3 | `stop` | Kill agent session |
+| 4 | `start` | Spawn agent |
+| 5 | `checkpoint` | Save for resume |
+| 6 | `resume` | Resume from checkpoint |
+| 7 | `code` | Arbitrary shell execution |
+| 8 | `expand` | Template composition |
 
-Everything else—`refresh`, `handoff`, `call`, loops, context management—is **template composition** using these primitives.
+Everything else—`refresh`, `handoff`, `call`, loops, context management, human approval gates—is **template composition** using these primitives.
 
 The orchestrator is a simple state machine. The templates are the programs. Users have complete control.
