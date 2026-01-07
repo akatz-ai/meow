@@ -57,8 +57,8 @@ MEOW is a dumb orchestrator that dispatches 6 primitive bead types while smart T
 │  BeadStore    │    │  CodeExecutor   │    │  Condition      │
 │               │    │                 │    │  Evaluator      │
 │  .beads/      │    │  Shell exec     │    │                 │
-│  bd commands  │    │  Output capture │    │  Blocking exec  │
-│  Readiness    │    │  Error handling │    │  Goroutines     │
+│  issues.jsonl │    │  Output capture │    │  Blocking exec  │
+│  (direct I/O) │    │  Error handling │    │  Goroutines     │
 └───────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
@@ -236,6 +236,38 @@ Template steps can be marked `ephemeral: true`. These:
 - Don't clutter `bd list` output
 
 Use for workflow machinery (the "how"), not actual work (the "what").
+
+## Beads Integration (Overlay Approach)
+
+MEOW **layers on top** of the upstream `beads` project rather than forking it:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    .beads/issues.jsonl                              │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │ {"id":"bd-task-123","title":"Implement auth",...}              │ │
+│  │ {"id":"meow-abc.load-context","tier":"wisp",...}  ← MEOW-only  │ │
+│  │ {"id":"bd-task-456","title":"Fix bug",...}                     │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                    │                     │                          │
+│                    ▼                     ▼                          │
+│  ┌────────────────────────┐   ┌────────────────────────┐           │
+│  │     bd CLI (upstream)  │   │     meow CLI           │           │
+│  │  • Creates work beads  │   │  • Creates workflow    │           │
+│  │  • Ignores MEOW fields │   │    beads (wisps)       │           │
+│  │  • Preserves them      │   │  • Understands tiers   │           │
+│  └────────────────────────┘   └────────────────────────┘           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions**:
+- MEOW defines its own `Bead` type internally (`internal/types/bead.go`)
+- Both CLIs read/write the same `issues.jsonl` file
+- MEOW-specific fields (`tier`, `hook_bead`, etc.) are preserved but ignored by upstream `bd`
+- **ID prefix separation**: `bd-*` for work beads, `meow-*` for workflow beads
+- MEOW reads/writes files directly (no shelling out to `bd`)
+
+**Why not fork?** JSON is schema-flexible. MEOW can extend the schema without breaking upstream beads.
 
 ## File Layout
 
