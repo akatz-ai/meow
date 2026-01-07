@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -865,5 +866,119 @@ func TestOrchestrator_StartOrResume_LockConflict(t *testing.T) {
 	if err == nil {
 		t.Error("Second StartOrResume() should fail with lock conflict")
 		orch2.ReleaseLock()
+	}
+}
+
+// retryingCodeExecutor fails N times before succeeding
+type retryingCodeExecutor struct {
+	mu         sync.Mutex
+	failUntil  int
+	callCount  int
+}
+
+func (e *retryingCodeExecutor) Execute(ctx context.Context, spec *types.CodeSpec) (map[string]any, error) {
+	e.mu.Lock()
+	e.callCount++
+	count := e.callCount
+	e.mu.Unlock()
+
+	if count <= e.failUntil {
+		return nil, fmt.Errorf("simulated failure %d", count)
+	}
+	return map[string]any{"exit_code": 0}, nil
+}
+
+func TestOrchestrator_CodeRetry(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := &retryingCodeExecutor{failUntil: 2} // Fail twice, succeed on 3rd
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add a code bead with retry
+	codeBead := &types.Bead{
+		ID:     "bd-retry-001",
+		Type:   types.BeadTypeCode,
+		Title:  "Retry code",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code:       "echo test",
+			OnError:    types.OnErrorRetry,
+			MaxRetries: 3,
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Errorf("Run() error = %v, want nil", err)
+	}
+
+	// Verify bead was closed (retry succeeded on 3rd attempt)
+	if store.beads["bd-retry-001"].Status != types.BeadStatusClosed {
+		t.Errorf("Bead status = %s, want closed", store.beads["bd-retry-001"].Status)
+	}
+
+	// Verify it was called 3 times
+	if executor.callCount != 3 {
+		t.Errorf("Execute called %d times, want 3", executor.callCount)
+	}
+}
+
+// blockingCodeExecutor blocks until context is cancelled
+type blockingCodeExecutor struct{}
+
+func (e *blockingCodeExecutor) Execute(ctx context.Context, spec *types.CodeSpec) (map[string]any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestOrchestrator_ConditionTimeout(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := &blockingCodeExecutor{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add a condition bead with timeout
+	condBead := &types.Bead{
+		ID:     "bd-timeout-001",
+		Type:   types.BeadTypeCondition,
+		Title:  "Timeout condition",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "sleep 10",
+			Timeout:   "100ms",
+			OnTimeout: &types.ExpansionTarget{
+				Template: "on-timeout-template",
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Wait for condition goroutine
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify on_timeout template was expanded
+	if len(expander.expanded) != 1 || expander.expanded[0] != "on-timeout-template" {
+		t.Errorf("Expected on-timeout-template to be expanded, got %v", expander.expanded)
 	}
 }

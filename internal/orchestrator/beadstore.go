@@ -272,3 +272,16 @@ func (s *FileBeadStore) Reload(ctx context.Context) error {
 	s.loaded = false
 	return s.loadLocked()
 }
+
+// Delete removes a bead by ID.
+func (s *FileBeadStore) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.beads[id]; !exists {
+		return fmt.Errorf("bead %s not found", id)
+	}
+
+	delete(s.beads, id)
+	return s.writeLocked()
+}

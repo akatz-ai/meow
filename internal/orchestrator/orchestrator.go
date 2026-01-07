@@ -308,6 +308,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				if err == errAllDone {
 					o.logger.Info("all work complete")
 					o.waitForConditions()
+					// Clean up ephemeral beads
+					if cleanupErr := o.cleanupEphemeralBeads(ctx); cleanupErr != nil {
+						o.logger.Warn("failed to cleanup ephemeral beads", "error", cleanupErr)
+					}
 					return nil
 				}
 				o.logger.Error("tick error", "error", err)
@@ -446,16 +450,51 @@ func (o *Orchestrator) handleCondition(ctx context.Context, bead *types.Bead) er
 func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 	spec := bead.ConditionSpec
 
+	// Parse timeout if specified
+	var timeout time.Duration
+	if spec.Timeout != "" {
+		var err error
+		timeout, err = time.ParseDuration(spec.Timeout)
+		if err != nil {
+			o.logger.Warn("invalid condition timeout, ignoring",
+				"bead", bead.ID,
+				"timeout", spec.Timeout,
+				"error", err,
+			)
+		}
+	}
+
+	// Create context with timeout if specified
+	execCtx := ctx
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	// Execute condition as shell command
 	codeSpec := &types.CodeSpec{
 		Code: spec.Condition,
 	}
 
-	outputs, err := o.executor.Execute(ctx, codeSpec)
+	outputs, err := o.executor.Execute(execCtx, codeSpec)
 
 	// Determine which branch to take
 	var target *types.ExpansionTarget
-	if err != nil {
+	isTimeout := execCtx.Err() == context.DeadlineExceeded
+
+	if isTimeout {
+		o.logger.Info("condition timed out",
+			"bead", bead.ID,
+			"timeout", timeout,
+		)
+		if spec.OnTimeout != nil {
+			target = spec.OnTimeout
+		} else {
+			// Default to on_false if no on_timeout specified
+			target = spec.OnFalse
+		}
+	} else if err != nil {
 		o.logger.Info("condition evaluated false",
 			"bead", bead.ID,
 			"error", err,
@@ -547,24 +586,63 @@ func (o *Orchestrator) handleCode(ctx context.Context, bead *types.Bead) error {
 		return fmt.Errorf("code bead %s missing spec", bead.ID)
 	}
 
-	outputs, err := o.executor.Execute(ctx, bead.CodeSpec)
-	if err != nil {
+	// Mark as in_progress
+	bead.Status = types.BeadStatusInProgress
+	if err := o.store.Update(ctx, bead); err != nil {
+		return fmt.Errorf("updating bead status: %w", err)
+	}
+
+	maxRetries := bead.CodeSpec.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3 // Default retries
+	}
+
+	var outputs map[string]any
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		outputs, lastErr = o.executor.Execute(ctx, bead.CodeSpec)
+		if lastErr == nil {
+			// Success
+			break
+		}
+
 		// Check error handling strategy
 		switch bead.CodeSpec.OnError {
 		case types.OnErrorAbort:
-			return fmt.Errorf("code execution failed (abort): %w", err)
+			return fmt.Errorf("code execution failed (abort): %w", lastErr)
+
 		case types.OnErrorRetry:
-			// TODO: Implement retry logic
-			o.logger.Warn("code execution failed, retry not implemented",
+			if attempt < maxRetries {
+				o.logger.Warn("code execution failed, retrying",
+					"bead", bead.ID,
+					"attempt", attempt,
+					"max_retries", maxRetries,
+					"error", lastErr,
+				)
+				// Exponential backoff: 100ms, 200ms, 400ms, ...
+				backoff := time.Duration(100<<(attempt-1)) * time.Millisecond
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+				}
+				continue
+			}
+			o.logger.Error("code execution failed after retries",
 				"bead", bead.ID,
-				"error", err,
+				"attempts", maxRetries,
+				"error", lastErr,
 			)
+
 		default: // OnErrorContinue
 			o.logger.Warn("code execution failed, continuing",
 				"bead", bead.ID,
-				"error", err,
+				"error", lastErr,
 			)
+			break // Don't retry on continue
 		}
+		break
 	}
 
 	// Auto-close the bead with captured outputs
@@ -600,4 +678,53 @@ func (o *Orchestrator) waitForConditions() {
 	o.condMu.Unlock()
 
 	o.wg.Wait()
+}
+
+// cleanupEphemeralBeads removes all beads labeled as ephemeral.
+// This is called after workflow completion to clean up machinery beads
+// that were created during execution.
+func (o *Orchestrator) cleanupEphemeralBeads(ctx context.Context) error {
+	// Check if store supports deletion
+	deleter, ok := o.store.(interface {
+		Delete(context.Context, string) error
+	})
+	if !ok {
+		o.logger.Debug("bead store does not support deletion, skipping ephemeral cleanup")
+		return nil
+	}
+
+	// Check if store supports listing all beads
+	lister, ok := o.store.(interface {
+		List(context.Context, types.BeadStatus) ([]*types.Bead, error)
+	})
+	if !ok {
+		o.logger.Debug("bead store does not support listing, skipping ephemeral cleanup")
+		return nil
+	}
+
+	// Get all beads (empty status = all)
+	beads, err := lister.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("listing beads: %w", err)
+	}
+
+	var deleted int
+	for _, bead := range beads {
+		if bead.IsEphemeral() {
+			if err := deleter.Delete(ctx, bead.ID); err != nil {
+				o.logger.Warn("failed to delete ephemeral bead",
+					"bead", bead.ID,
+					"error", err,
+				)
+				continue
+			}
+			deleted++
+		}
+	}
+
+	if deleted > 0 {
+		o.logger.Info("cleaned up ephemeral beads", "count", deleted)
+	}
+
+	return nil
 }
