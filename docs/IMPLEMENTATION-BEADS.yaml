@@ -1,0 +1,3073 @@
+# MEOW Stack MVP - Implementation Beads
+# =====================================
+#
+# This file contains the complete task breakdown for implementing MEOW Stack.
+# Import via: bd import -i docs/IMPLEMENTATION-BEADS.yaml
+#
+# Structure:
+# - 11 Epics (meow-e1 through meow-e11)
+# - 77 Tasks organized hierarchically
+# - Full dependency graph
+#
+# Epic Summary:
+# - E1: Foundation (7 tasks) - Project setup, types, logging, errors
+# - E2: Template System (5 tasks) - Parser, variables, validation, baking
+# - E3: Orchestrator Core (5 tasks) - Main loop, state, recovery
+# - E4: Primitive Handlers (7 tasks) - All 6 primitives + ephemeral cleanup
+# - E5: Agent Management (4 tasks) - tmux, state, spawn, monitoring
+# - E6: Condition System (4 tasks) - Blocking, timeout, gates
+# - E7: Output Binding (4 tasks) - Capture, storage, resolution, validators
+# - E8: Integration (4 tasks) - Beads, hooks, recovery, worktrees
+# - E9: Default Templates (7 tasks) - work-loop, call, implement-tdd, etc.
+# - E10: CLI Completion (6 tasks) - init, run, prime, close, status, debug
+# - E11: Testing (13 tasks) - Unit, integration, E2E, performance, docs
+#
+# Each bead includes:
+# - Detailed acceptance criteria
+# - Context and reasoning
+# - Implementation hints
+# - Test requirements
+#
+# Architecture:
+# - 6 Primitives: task, condition, stop, start, code, expand
+# - Output Binding: code beads capture stdout/files for subsequent beads
+# - Task Outputs: tasks can require validated outputs from Claude
+# - Ephemeral Beads: template steps can be marked for auto-cleanup
+# - Checkpoint/Resume: composed from code (session-id) + start (resume_session)
+#
+# Testing Requirements:
+# - Minimum 80% line coverage
+# - 100% coverage for critical paths (output validation, bead transitions)
+# - E2E tests with mock Claude
+# - Performance benchmarks for critical operations
+#
+# Last Updated: 2026-01-07
+
+---
+# =============================================================================
+# EPIC 1: FOUNDATION
+# =============================================================================
+- id: meow-e1
+  type: epic
+  title: "Foundation: Project setup and core infrastructure"
+  priority: 0
+  status: open
+  labels: [epic, foundation, phase-1]
+  description: |
+    Establish the foundational infrastructure for MEOW Stack including project
+    structure, core types, CLI skeleton, and build system.
+  notes: |
+    ## Why This Epic Matters
+
+    A solid foundation prevents technical debt. Every component depends on
+    these core types and patterns. Getting this right saves refactoring later.
+
+    ## Deliverables
+    1. Go project structure with modules
+    2. Core types (Bead, Agent, Template, Config)
+    3. CLI skeleton using Cobra
+    4. Build system (Makefile)
+    5. Basic configuration handling
+
+    ## Success Criteria
+    - `go build` produces working `meow` binary
+    - `meow --version` and `meow --help` work
+    - Core types are defined and usable
+    - Basic project structure matches architecture doc
+
+---
+- id: meow-e1.1
+  type: task
+  title: "Initialize Go project with module structure"
+  priority: 0
+  status: open
+  parent: meow-e1
+  labels: [foundation, setup]
+  description: Create the Go project structure for MEOW Stack.
+  notes: |
+    ## Directory Structure
+    ```
+    meow-machine/
+    ├── cmd/meow/                  # CLI entry point
+    ├── internal/
+    │   ├── config/               # Configuration handling
+    │   ├── types/                # Core data types
+    │   ├── orchestrator/         # Orchestrator engine
+    │   ├── template/             # Template system
+    │   ├── agent/                # Agent management
+    │   └── primitive/            # Primitive handlers
+    ├── pkg/meow/                 # Public API (if needed)
+    ├── templates/                # Default templates (embedded)
+    ├── go.mod
+    ├── Makefile
+    └── README.md
+    ```
+
+    ## Commands
+    ```bash
+    go mod init github.com/your-org/meow-machine
+    mkdir -p cmd/meow internal/{config,types,orchestrator,template,agent,primitive}
+    ```
+
+    ## Acceptance Criteria
+    - [ ] `go mod init` creates valid go.mod
+    - [ ] Directory structure matches plan
+    - [ ] `.gitignore` includes Go artifacts
+    - [ ] Basic `main.go` compiles
+
+---
+- id: meow-e1.2
+  type: task
+  title: "Define core data types (Bead, Agent, Template, Config)"
+  priority: 0
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.1]
+  labels: [foundation, types]
+  description: Define the fundamental data structures used throughout MEOW.
+  notes: |
+    ## Types to Define
+
+    ### Bead (internal/types/bead.go)
+    - BeadType enum (task, condition, stop, start, code, expand) - 6 primitives
+    - BeadStatus enum (open, in_progress, closed)
+    - Bead struct with all fields
+    - Primitive-specific spec structs (ConditionSpec, StartSpec, CodeSpec, etc.)
+    - OutputSpec for code bead outputs (stdout, file capture)
+    - TaskOutputSpec for required/optional task outputs with types
+    - EphemeralFlag for cleanup behavior
+
+    ### Agent (internal/types/agent.go)
+    - AgentStatus enum (active, stopped)
+    - Agent struct with session tracking
+    - Session ID storage (for resume composition)
+
+    ### Config (internal/config/config.go)
+    - Config struct for TOML loading
+    - DefaultsConfig for default values
+    - EphemeralCleanup settings
+
+    ## Design Decisions
+
+    **Why 6 primitives instead of 8?**
+    checkpoint and resume are now composed from code + start:
+    - checkpoint → code bead running `meow session-id`
+    - resume → start bead with `resume_session` parameter
+
+    **Why separate spec structs?**
+    Each primitive has different fields. Using embedded structs keeps the
+    main Bead type clean while allowing type-safe access.
+
+    ## Acceptance Criteria
+    - [ ] All types compile without errors
+    - [ ] JSON marshaling/unmarshaling works correctly
+    - [ ] OutputSpec handles stdout, stderr, file capture
+    - [ ] TaskOutputSpec handles required/optional with types
+    - [ ] Types have appropriate comments/godoc
+    - [ ] Unit tests for marshaling edge cases
+
+---
+- id: meow-e1.3
+  type: task
+  title: "Create CLI skeleton with Cobra"
+  priority: 0
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.1]
+  labels: [foundation, cli]
+  description: Set up the CLI framework using Cobra with stub commands.
+  notes: |
+    ## Commands to Stub
+
+    ### User Commands
+    - `meow init` - Initialize .meow directory
+    - `meow run <template>` - Start workflow
+    - `meow status` - Show current state
+    - `meow approve [bead]` - Approve a gate
+    - `meow reject [bead]` - Reject a gate
+
+    ### Agent Commands
+    - `meow prime` - Show next task for agent
+    - `meow close <bead>` - Close a task
+    - `meow handoff` - Request context refresh
+
+    ### Debug Commands
+    - `meow agents` - List agents
+    - `meow trace` - Show execution trace
+    - `meow validate <template>` - Validate template
+
+    ## File Structure
+    ```
+    cmd/meow/
+    ├── main.go
+    ├── root.go
+    ├── init.go
+    ├── run.go
+    └── ...
+    ```
+
+    ## Acceptance Criteria
+    - [ ] `meow --help` shows all commands
+    - [ ] `meow <cmd> --help` shows command-specific help
+    - [ ] `meow --version` shows version
+    - [ ] Commands parse arguments correctly
+
+---
+- id: meow-e1.4
+  type: task
+  title: "Create Makefile and build scripts"
+  priority: 1
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.1]
+  labels: [foundation, build]
+  description: Create build automation for the project.
+  notes: |
+    ## Makefile Targets
+    - `build` - Build binary to bin/meow
+    - `install` - Install to GOPATH/bin
+    - `test` - Run all tests
+    - `test-short` - Run short tests
+    - `lint` - Run golangci-lint
+    - `clean` - Remove artifacts
+    - `generate` - Run go generate
+
+    ## Version Embedding
+    Use ldflags to embed version from git tags:
+    ```makefile
+    VERSION ?= $(shell git describe --tags --always --dirty)
+    LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+    ```
+
+    ## Acceptance Criteria
+    - [ ] `make build` produces binary
+    - [ ] `make test` runs tests
+    - [ ] `make lint` runs linter
+    - [ ] Version embedded correctly
+
+---
+- id: meow-e1.5
+  type: task
+  title: "Implement configuration loading and defaults"
+  priority: 1
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.2]
+  labels: [foundation, config]
+  description: Implement configuration file loading and sensible defaults.
+  notes: |
+    ## Config File Locations (priority order)
+    1. `.meow/config.toml` (project-local)
+    2. `~/.config/meow/config.toml` (user global)
+    3. Built-in defaults
+
+    ## Default Configuration
+    ```toml
+    version = "1"
+
+    [paths]
+    template_dir = ".meow/templates"
+    beads_dir = ".beads"
+    state_dir = ".meow/state"
+
+    [defaults]
+    agent = "claude-1"
+    stop_grace_period = 10
+    condition_timeout = "1h"
+
+    [orchestrator]
+    poll_interval = "100ms"
+    heartbeat_interval = "30s"
+
+    [cleanup]
+    ephemeral = "on_complete"  # on_complete | manual | never
+
+    [logging]
+    level = "info"  # debug | info | warn | error
+    format = "json"  # json | text
+    file = ".meow/state/meow.log"
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Default config works with no file present
+    - [ ] Project-local config overrides defaults
+    - [ ] Unknown fields ignored (forward compatibility)
+    - [ ] Invalid config produces helpful error
+    - [ ] Unit tests for config loading edge cases
+
+---
+- id: meow-e1.6
+  type: task
+  title: "Implement structured logging infrastructure"
+  priority: 0
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.5]
+  labels: [foundation, logging]
+  description: Set up structured logging for debugging and observability.
+  notes: |
+    ## Why Logging Matters
+    MEOW orchestrates long-running workflows. When things go wrong, we need:
+    - Clear timestamps for every action
+    - Structured fields for filtering (agent, bead_id, action)
+    - Log levels for verbosity control
+    - File output for post-mortem analysis
+
+    ## Implementation
+    Use zerolog or zap for structured JSON logging.
+
+    ## Log Levels
+    - DEBUG: Variable substitution, bead state changes
+    - INFO: Bead dispatch, agent spawn/stop, template expansion
+    - WARN: Retries, timeouts, missing optional fields
+    - ERROR: Validation failures, crashes, unrecoverable states
+
+    ## Log Fields (always include)
+    ```json
+    {
+      "ts": "2026-01-07T12:00:00Z",
+      "level": "info",
+      "msg": "Dispatching bead",
+      "bead_id": "bd-task-001",
+      "bead_type": "task",
+      "agent": "claude-1",
+      "workflow_id": "meow-run-001"
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Logger initialized from config
+    - [ ] All major actions logged with context
+    - [ ] Log rotation (max file size)
+    - [ ] DEBUG level shows internal state
+    - [ ] JSON format parseable by jq
+    - [ ] Unit tests for log output format
+
+---
+- id: meow-e1.7
+  type: task
+  title: "Define error types and codes"
+  priority: 1
+  status: open
+  parent: meow-e1
+  needs: [meow-e1.2]
+  labels: [foundation, errors]
+  description: Define structured error types for consistent error handling.
+  notes: |
+    ## Error Categories
+    - **ConfigError**: Invalid config, missing required fields
+    - **TemplateError**: Parse error, validation error, missing template
+    - **BeadError**: Invalid state transition, missing dependency, cycle
+    - **AgentError**: Spawn failed, session not found, timeout
+    - **OutputError**: Type mismatch, missing required, validation failed
+    - **IOError**: File not found, permission denied, disk full
+
+    ## Error Structure
+    ```go
+    type MeowError struct {
+        Code    string   // "TMPL_PARSE_001"
+        Message string   // Human-readable
+        Details map[string]any  // Context
+        Cause   error    // Wrapped error
+    }
+    ```
+
+    ## Error Codes
+    ```
+    CONFIG_001: Missing required field
+    CONFIG_002: Invalid value type
+    TMPL_001: Parse error
+    TMPL_002: Validation error - missing field
+    TMPL_003: Validation error - cycle detected
+    BEAD_001: Invalid status transition
+    BEAD_002: Dependency not satisfied
+    AGENT_001: Session spawn failed
+    AGENT_002: Session not found
+    OUTPUT_001: Missing required output
+    OUTPUT_002: Type validation failed
+    OUTPUT_003: Bead ID not found
+    ```
+
+    ## Acceptance Criteria
+    - [ ] All error types defined
+    - [ ] Errors include context (bead_id, template, etc.)
+    - [ ] Errors are JSON-serializable
+    - [ ] CLI shows human-readable messages
+    - [ ] Unit tests for error formatting
+
+# =============================================================================
+# EPIC 2: TEMPLATE SYSTEM
+# =============================================================================
+---
+- id: meow-e2
+  type: epic
+  title: "Template System: Parser, variables, and baking"
+  priority: 0
+  status: open
+  needs: [meow-e1]
+  labels: [epic, templates, phase-1]
+  description: |
+    Parse TOML templates, substitute variables, validate structure, and "bake"
+    templates into beads.
+  notes: |
+    ## Why This Epic Matters
+
+    Templates are the "programs" in MEOW. They define workflows using the 6
+    primitives. This epic makes templates usable.
+
+    ## Key Components
+    1. TOML parser with template-specific handling
+    2. Variable substitution engine (including output references)
+    3. Template validation
+    4. Baking (template → beads)
+    5. Output reference resolution ({{bead.outputs.field}})
+    6. Ephemeral flag handling
+
+    ## Success Criteria
+    - Can parse any valid MEOW template
+    - Variable substitution works with nesting
+    - Output references ({{bead.outputs.field}}) resolve correctly
+    - Ephemeral templates get proper labeling
+    - Validation catches common errors
+    - Baking creates correct beads with dependencies
+
+---
+- id: meow-e2.1
+  type: task
+  title: "Implement TOML template parser"
+  priority: 0
+  status: open
+  parent: meow-e2
+  needs: [meow-e1.2]
+  labels: [templates, parser]
+  description: Parse MEOW template files from TOML format.
+  notes: |
+    ## Template Structure
+    - [meta] section: name, version, description, etc.
+    - [variables] section: variable definitions with types/defaults
+    - [[steps]] array: workflow steps
+
+    ## Go Types
+    - Template struct
+    - TemplateMeta struct
+    - VariableDef struct
+    - TemplateStep struct
+    - ExpansionTarget struct (for on_true/on_false)
+
+    ## Acceptance Criteria
+    - [ ] Parse valid template without error
+    - [ ] Return helpful error for invalid TOML
+    - [ ] Handle all step types correctly
+    - [ ] Support inline and template expansion targets
+
+---
+- id: meow-e2.2
+  type: task
+  title: "Implement variable substitution engine"
+  priority: 0
+  status: open
+  parent: meow-e2
+  needs: [meow-e2.1]
+  labels: [templates, variables]
+  description: Implement {{variable}} substitution throughout templates.
+  notes: |
+    ## Substitution Types
+    - Basic: {{task_id}} → value
+    - Nested: {{output.step.field}} → nested value
+    - **Output references: {{bead_id.outputs.field}} → captured output**
+    - Builtins: {{agent}}, {{bead_id}}, {{timestamp}}, etc.
+
+    ## Output Reference Resolution
+    When a template references {{some_bead.outputs.field}}:
+    1. Find bead with matching ID in same workflow
+    2. Look up outputs.field from bead's stored outputs
+    3. Substitute the value
+
+    This enables dynamic data flow:
+    - code bead captures stdout → subsequent bead uses it
+    - task bead validates output → expand bead uses it
+
+    ## Edge Cases
+    - Unset required variable → error
+    - Unset optional with default → use default
+    - Recursive substitution → detect and error
+    - Missing output reference → error with helpful message
+
+    ## Acceptance Criteria
+    - [ ] Basic {{var}} substitution works
+    - [ ] Nested {{a.b.c}} access works
+    - [ ] **Output references {{bead.outputs.field}} resolve correctly**
+    - [ ] Built-in variables populated
+    - [ ] Missing required variable errors clearly
+    - [ ] Missing output reference errors with bead context
+
+---
+- id: meow-e2.3
+  type: task
+  title: "Implement template validation"
+  priority: 1
+  status: open
+  parent: meow-e2
+  needs: [meow-e2.1]
+  labels: [templates, validation]
+  description: Validate templates for correctness before baking.
+  notes: |
+    ## Validations
+    - Structure: meta.name required, unique step IDs, valid types
+    - Dependencies: needs references exist, no cycles, all reachable
+    - Variables: all {{var}} references defined
+    - Type-specific: condition has on_true/on_false, expand has template, etc.
+
+    ## Error Messages
+    Should include:
+    - Template name and step ID
+    - What's wrong
+    - Suggestions ("did you mean X?")
+
+    ## Acceptance Criteria
+    - [ ] Catches missing required fields
+    - [ ] Detects circular dependencies
+    - [ ] Suggests corrections for typos
+    - [ ] Returns all errors, not just first
+
+---
+- id: meow-e2.4
+  type: task
+  title: "Implement template baking (template → beads)"
+  priority: 0
+  status: open
+  parent: meow-e2
+  needs: [meow-e2.2, meow-e2.3]
+  labels: [templates, baking]
+  description: Transform a parsed, validated template into executable beads.
+  notes: |
+    ## Baking Process
+    1. Load template
+    2. Validate
+    3. Substitute variables
+    4. Generate bead IDs for each step
+    5. Translate needs from step IDs to bead IDs
+    6. Create beads
+
+    ## ID Generation
+    Format: {workflow_id}.{step_id}-{hash}
+    Example: meow-run-001.load-context-a3f8
+
+    ## Handling Nested Structures
+    - expand steps create placeholder beads (runtime expansion)
+    - inline steps in conditions get baked immediately
+
+    ## Acceptance Criteria
+    - [ ] Simple template bakes to correct beads
+    - [ ] Dependencies translate correctly
+    - [ ] Inline steps become child beads
+    - [ ] Bead IDs are unique and traceable
+
+---
+- id: meow-e2.5
+  type: task
+  title: "Implement template loading from filesystem and embedded"
+  priority: 1
+  status: open
+  parent: meow-e2
+  needs: [meow-e2.1]
+  labels: [templates, loading]
+  description: Load templates from multiple sources with precedence.
+  notes: |
+    ## Load Order
+    1. Project: .meow/templates/{name}.toml
+    2. User: ~/.config/meow/templates/{name}.toml
+    3. Embedded: Built into binary
+
+    ## Embedded Templates
+    Use Go embed directive:
+    ```go
+    //go:embed templates/*.toml
+    var embeddedTemplates embed.FS
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Embedded templates load correctly
+    - [ ] Project templates override embedded
+    - [ ] Helpful error when template not found
+
+# =============================================================================
+# EPIC 3: ORCHESTRATOR CORE
+# =============================================================================
+---
+- id: meow-e3
+  type: epic
+  title: "Orchestrator Core: Main loop and state management"
+  priority: 0
+  status: open
+  needs: [meow-e1, meow-e2]
+  labels: [epic, orchestrator, phase-1]
+  description: |
+    The heart of MEOW. Main loop, bead readiness detection, state management,
+    and recovery.
+  notes: |
+    ## Design Philosophy
+    > "The orchestrator is dumb; the templates are smart."
+
+    The orchestrator knows ONLY the 6 primitives. Everything else—loops,
+    gates, refresh, checkpoint/resume—is template composition.
+
+    ## Success Criteria
+    - Main loop runs continuously
+    - Correctly identifies ready beads
+    - Dispatches to appropriate handlers (6 types)
+    - Captures and stores outputs from code beads
+    - Validates and stores outputs from task beads
+    - Persists state for recovery
+
+---
+- id: meow-e3.1
+  type: task
+  title: "Implement orchestrator main loop"
+  priority: 0
+  status: open
+  parent: meow-e3
+  needs: [meow-e1.2]
+  labels: [orchestrator, main-loop]
+  description: Implement the core orchestrator loop.
+  notes: |
+    ## Loop Structure
+    ```go
+    for {
+        bead := getNextReadyBead()
+        if bead == nil {
+            if allDone() { return nil }
+            sleep and continue
+        }
+        dispatch(bead)
+        updateHeartbeat()
+    }
+    ```
+
+    ## Dispatch by Type (6 primitives)
+    ```go
+    switch bead.Type {
+    case "task":      waitForClaudeToClose(bead)
+    case "condition": evalAndExpand(bead)  // may block!
+    case "stop":      killAgent(bead)
+    case "start":     spawnAgent(bead)  // handles resume_session
+    case "code":      execShell(bead)   // captures outputs
+    case "expand":    expandTemplate(bead)
+    }
+    ```
+
+    ## Concurrency
+    Conditions run in goroutines to avoid blocking main loop.
+
+    ## Acceptance Criteria
+    - [ ] Loop runs until no ready beads
+    - [ ] Dispatches correctly to all 6 handlers
+    - [ ] Conditions don't block main loop
+    - [ ] Graceful shutdown on context cancel
+
+---
+- id: meow-e3.2
+  type: task
+  title: "Implement bead readiness detection"
+  priority: 0
+  status: open
+  parent: meow-e3
+  needs: [meow-e3.1]
+  labels: [orchestrator, readiness]
+  description: Determine which beads are ready for execution.
+  notes: |
+    ## Readiness Rules
+    A bead is ready when:
+    1. Status is `open`
+    2. All beads in `needs` are `closed`
+    3. Not already being processed
+
+    ## Priority Ordering
+    1. Orchestrator beads first (condition, expand, code, stop, etc.)
+    2. Then task beads
+    3. Within type: earlier creation time
+
+    ## Change Detection
+    Watch .beads/issues.jsonl for changes rather than polling.
+
+    ## Acceptance Criteria
+    - [ ] Correctly identifies ready beads
+    - [ ] Dependencies checked correctly
+    - [ ] Priority ordering correct
+    - [ ] File watching triggers re-check
+
+---
+- id: meow-e3.3
+  type: task
+  title: "Implement orchestrator state persistence"
+  priority: 0
+  status: open
+  parent: meow-e3
+  needs: [meow-e3.1]
+  labels: [orchestrator, state]
+  description: Persist orchestrator state for crash recovery.
+  notes: |
+    ## State Files
+    - .meow/state/orchestrator.json - workflow state
+    - .meow/agents.json - agent states
+    - .meow/state/heartbeat.json - health check
+    - .meow/state/orchestrator.lock - prevent concurrent
+
+    ## Atomic Writes
+    Write to temp file, then rename.
+
+    ## Lock File
+    Prevent concurrent orchestrators via exclusive lock.
+
+    ## Acceptance Criteria
+    - [ ] State persists across iterations
+    - [ ] Atomic writes prevent corruption
+    - [ ] Lock prevents concurrent instances
+    - [ ] Stale lock detection works
+
+---
+- id: meow-e3.4
+  type: task
+  title: "Implement orchestrator startup and crash recovery"
+  priority: 0
+  status: open
+  parent: meow-e3
+  needs: [meow-e3.3]
+  labels: [orchestrator, recovery]
+  description: Handle orchestrator startup, including recovery from crashes.
+  notes: |
+    ## Startup Flow
+    1. Acquire lock
+    2. Check for existing state
+    3. If exists: resume flow
+    4. If not: fresh start flow
+
+    ## Recovery Flow
+    1. Load orchestrator state
+    2. Load agent states
+    3. Reconcile with reality (check tmux sessions)
+    4. Reset in-progress beads from dead agents
+    5. Resume main loop
+
+    ## Acceptance Criteria
+    - [ ] Fresh start creates beads and spawns agent
+    - [ ] Resume loads existing state
+    - [ ] Dead agents detected via tmux
+    - [ ] In-progress beads from dead agents reset
+
+---
+- id: meow-e3.5
+  type: task
+  title: "Implement execution trace logging"
+  priority: 1
+  status: open
+  parent: meow-e3
+  needs: [meow-e3.1]
+  labels: [orchestrator, logging]
+  description: Log all orchestrator actions for debugging and audit.
+  notes: |
+    ## Trace Format
+    JSONL in .meow/state/trace.jsonl
+    Each entry: timestamp, action, details
+
+    ## Actions to Log
+    - start, bake, spawn, dispatch, condition_eval, expand, close
+
+    ## CLI Access
+    `meow trace [--follow] [--json] [--since 1h]`
+
+    ## Acceptance Criteria
+    - [ ] All dispatch actions logged
+    - [ ] Trace survives crash
+    - [ ] meow trace command works
+
+# =============================================================================
+# EPIC 4: PRIMITIVE HANDLERS
+# =============================================================================
+---
+- id: meow-e4
+  type: epic
+  title: "Primitive Handlers: All 6 primitive implementations"
+  priority: 0
+  status: open
+  needs: [meow-e3]
+  labels: [epic, primitives, phase-2]
+  description: |
+    Implement the handlers for all 6 primitive bead types.
+  notes: |
+    ## The 6 Primitives
+    1. task - Wait for Claude to close (with output validation)
+    2. condition - Evaluate shell, expand on_true/on_false
+    3. stop - Kill tmux session
+    4. start - Spawn tmux session (with optional resume_session)
+    5. code - Execute shell script (with output capture)
+    6. expand - Load and bake template (with ephemeral support)
+
+    ## Why 6 Instead of 8?
+    checkpoint and resume are now composed from code + start:
+    - checkpoint → code bead with `meow session-id`
+    - resume → start bead with `resume_session` parameter
+
+    ## Success Criteria
+    - All 6 primitives have working handlers
+    - Code beads capture and store outputs
+    - Task beads validate required outputs
+    - Start beads handle resume_session
+    - Handlers are isolated and testable
+    - Error handling is consistent
+
+---
+- id: meow-e4.1
+  type: task
+  title: "Implement task primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e3.2]
+  labels: [primitives, task]
+  description: Handle task beads by waiting for Claude to close them with validated outputs.
+  notes: |
+    ## Behavior
+    1. Verify assigned agent is running
+    2. Mark bead in_progress
+    3. Wait for bead status to become closed
+    4. **Validate outputs if task has required outputs**
+    5. Store validated outputs on bead
+    6. Return (main loop finds next bead)
+
+    ## Task Outputs
+    Tasks can declare required/optional outputs:
+    ```yaml
+    outputs:
+      required:
+        - name: "work_bead"
+          type: "bead_id"
+      optional:
+        - name: "notes"
+          type: "string"
+    ```
+
+    Claude closes with: `meow close <bead> --output work_bead=bd-123`
+
+    ## Output Types
+    - string, string[], number, boolean, json
+    - bead_id (validated against .beads/)
+    - file_path (validated file exists)
+
+    ## Agent runs `meow close` when done
+
+    ## Acceptance Criteria
+    - [ ] Waits for agent to close bead
+    - [ ] Marks bead in_progress
+    - [ ] **Validates required outputs before accepting close**
+    - [ ] **Stores outputs on bead for subsequent references**
+    - [ ] Returns validation errors if outputs missing/invalid
+    - [ ] Returns when bead is closed with valid outputs
+    - [ ] Handles agent death gracefully
+
+---
+- id: meow-e4.2
+  type: task
+  title: "Implement condition primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e3.2]
+  labels: [primitives, condition]
+  description: Handle condition beads by evaluating shell and expanding results.
+  notes: |
+    ## Behavior
+    1. Mark in_progress
+    2. Execute shell command (in goroutine - may block!)
+    3. Based on exit code, expand on_true or on_false
+    4. Close bead
+
+    ## Key Insight
+    Conditions can block indefinitely - human gates, CI waits, etc.
+
+    ## Acceptance Criteria
+    - [ ] Shell command executes
+    - [ ] Exit 0 → on_true
+    - [ ] Exit ≠0 → on_false
+    - [ ] Timeout → on_timeout
+    - [ ] Bead auto-closes
+
+---
+- id: meow-e4.3
+  type: task
+  title: "Implement code primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e3.2]
+  labels: [primitives, code]
+  description: Handle code beads by executing shell scripts with output capture.
+  notes: |
+    ## Behavior
+    1. Execute code in shell
+    2. Capture stdout/stderr
+    3. **If outputs defined: capture specified outputs**
+    4. **Store outputs on bead for subsequent references**
+    5. Handle errors based on on_error policy
+    6. Close bead
+
+    ## Output Capture
+    ```yaml
+    outputs:
+      path: stdout           # Capture stdout
+      error_log: stderr      # Capture stderr
+      sha: file:/tmp/sha.txt # Read from file
+      result: exit_code      # Exit code as string
+    ```
+
+    Outputs become available as {{bead_id.outputs.field}}
+
+    ## Example: Worktree creation
+    ```yaml
+    type: code
+    code: |
+      git worktree add -b meow/worker ~/worktrees/worker HEAD
+      echo "~/worktrees/worker"
+    outputs:
+      path: stdout
+    ```
+
+    Next bead uses: `workdir = "{{create-worktree.outputs.path}}"`
+
+    ## on_error Options
+    - continue: log and continue
+    - abort: stop workflow
+    - retry: retry up to max_retries
+
+    ## Acceptance Criteria
+    - [ ] Shell script executes
+    - [ ] Working directory set correctly
+    - [ ] Environment variables passed
+    - [ ] **stdout captured when outputs.X = stdout**
+    - [ ] **File contents captured when outputs.X = file:/path**
+    - [ ] **Outputs stored on bead for reference**
+    - [ ] on_error policies work
+
+---
+- id: meow-e4.4
+  type: task
+  title: "Implement expand primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e2.4, meow-e3.2]
+  labels: [primitives, expand]
+  description: Handle expand beads by loading and baking templates with ephemeral support.
+  notes: |
+    ## Behavior
+    1. Load referenced template
+    2. Merge variables (including output references)
+    3. Bake template into child beads
+    4. **If ephemeral: true, label beads with meow:ephemeral**
+    5. Wire dependencies
+    6. Set assignee on children
+    7. Close expand bead
+
+    ## Ephemeral Beads
+    When `ephemeral: true` on expand or in template meta:
+    - Child beads get `labels: ["meow:ephemeral"]`
+    - They execute normally
+    - After completion, can be auto-cleaned
+    - Hidden in `bd list` by default
+
+    ## Example
+    ```yaml
+    type: expand
+    template: "call-implement"
+    ephemeral: true  # Machinery beads, not work beads
+    variables:
+      work_bead: "{{select-task.outputs.work_bead}}"
+    ```
+
+    ## Recursive Expansion
+    Child expand beads get processed in later iterations.
+
+    ## Acceptance Criteria
+    - [ ] Template loads correctly
+    - [ ] Variables merge correctly (including output refs)
+    - [ ] Child beads created
+    - [ ] **Ephemeral flag propagates to labels**
+    - [ ] Recursive expansion works
+
+---
+- id: meow-e4.5
+  type: task
+  title: "Implement stop primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e5.1]
+  labels: [primitives, stop]
+  description: Handle stop beads by killing agent tmux sessions.
+  notes: |
+    ## Behavior
+    1. If graceful: send interrupt, wait, then force kill
+    2. Kill tmux session
+    3. Update agent state to stopped
+    4. Close bead
+
+    ## Acceptance Criteria
+    - [ ] Graceful stop sends interrupt first
+    - [ ] Force kill after timeout
+    - [ ] Agent state updated
+    - [ ] Works if agent not running
+
+---
+- id: meow-e4.6
+  type: task
+  title: "Implement start primitive handler"
+  priority: 0
+  status: open
+  parent: meow-e4
+  needs: [meow-e5.1]
+  labels: [primitives, start]
+  description: Handle start beads by spawning agents in tmux with optional resume.
+  notes: |
+    ## Behavior
+    1. Create tmux session
+    2. Set working directory (can be from prior bead output)
+    3. Set environment
+    4. **If resume_session: start Claude with --resume**
+    5. Otherwise: start Claude fresh
+    6. Wait for ready
+    7. Inject meow prime
+    8. Update agent state
+    9. Close bead
+
+    ## Resume Support (replaces old resume primitive)
+    ```yaml
+    type: start
+    agent: "claude-1"
+    resume_session: "{{save-session.outputs.session_id}}"
+    workdir: "."
+    ```
+
+    This composes checkpoint/resume:
+    - code bead saves session ID
+    - start bead uses it to resume
+
+    ## Fresh Start
+    ```yaml
+    type: start
+    agent: "claude-2"
+    workdir: "{{setup-worktree.outputs.path}}"
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Creates tmux session
+    - [ ] Sets workdir (including from output references)
+    - [ ] **Starts Claude with --resume when resume_session set**
+    - [ ] Starts Claude fresh when no resume_session
+    - [ ] Detects when ready
+    - [ ] Injects meow prime
+
+---
+# NOTE: checkpoint and resume primitives have been removed.
+# They are now composed from code + start beads.
+# See meow-e4.6 (start with resume_session) and meow-e7.1 (session-id command).
+
+- id: meow-e4.7
+  type: task
+  title: "Implement ephemeral bead cleanup"
+  priority: 1
+  status: open
+  parent: meow-e4
+  needs: [meow-e4.4]
+  labels: [primitives, ephemeral]
+  description: Clean up ephemeral beads after template completion.
+  notes: |
+    ## Behavior
+    When a template with ephemeral beads completes:
+    1. Detect all beads with `meow:ephemeral` label
+    2. Based on cleanup config, either:
+       - on_complete: auto-delete closed ephemeral beads
+       - manual: wait for `meow clean --ephemeral`
+       - never: keep for debugging
+
+    ## Why Ephemeral Beads?
+    Template steps like "load-context", "write-tests" are operational
+    machinery, not work items. Cleaning them keeps bead history focused
+    on actual deliverables.
+
+    ## Config
+    ```toml
+    [cleanup]
+    ephemeral = "on_complete"  # or "manual" or "never"
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Detects ephemeral beads by label
+    - [ ] Respects cleanup config
+    - [ ] Cleans only closed ephemeral beads
+    - [ ] `meow clean --ephemeral` works for manual mode
+
+# =============================================================================
+# EPIC 5: AGENT MANAGEMENT
+# =============================================================================
+---
+- id: meow-e5
+  type: epic
+  title: "Agent Management: tmux and lifecycle"
+  priority: 0
+  status: open
+  needs: [meow-e3]
+  labels: [epic, agents, phase-2]
+  description: Manage agent lifecycle via tmux.
+  notes: |
+    ## Success Criteria
+    - Can create/kill tmux sessions
+    - Can send commands to sessions
+    - Can detect if sessions are alive
+    - Agent state reflects reality
+
+---
+- id: meow-e5.1
+  type: task
+  title: "Implement tmux wrapper library"
+  priority: 0
+  status: open
+  parent: meow-e5
+  needs: [meow-e1.2]
+  labels: [agents, tmux]
+  description: Create a Go wrapper around tmux commands.
+  notes: |
+    ## Interface
+    - NewSession, KillSession, SessionExists, ListSessions
+    - SendKeys, SendKeysLiteral
+    - CapturePane, SetEnv
+
+    ## Acceptance Criteria
+    - [ ] Create session in directory
+    - [ ] Kill session cleanly
+    - [ ] Check if session exists
+    - [ ] Send text to session
+    - [ ] Capture pane output
+
+---
+- id: meow-e5.2
+  type: task
+  title: "Implement agent state storage"
+  priority: 0
+  status: open
+  parent: meow-e5
+  needs: [meow-e1.2]
+  labels: [agents, state]
+  description: Manage persistent agent state.
+  notes: |
+    ## Storage
+    .meow/agents.json with agent records
+
+    ## Interface
+    Get, Set, Update, Delete, List, ListByStatus
+    Load, Save
+
+    ## Acceptance Criteria
+    - [ ] Persist agent state to disk
+    - [ ] Atomic writes for safety
+    - [ ] Thread-safe access
+
+---
+- id: meow-e5.3
+  type: task
+  title: "Implement agent spawning logic"
+  priority: 0
+  status: open
+  parent: meow-e5
+  needs: [meow-e5.1, meow-e5.2]
+  labels: [agents, spawn]
+  description: Higher-level agent spawning that coordinates tmux and state.
+  notes: |
+    ## Spawn Flow
+    1. Check if agent already exists
+    2. Create tmux session
+    3. Configure environment
+    4. Start Claude
+    5. Wait for ready
+    6. Inject initial prompt
+    7. Update agent state
+
+    ## Acceptance Criteria
+    - [ ] Creates complete agent setup
+    - [ ] Handles existing agent
+    - [ ] Cleans up on failure
+    - [ ] Updates state correctly
+
+---
+- id: meow-e5.4
+  type: task
+  title: "Implement agent health monitoring"
+  priority: 1
+  status: open
+  parent: meow-e5
+  needs: [meow-e5.3]
+  labels: [agents, monitoring]
+  description: Monitor agent health and detect crashes/stuck agents.
+  notes: |
+    ## Health Checks
+    - Session exists (tmux has-session)
+    - Activity check (recent progress)
+    - Stuck detection (same bead too long)
+
+    ## Acceptance Criteria
+    - [ ] Detects crashed sessions
+    - [ ] Detects stuck agents
+    - [ ] Updates state on crash
+
+# =============================================================================
+# EPIC 6: CONDITION SYSTEM
+# =============================================================================
+---
+- id: meow-e6
+  type: epic
+  title: "Condition System: Blocking, timeouts, and gates"
+  priority: 0
+  status: open
+  needs: [meow-e4]
+  labels: [epic, conditions, phase-3]
+  description: Deep implementation of blocking conditions.
+  notes: |
+    ## Key Feature
+    Conditions can block indefinitely - this enables human gates, CI waits, etc.
+
+---
+- id: meow-e6.1
+  type: task
+  title: "Implement blocking shell execution with cancellation"
+  priority: 0
+  status: open
+  parent: meow-e6
+  labels: [conditions, blocking]
+  description: Shell commands that block indefinitely with cancellation support.
+  notes: |
+    Must support cancellation via context.
+    Run in goroutines to not block main loop.
+
+---
+- id: meow-e6.2
+  type: task
+  title: "Implement condition timeout handling"
+  priority: 1
+  status: open
+  parent: meow-e6
+  needs: [meow-e6.1]
+  labels: [conditions, timeout]
+  description: Timeouts specified on conditions.
+  notes: |
+    On timeout, expand on_timeout template (or on_false if not specified).
+
+---
+- id: meow-e6.3
+  type: task
+  title: "Implement helper commands (wait-approve, wait-file, etc.)"
+  priority: 1
+  status: open
+  parent: meow-e6
+  labels: [conditions, helpers]
+  description: Convenience commands for common blocking patterns.
+  notes: |
+    Commands:
+    - meow wait-approve --bead <id>
+    - meow wait-file <path>
+    - meow wait-bead <id> --status closed
+    - meow context-usage --threshold N --format exit-code
+
+---
+- id: meow-e6.4
+  type: task
+  title: "Implement gate approval flow"
+  priority: 0
+  status: open
+  parent: meow-e6
+  needs: [meow-e6.1]
+  labels: [conditions, gates]
+  description: Human approval unblocking via meow approve.
+  notes: |
+    `meow approve <bead>` creates marker that `meow wait-approve` detects.
+
+# =============================================================================
+# EPIC 7: OUTPUT BINDING & SESSION MANAGEMENT
+# =============================================================================
+---
+- id: meow-e7
+  type: epic
+  title: "Output Binding & Session Management"
+  priority: 0
+  status: open
+  needs: [meow-e4, meow-e5]
+  labels: [epic, outputs, session, phase-3]
+  description: |
+    Implement output binding between beads and session management for
+    checkpoint/resume composition.
+  notes: |
+    ## Why This Epic
+    Output binding is the key capability that enables:
+    - Dynamic worktree paths from code → start
+    - Task selection outputs from Claude → orchestrator
+    - Session IDs from code → start (for resume)
+
+    ## Key Components
+    1. Output storage on beads
+    2. Output reference resolution in variable substitution
+    3. meow session-id command for checkpoint composition
+    4. meow close --output for task outputs
+
+---
+- id: meow-e7.1
+  type: task
+  title: "Implement meow session-id command"
+  priority: 0
+  status: open
+  parent: meow-e7
+  labels: [session, cli]
+  description: Command to discover and output Claude's session ID.
+  notes: |
+    ## Purpose
+    This command enables checkpoint composition:
+    ```yaml
+    type: code
+    code: meow session-id --agent {{agent}}
+    outputs:
+      session_id: stdout
+    ```
+
+    The output can then be used by a start bead:
+    ```yaml
+    type: start
+    resume_session: "{{save-session.outputs.session_id}}"
+    ```
+
+    ## Session ID Discovery
+    - Read $MEOW_SESSION_ID if set (via meow prime --hook)
+    - Or find latest in ~/.claude/sessions/ for agent
+    - Or query tmux session for environment
+
+    ## Usage
+    ```bash
+    meow session-id              # Current agent
+    meow session-id --agent X    # Specific agent
+    meow session-id --save       # Also save to .meow/sessions/
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Discovers session ID from environment
+    - [ ] Falls back to session file discovery
+    - [ ] Outputs clean session ID to stdout
+    - [ ] Works in code bead context
+
+---
+- id: meow-e7.2
+  type: task
+  title: "Implement output storage on beads"
+  priority: 0
+  status: open
+  parent: meow-e7
+  labels: [outputs, storage]
+  description: Store captured outputs on bead records.
+  notes: |
+    ## Storage Format
+    ```json
+    {
+      "id": "create-worktree",
+      "type": "code",
+      "status": "closed",
+      "outputs": {
+        "path": "~/worktrees/worker",
+        "sha": "abc123"
+      }
+    }
+    ```
+
+    ## Requirements
+    - Outputs persist in bead file
+    - Outputs queryable via bd show
+    - Outputs survive orchestrator restart
+
+    ## Acceptance Criteria
+    - [ ] Code beads store captured outputs
+    - [ ] Task beads store validated outputs
+    - [ ] Outputs visible in bd show
+    - [ ] Outputs persist across restarts
+
+---
+- id: meow-e7.3
+  type: task
+  title: "Implement output reference resolution"
+  priority: 0
+  status: open
+  parent: meow-e7
+  needs: [meow-e7.2, meow-e2.2]
+  labels: [outputs, resolution]
+  description: Resolve {{bead.outputs.field}} references during template processing.
+  notes: |
+    ## Resolution Process
+    When processing a template with {{bead_id.outputs.field}}:
+    1. Find bead with matching ID
+    2. Check bead is closed (outputs available)
+    3. Look up outputs.field
+    4. Substitute value
+
+    ## Error Cases
+    - Bead not found → error with available beads
+    - Bead not closed → error (dependency issue)
+    - Output field not found → error with available fields
+
+    ## Acceptance Criteria
+    - [ ] Resolves valid output references
+    - [ ] Clear error for missing bead
+    - [ ] Clear error for unclosed bead
+    - [ ] Clear error for missing field
+
+---
+- id: meow-e7.4
+  type: task
+  title: "Implement output type validators"
+  priority: 0
+  status: open
+  parent: meow-e7
+  needs: [meow-e7.2]
+  labels: [outputs, validation, critical]
+  description: Implement validators for all output types including bead_id.
+  notes: |
+    ## Why This Task is Critical
+    Output validation is what makes Claude's outputs reliable. Without proper
+    validation, typos and hallucinated bead IDs would break workflows.
+
+    ## Output Types to Validate
+    ```go
+    type OutputType string
+
+    const (
+        TypeString    OutputType = "string"
+        TypeStringArr OutputType = "string[]"
+        TypeNumber    OutputType = "number"
+        TypeBoolean   OutputType = "boolean"
+        TypeJSON      OutputType = "json"
+        TypeBeadID    OutputType = "bead_id"
+        TypeBeadIDArr OutputType = "bead_id[]"
+        TypeFilePath  OutputType = "file_path"
+    )
+    ```
+
+    ## Validator Interface
+    ```go
+    type OutputValidator interface {
+        Validate(value string, ctx ValidationContext) error
+        TypeName() string
+    }
+
+    type ValidationContext struct {
+        BeadsDir    string
+        WorkDir     string
+        BeadLookup  func(id string) (*types.Bead, bool)
+    }
+    ```
+
+    ## bead_id Validator (Most Important)
+    ```go
+    type BeadIDValidator struct{}
+
+    func (v *BeadIDValidator) Validate(value string, ctx ValidationContext) error {
+        // Check format
+        if !strings.HasPrefix(value, "bd-") {
+            return fmt.Errorf("bead_id must start with 'bd-', got '%s'", value)
+        }
+
+        // Check existence
+        bead, found := ctx.BeadLookup(value)
+        if !found {
+            // Suggest similar beads
+            suggestions := findSimilarBeads(value, ctx)
+            return &BeadNotFoundError{
+                ID:          value,
+                Suggestions: suggestions,
+            }
+        }
+
+        return nil
+    }
+    ```
+
+    ## file_path Validator
+    ```go
+    type FilePathValidator struct{}
+
+    func (v *FilePathValidator) Validate(value string, ctx ValidationContext) error {
+        path := value
+        if !filepath.IsAbs(path) {
+            path = filepath.Join(ctx.WorkDir, path)
+        }
+
+        if _, err := os.Stat(path); os.IsNotExist(err) {
+            return fmt.Errorf("file does not exist: %s", value)
+        }
+
+        return nil
+    }
+    ```
+
+    ## Error Messages
+    Must be helpful and actionable:
+    ```
+    Error: Output validation failed for 'work_bead'
+
+      Value: "bd-task-999"
+      Type: bead_id
+      Error: Bead 'bd-task-999' does not exist
+
+      Did you mean one of these?
+        • bd-task-001 "Implement auth"
+        • bd-task-002 "Add validation"
+        • bd-task-003 "Write tests"
+
+    Hint: Run 'bd list --status=open' to see available beads
+    ```
+
+    ## Acceptance Criteria
+    - [ ] All 8 types have working validators
+    - [ ] bead_id checks actual bead existence
+    - [ ] file_path checks file existence
+    - [ ] Suggestions provided for typos
+    - [ ] Error messages are actionable
+    - [ ] Unit tests for each validator
+
+# =============================================================================
+# EPIC 8: INTEGRATION
+# =============================================================================
+---
+- id: meow-e8
+  type: epic
+  title: "Integration: Beads, hooks, recovery"
+  priority: 0
+  status: open
+  needs: [meow-e3, meow-e4]
+  labels: [epic, integration, phase-3]
+  description: Integration with external systems.
+
+---
+- id: meow-e8.1
+  type: task
+  title: "Implement beads integration"
+  priority: 0
+  status: open
+  parent: meow-e8
+  needs: [meow-e1.2]
+  labels: [integration, beads]
+  description: Integrate with beads CLI for bead operations.
+  notes: |
+    ## Integration Points
+    MEOW uses the `bd` CLI for all bead operations. This task integrates:
+
+    ### Bead Creation (template baking)
+    ```go
+    func createBead(bead *types.Bead) error {
+        args := []string{"create",
+            "--id", bead.ID,
+            "--type", bead.Type,
+            "--title", bead.Title,
+        }
+        if bead.Parent != "" {
+            args = append(args, "--parent", bead.Parent)
+        }
+        for _, dep := range bead.Needs {
+            args = append(args, "--dep", dep)
+        }
+        return exec.Command("bd", args...).Run()
+    }
+    ```
+
+    ### Status Updates
+    ```go
+    func updateBeadStatus(id string, status string) error {
+        return exec.Command("bd", "update", id, "--status", status).Run()
+    }
+    ```
+
+    ### Reading Beads
+    ```go
+    func getBead(id string) (*types.Bead, error) {
+        out, err := exec.Command("bd", "show", id, "--format", "json").Output()
+        if err != nil {
+            return nil, err
+        }
+        var bead types.Bead
+        json.Unmarshal(out, &bead)
+        return &bead, nil
+    }
+    ```
+
+    ### Querying
+    ```go
+    func listBeads(status string) ([]types.Bead, error) {
+        args := []string{"list", "--format", "json"}
+        if status != "" {
+            args = append(args, "--status", status)
+        }
+        // ...
+    }
+    ```
+
+    ## Output Storage
+    When storing outputs on beads:
+    ```go
+    func storeOutputs(beadID string, outputs map[string]string) error {
+        outputJSON, _ := json.Marshal(outputs)
+        return exec.Command("bd", "update", beadID,
+            "--set", fmt.Sprintf("outputs=%s", outputJSON)).Run()
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] bd create integrates correctly
+    - [ ] bd update for status changes
+    - [ ] bd show for reading with JSON
+    - [ ] bd list for queries
+    - [ ] Output storage works
+    - [ ] Error handling for bd failures
+
+---
+- id: meow-e8.2
+  type: task
+  title: "Implement Claude Code hooks setup"
+  priority: 1
+  status: open
+  parent: meow-e8
+  labels: [integration, hooks]
+  description: Configure .claude/settings.json with MEOW hooks.
+  notes: |
+    - SessionStart: meow prime --hook
+    - Stop: meow prime --format prompt
+
+    meow init should set this up.
+
+---
+- id: meow-e8.3
+  type: task
+  title: "Test and validate crash recovery"
+  priority: 1
+  status: open
+  parent: meow-e8
+  needs: [meow-e3.4]
+  labels: [integration, recovery]
+  description: Integration test for crash recovery.
+  notes: |
+    1. Start workflow
+    2. Kill orchestrator mid-execution
+    3. Restart
+    4. Verify continues correctly
+
+---
+- id: meow-e8.4
+  type: task
+  title: "Implement git worktree support"
+  priority: 1
+  status: open
+  parent: meow-e8
+  labels: [integration, git]
+  description: Helper functions for git worktree operations in code beads.
+  notes: |
+    ## Why Worktrees Matter
+    Worktrees allow child agents to work in isolated branches without
+    affecting the parent's working directory. This enables:
+    - Parallel work on different features
+    - Clean separation of concerns
+    - Easy cleanup after completion
+
+    ## Worktree Path Convention
+    ```
+    .meow/worktrees/{agent-id}/
+    ```
+
+    ## Helper Functions
+    ```go
+    // Create worktree for agent
+    func CreateWorktree(agentID string, branch string) (string, error) {
+        path := filepath.Join(".meow/worktrees", agentID)
+        branchName := fmt.Sprintf("meow/%s", agentID)
+
+        cmd := exec.Command("git", "worktree", "add",
+            "-b", branchName,
+            path,
+            "HEAD")
+
+        if err := cmd.Run(); err != nil {
+            return "", fmt.Errorf("failed to create worktree: %w", err)
+        }
+
+        return path, nil
+    }
+
+    // Remove worktree and branch
+    func RemoveWorktree(agentID string) error {
+        path := filepath.Join(".meow/worktrees", agentID)
+        branchName := fmt.Sprintf("meow/%s", agentID)
+
+        // Remove worktree
+        exec.Command("git", "worktree", "remove", path).Run()
+
+        // Delete branch (force if needed)
+        exec.Command("git", "branch", "-D", branchName).Run()
+
+        return nil
+    }
+
+    // Check if worktree exists
+    func WorktreeExists(agentID string) bool {
+        path := filepath.Join(".meow/worktrees", agentID)
+        _, err := os.Stat(path)
+        return err == nil
+    }
+    ```
+
+    ## Usage in call Template
+    The call template uses worktrees when `use_worktree = true`:
+    ```toml
+    [[steps]]
+    id = "setup-worktree"
+    type = "code"
+    code = '''
+    meow worktree create {{child}}
+    '''
+    outputs = { workdir = "stdout" }
+    ```
+
+    ## CLI Commands (optional)
+    ```bash
+    meow worktree create <agent>   # Create and output path
+    meow worktree remove <agent>   # Remove worktree and branch
+    meow worktree list             # List active worktrees
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Create worktree at .meow/worktrees/{agent}/
+    - [ ] Remove worktree and cleanup branch
+    - [ ] Handle existing worktree gracefully
+    - [ ] Output path to stdout for capture
+    - [ ] Unit tests with mock git
+
+# =============================================================================
+# EPIC 9: DEFAULT TEMPLATES
+# =============================================================================
+---
+- id: meow-e9
+  type: epic
+  title: "Default Templates: MVP template library"
+  priority: 1
+  status: open
+  needs: [meow-e2]
+  labels: [epic, templates, phase-4]
+  description: Ship useful default templates.
+
+---
+- id: meow-e9.1
+  type: task
+  title: "Create work-loop template"
+  priority: 0
+  status: open
+  parent: meow-e9
+  labels: [templates, work-loop]
+  description: Main orchestration loop template.
+  notes: |
+    Check for work → select → implement → check context → loop.
+
+---
+- id: meow-e9.2
+  type: task
+  title: "Create implement template"
+  priority: 0
+  status: open
+  parent: meow-e9
+  labels: [templates, implement]
+  description: TDD workflow template.
+  notes: |
+    load-context → write-tests → verify-fail → implement →
+    verify-pass → review → commit
+
+---
+- id: meow-e9.3
+  type: task
+  title: "Create human-gate template"
+  priority: 0
+  status: open
+  parent: meow-e9
+  labels: [templates, gate]
+  description: Blocking approval template.
+  notes: |
+    prepare-summary → notify → await-approval → record-decision
+
+---
+- id: meow-e9.4
+  type: task
+  title: "Create refresh and handoff templates"
+  priority: 1
+  status: open
+  parent: meow-e9
+  labels: [templates, refresh]
+  description: Context refresh templates.
+  notes: |
+    refresh: stop → start
+    handoff: write-notes → stop → start
+
+---
+- id: meow-e9.5
+  type: task
+  title: "Create context-check template"
+  priority: 1
+  status: open
+  parent: meow-e9
+  labels: [templates, context]
+  description: Check context and maybe refresh.
+  notes: |
+    ## Template: context-check.toml
+    ```toml
+    [meta]
+    name = "context-check"
+    description = "Check context usage and trigger refresh if needed"
+
+    [variables]
+    agent = { required = true }
+    threshold = { default = 70, description = "Context % threshold" }
+
+    [[steps]]
+    id = "check"
+    type = "condition"
+    condition = "meow context-usage --agent {{agent}} --threshold {{threshold}} --format exit-code"
+    on_true:
+      template = "handoff"
+      variables = { agent = "{{agent}}" }
+    on_false:
+      inline = []  # Continue without refresh
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Template parses and validates
+    - [ ] Threshold is configurable
+    - [ ] Triggers handoff when context high
+    - [ ] Unit test for template validation
+
+---
+- id: meow-e9.6
+  type: task
+  title: "Create call template (parent/child orchestration)"
+  priority: 0
+  status: open
+  parent: meow-e9
+  needs: [meow-e7.1]
+  labels: [templates, call, critical]
+  description: Template for spawning child agent, running workflow, resuming parent.
+  notes: |
+    ## Why This Template is Critical
+    The `call` template is the foundation for parent/child agent orchestration.
+    It demonstrates the composed checkpoint/resume pattern using the 6 primitives.
+
+    ## Template: call.toml
+    ```toml
+    [meta]
+    name = "call"
+    description = "Spawn child agent for sub-workflow, then resume parent"
+    ephemeral = true  # All steps are operational machinery
+
+    [variables]
+    parent = { required = true, description = "Parent agent ID" }
+    child = { required = true, description = "Child agent ID" }
+    template = { required = true, description = "Template for child to execute" }
+    template_vars = { default = {}, description = "Variables for child template" }
+    use_worktree = { default = false, description = "Create git worktree for child" }
+
+    # --- Save parent session ---
+    [[steps]]
+    id = "save-parent-session"
+    type = "code"
+    code = "meow session-id --agent {{parent}}"
+    outputs = { session_id = "stdout" }
+
+    [[steps]]
+    id = "stop-parent"
+    type = "stop"
+    agent = "{{parent}}"
+    needs = ["save-parent-session"]
+
+    # --- Setup child workspace ---
+    [[steps]]
+    id = "setup-worktree"
+    type = "code"
+    needs = ["stop-parent"]
+    code = '''
+    if [ "{{use_worktree}}" = "true" ]; then
+        git worktree add -b meow/{{child}} .meow/worktrees/{{child}} HEAD
+        echo ".meow/worktrees/{{child}}"
+    else
+        pwd
+    fi
+    '''
+    outputs = { workdir = "stdout" }
+
+    # --- Start child ---
+    [[steps]]
+    id = "start-child"
+    type = "start"
+    agent = "{{child}}"
+    workdir = "{{setup-worktree.outputs.workdir}}"
+    needs = ["setup-worktree"]
+
+    # --- Child executes the work ---
+    [[steps]]
+    id = "child-work"
+    type = "expand"
+    template = "{{template}}"
+    variables = "{{template_vars}}"
+    assignee = "{{child}}"
+    needs = ["start-child"]
+
+    # --- Stop child ---
+    [[steps]]
+    id = "stop-child"
+    type = "stop"
+    agent = "{{child}}"
+    needs = ["child-work"]
+
+    # --- Cleanup worktree ---
+    [[steps]]
+    id = "cleanup-worktree"
+    type = "code"
+    needs = ["stop-child"]
+    code = '''
+    if [ "{{use_worktree}}" = "true" ]; then
+        git worktree remove .meow/worktrees/{{child}} || true
+        git branch -d meow/{{child}} || true
+    fi
+    '''
+
+    # --- Resume parent ---
+    [[steps]]
+    id = "resume-parent"
+    type = "start"
+    agent = "{{parent}}"
+    workdir = "."
+    resume_session = "{{save-parent-session.outputs.session_id}}"
+    needs = ["cleanup-worktree"]
+    ```
+
+    ## Key Features Demonstrated
+    1. Output binding: session_id and workdir captured and used
+    2. Composed checkpoint/resume: code → start with resume_session
+    3. Ephemeral: all steps are machinery, not work
+    4. Worktree isolation: optional per-agent workspace
+
+    ## Acceptance Criteria
+    - [ ] Template parses and validates
+    - [ ] Variables substitute correctly
+    - [ ] Output references resolve
+    - [ ] E2E test with mock agents
+    - [ ] Unit test for template validation
+
+---
+- id: meow-e9.7
+  type: task
+  title: "Create implement-tdd template"
+  priority: 0
+  status: open
+  parent: meow-e9
+  labels: [templates, implement, tdd]
+  description: TDD workflow template that works with a work bead.
+  notes: |
+    ## Template: implement-tdd.toml
+    ```toml
+    [meta]
+    name = "implement-tdd"
+    description = "TDD implementation workflow"
+    ephemeral = true  # Steps are operational
+
+    [variables]
+    work_bead = { required = true, type = "bead_id", description = "The work bead to implement" }
+
+    [[steps]]
+    id = "load-context"
+    type = "task"
+    title = "Load context for {{work_bead}}"
+    description = |
+      1. Run: bd show {{work_bead}}
+      2. Understand the requirements
+      3. Identify relevant files
+      4. Update notes with your understanding
+
+    [[steps]]
+    id = "write-tests"
+    type = "task"
+    title = "Write failing tests"
+    description = "Write tests that will fail until implementation is complete"
+    needs = ["load-context"]
+
+    [[steps]]
+    id = "verify-fail"
+    type = "condition"
+    condition = "! npm test 2>/dev/null || ! go test ./... 2>/dev/null"
+    needs = ["write-tests"]
+    on_true:
+      inline = []  # Tests fail as expected, continue
+    on_false:
+      inline = [
+        { id = "fix-tests", type = "task", title = "Tests passed unexpectedly - revise tests" }
+      ]
+
+    [[steps]]
+    id = "implement"
+    type = "task"
+    title = "Write implementation"
+    description = "Write the minimum code to make tests pass"
+    needs = ["verify-fail"]
+
+    [[steps]]
+    id = "verify-pass"
+    type = "condition"
+    condition = "npm test 2>/dev/null || go test ./... 2>/dev/null"
+    needs = ["implement"]
+    on_true:
+      inline = []  # Tests pass, continue
+    on_false:
+      inline = [
+        { id = "fix-impl", type = "task", title = "Tests still failing - fix implementation" }
+      ]
+
+    [[steps]]
+    id = "commit"
+    type = "task"
+    title = "Commit changes"
+    description = "Create a descriptive commit for the changes"
+    needs = ["verify-pass"]
+
+    [[steps]]
+    id = "close-work-bead"
+    type = "code"
+    code = "bd close {{work_bead}} --notes 'Implemented via implement-tdd template'"
+    needs = ["commit"]
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Template parses and validates
+    - [ ] work_bead variable is type-checked as bead_id
+    - [ ] Verify-fail/verify-pass conditions work
+    - [ ] Work bead is closed at end
+    - [ ] Unit test for template validation
+
+# =============================================================================
+# EPIC 10: CLI COMPLETION
+# =============================================================================
+---
+- id: meow-e10
+  type: epic
+  title: "CLI Completion: All commands"
+  priority: 1
+  status: open
+  needs: [meow-e3, meow-e4, meow-e5]
+  labels: [epic, cli, phase-4]
+  description: Complete all CLI commands.
+
+---
+- id: meow-e10.1
+  type: task
+  title: "Implement meow init command"
+  priority: 0
+  status: open
+  parent: meow-e10
+  labels: [cli, init]
+  description: Initialize .meow directory.
+  notes: |
+    - Create directory structure
+    - Copy default templates
+    - Create config.toml
+    - Setup Claude Code hooks
+
+---
+- id: meow-e10.2
+  type: task
+  title: "Implement meow run command"
+  priority: 0
+  status: open
+  parent: meow-e10
+  needs: [meow-e3.4]
+  labels: [cli, run]
+  description: Start workflow execution.
+  notes: |
+    Usage: meow run <template> [--var key=value]...
+
+---
+- id: meow-e10.3
+  type: task
+  title: "Implement meow prime command"
+  priority: 0
+  status: open
+  parent: meow-e10
+  labels: [cli, prime]
+  description: Show next task for agent with required outputs.
+  notes: |
+    ## Behavior
+    1. Read $MEOW_AGENT to identify current agent
+    2. Find assigned ready bead
+    3. Output formatted context including:
+       - Task title and description
+       - **Required outputs with types and descriptions**
+       - Example close command
+       - Recently completed beads (optional context)
+
+    ## Output Format
+    ```
+    === YOUR CURRENT TASK ===
+    Bead: bd-select-001
+    Title: Select next task to work on
+
+    Instructions:
+      Run: bv --robot-triage
+      Pick the highest priority ready task.
+
+    REQUIRED OUTPUTS when closing:
+      work_bead (bead_id): The bead ID to implement
+      rationale (string): Why you chose this bead
+
+    Example:
+      meow close bd-select-001 \
+        --output work_bead=bd-task-XXX \
+        --output rationale="..."
+
+    RECENTLY COMPLETED:
+      bd-task-000 "Setup project" (closed 5m ago)
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Reads agent from environment
+    - [ ] Finds ready bead for agent
+    - [ ] Shows task details
+    - [ ] **Shows required outputs if defined**
+    - [ ] Shows example close command
+    - [ ] Shows recently completed beads (optional)
+
+---
+- id: meow-e10.4
+  type: task
+  title: "Implement meow close command"
+  priority: 0
+  status: open
+  parent: meow-e10
+  labels: [cli, close]
+  description: Close a task bead with optional validated outputs.
+  notes: |
+    ## Usage
+    ```bash
+    meow close <bead-id>
+    meow close <bead-id> --notes "..."
+    meow close <bead-id> --output key=value --output key2=value2
+    meow close <bead-id> --output-json '{"key": "value"}'
+    ```
+
+    ## Output Validation
+    If the bead has required outputs defined, the close command must:
+    1. Check all required outputs are provided
+    2. Validate output types (string, bead_id, file_path, etc.)
+    3. Return error with helpful message if validation fails
+    4. Store validated outputs on the bead
+
+    ## Example Error
+    ```
+    Error: Cannot close bd-select-001 - missing required outputs
+
+    Required outputs:
+      ✗ work_bead (bead_id): Not provided
+      ✗ rationale (string): Not provided
+
+    Usage:
+      meow close bd-select-001 --output work_bead=<bead_id> --output rationale=<string>
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Closes bead with status update
+    - [ ] Supports --notes flag
+    - [ ] **Supports --output key=value flags**
+    - [ ] **Supports --output-json for complex outputs**
+    - [ ] **Validates required outputs before closing**
+    - [ ] **Returns helpful error for missing/invalid outputs**
+
+---
+- id: meow-e10.5
+  type: task
+  title: "Implement meow status command"
+  priority: 1
+  status: open
+  parent: meow-e10
+  labels: [cli, status]
+  description: Show comprehensive workflow status.
+  notes: |
+    ## Usage
+    ```bash
+    meow status                 # Current workflow status
+    meow status --verbose       # Include all beads
+    meow status --json          # JSON output for scripting
+    meow status --watch         # Live updates
+    ```
+
+    ## Output Format
+    ```
+    === MEOW WORKFLOW STATUS ===
+    Workflow: work-loop (started 2h ago)
+    Template: work-loop.toml
+
+    AGENTS:
+      claude-1        active     (running for 45m)
+      claude-1-worker stopped    (completed 10m ago)
+
+    BEADS:
+      Total: 15  Open: 3  In Progress: 1  Closed: 11
+
+      Currently executing:
+        → bd-task-005 "Implement auth endpoint" (claude-1, 5m)
+
+      Ready to execute:
+        • bd-task-006 "Write integration tests"
+        • bd-task-007 "Update documentation"
+
+      Recently closed:
+        ✓ bd-task-004 "Setup database" (2m ago)
+        ✓ bd-task-003 "Create models" (15m ago)
+
+    OUTPUTS (recent):
+      select-task.work_bead = "bd-task-005"
+      setup-worktree.path = ".meow/worktrees/worker"
+
+    HEALTH:
+      Orchestrator: running (heartbeat 5s ago)
+      Lock: held by PID 12345
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Shows agent status
+    - [ ] Shows bead counts and states
+    - [ ] Shows currently executing beads
+    - [ ] Shows recent outputs
+    - [ ] --json produces parseable output
+    - [ ] --watch updates live
+
+---
+- id: meow-e10.6
+  type: task
+  title: "Implement debug commands"
+  priority: 1
+  status: open
+  parent: meow-e10
+  labels: [cli, debug]
+  description: agents, beads, trace, peek, clean commands.
+  notes: |
+    ## Commands
+    - `meow agents [--active]` - List agents and states
+    - `meow beads [--ready] [--include-ephemeral]` - List beads
+    - `meow trace [--follow]` - Show execution trace
+    - `meow peek <agent>` - Show agent's current output
+    - `meow attach <agent>` - Attach to tmux session
+    - `meow clean --ephemeral` - Clean up ephemeral beads
+
+    ## --include-ephemeral Flag
+    By default, beads with `meow:ephemeral` label are hidden.
+    This keeps focus on work beads, not workflow machinery.
+
+    ## Acceptance Criteria
+    - [ ] All debug commands work
+    - [ ] Ephemeral beads hidden by default
+    - [ ] --include-ephemeral shows all beads
+    - [ ] meow clean --ephemeral removes closed ephemeral beads
+
+# =============================================================================
+# EPIC 11: COMPREHENSIVE TESTING
+# =============================================================================
+---
+- id: meow-e11
+  type: epic
+  title: "Comprehensive Testing: Unit, Integration, and E2E"
+  priority: 0
+  status: open
+  needs: [meow-e10]
+  labels: [epic, testing, phase-4, critical]
+  description: |
+    Comprehensive test coverage including unit tests, integration tests, and
+    end-to-end tests with mock Claude. This epic is CRITICAL for reliability.
+  notes: |
+    ## Why This Epic is Non-Negotiable
+    MEOW orchestrates long-running AI workflows. Bugs can waste hours of compute
+    and cause data loss. We need:
+    - Unit tests for every component
+    - Integration tests for component interactions
+    - E2E tests simulating real workflows
+    - Detailed logging for debugging test failures
+
+    ## Test Categories
+    1. **Unit Tests**: Individual functions and types
+    2. **Integration Tests**: Component interactions
+    3. **E2E Tests**: Full workflow execution with mock Claude
+    4. **Stress Tests**: Performance under load
+
+    ## Coverage Requirements
+    - Minimum 80% line coverage
+    - 100% coverage for critical paths (output validation, bead transitions)
+
+---
+- id: meow-e11.1
+  type: task
+  title: "Create test infrastructure and fixtures"
+  priority: 0
+  status: open
+  parent: meow-e11
+  labels: [testing, infrastructure]
+  description: Set up testing infrastructure, fixtures, and helpers.
+  notes: |
+    ## Test Infrastructure
+
+    ### Directory Structure
+    ```
+    internal/testutil/
+    ├── fixtures.go      # Test data factories
+    ├── mock_tmux.go     # Mock tmux for agent tests
+    ├── mock_claude.go   # Mock Claude responses
+    ├── assertions.go    # Custom assertions
+    ├── logger.go        # Test logger that captures output
+    └── cleanup.go       # Test cleanup helpers
+    ```
+
+    ### Test Fixtures
+    ```go
+    // Create test beads
+    func NewTestBead(t *testing.T, beadType string) *types.Bead
+    func NewTestTemplate(t *testing.T, name string) *template.Template
+    func NewTestConfig(t *testing.T) *config.Config
+
+    // Create temp directories
+    func NewTestWorkspace(t *testing.T) (path string, cleanup func())
+
+    // Mock tmux
+    func NewMockTmux(t *testing.T) *MockTmux
+    ```
+
+    ### Mock Claude
+    Script that simulates Claude Code behavior:
+    ```bash
+    #!/bin/bash
+    # mock_claude.sh - Simulates Claude Code for testing
+    # Reads meow prime, executes predefined responses, runs meow close
+
+    case "$1" in
+      --dangerously-skip-permissions)
+        # Enter mock REPL
+        while read -r line; do
+          if [[ "$line" == "meow prime" ]]; then
+            # Simulate Claude reading task and closing
+            BEAD_ID=$(meow prime --format json | jq -r .bead_id)
+            sleep 0.1
+            meow close "$BEAD_ID" --notes "Mock completed"
+          fi
+        done
+        ;;
+    esac
+    ```
+
+    ### Test Logger
+    ```go
+    // Captures structured logs for assertion
+    type TestLogger struct {
+        Entries []LogEntry
+    }
+
+    func (l *TestLogger) AssertContains(t *testing.T, msg string)
+    func (l *TestLogger) AssertLevel(t *testing.T, level string, count int)
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Test fixtures create valid test data
+    - [ ] Mock tmux simulates session lifecycle
+    - [ ] Mock Claude script runs and responds
+    - [ ] Test logger captures structured output
+    - [ ] Cleanup removes all temp files
+
+---
+- id: meow-e11.2
+  type: task
+  title: "Unit tests for core types"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.1, meow-e1.2]
+  labels: [testing, unit]
+  description: Unit tests for Bead, Agent, Config, and Template types.
+  notes: |
+    ## Test Files
+    - internal/types/bead_test.go
+    - internal/types/agent_test.go
+    - internal/config/config_test.go
+    - internal/template/template_test.go
+
+    ## Test Cases
+
+    ### Bead Tests
+    - [ ] JSON marshaling/unmarshaling round-trip
+    - [ ] Status transitions (open → in_progress → closed)
+    - [ ] Invalid status transition errors
+    - [ ] Output storage and retrieval
+    - [ ] Ephemeral label detection
+    - [ ] Dependency parsing
+
+    ### Agent Tests
+    - [ ] State transitions (active → stopped)
+    - [ ] Session ID storage
+    - [ ] Environment variable generation
+
+    ### Config Tests
+    - [ ] Default values applied
+    - [ ] File override works
+    - [ ] Unknown fields ignored
+    - [ ] Invalid values error with context
+
+    ### Template Tests
+    - [ ] TOML parsing
+    - [ ] Variable definition parsing
+    - [ ] Step dependency parsing
+    - [ ] Output spec parsing
+
+    ## Acceptance Criteria
+    - [ ] All types have >90% coverage
+    - [ ] Edge cases covered (empty, nil, max values)
+    - [ ] Error messages tested
+
+---
+- id: meow-e11.3
+  type: task
+  title: "Unit tests for template system"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.1, meow-e2]
+  labels: [testing, unit]
+  description: Unit tests for template parsing, validation, and baking.
+  notes: |
+    ## Test Files
+    - internal/template/parser_test.go
+    - internal/template/validator_test.go
+    - internal/template/variables_test.go
+    - internal/template/baker_test.go
+
+    ## Test Cases
+
+    ### Parser Tests
+    - [ ] Valid template parses correctly
+    - [ ] Invalid TOML returns parse error with line number
+    - [ ] All step types parsed correctly
+    - [ ] Inline expansion targets parsed
+    - [ ] Template expansion targets parsed
+    - [ ] Output specs parsed
+
+    ### Validator Tests
+    - [ ] Missing meta.name errors
+    - [ ] Duplicate step IDs error
+    - [ ] Invalid step type errors
+    - [ ] Circular dependencies detected
+    - [ ] Missing needs references detected
+    - [ ] Undefined variable references detected
+    - [ ] Type mismatches detected
+
+    ### Variable Substitution Tests
+    - [ ] Basic {{var}} substitution
+    - [ ] Nested {{a.b.c}} access
+    - [ ] Output reference {{bead.outputs.field}}
+    - [ ] Built-in variables ({{agent}}, {{timestamp}})
+    - [ ] Missing required variable errors
+    - [ ] Default values applied
+    - [ ] Recursive substitution detected and errors
+
+    ### Baker Tests
+    - [ ] Simple template bakes to correct beads
+    - [ ] Dependencies translated to bead IDs
+    - [ ] Inline steps become child beads
+    - [ ] Ephemeral flag propagates
+    - [ ] Output references preserved for runtime
+
+    ## Acceptance Criteria
+    - [ ] Template system has >90% coverage
+    - [ ] All error paths tested
+    - [ ] Performance: 1000 templates parse in <1s
+
+---
+- id: meow-e11.4
+  type: task
+  title: "Unit tests for primitive handlers"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.1, meow-e4]
+  labels: [testing, unit]
+  description: Unit tests for all 6 primitive handlers.
+  notes: |
+    ## Test Files
+    - internal/primitive/task_test.go
+    - internal/primitive/condition_test.go
+    - internal/primitive/code_test.go
+    - internal/primitive/expand_test.go
+    - internal/primitive/start_test.go
+    - internal/primitive/stop_test.go
+
+    ## Test Cases
+
+    ### Task Handler Tests
+    - [ ] Waits for bead to close
+    - [ ] Validates required outputs
+    - [ ] Rejects invalid output types
+    - [ ] Stores validated outputs
+    - [ ] Handles agent death
+
+    ### Condition Handler Tests
+    - [ ] Exit 0 expands on_true
+    - [ ] Exit non-0 expands on_false
+    - [ ] Timeout expands on_timeout
+    - [ ] Runs in goroutine (non-blocking)
+    - [ ] Cancellation works
+
+    ### Code Handler Tests
+    - [ ] Executes shell command
+    - [ ] Captures stdout to output
+    - [ ] Captures stderr to output
+    - [ ] Reads file to output
+    - [ ] Handles on_error: continue
+    - [ ] Handles on_error: abort
+    - [ ] Handles on_error: retry
+
+    ### Expand Handler Tests
+    - [ ] Loads template
+    - [ ] Substitutes variables
+    - [ ] Resolves output references
+    - [ ] Creates child beads
+    - [ ] Sets ephemeral labels
+    - [ ] Wires dependencies
+
+    ### Start Handler Tests
+    - [ ] Creates tmux session
+    - [ ] Sets workdir from output reference
+    - [ ] Fresh start works
+    - [ ] Resume with session_id works
+    - [ ] Injects meow prime
+
+    ### Stop Handler Tests
+    - [ ] Graceful stop sends interrupt
+    - [ ] Force kill after timeout
+    - [ ] Works if session doesn't exist
+    - [ ] Updates agent state
+
+    ## Acceptance Criteria
+    - [ ] Each handler has >90% coverage
+    - [ ] All error conditions tested
+    - [ ] Mock tmux used (no real sessions)
+
+---
+- id: meow-e11.5
+  type: task
+  title: "Unit tests for output binding"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.1, meow-e7]
+  labels: [testing, unit, outputs]
+  description: Unit tests for output capture, storage, and resolution.
+  notes: |
+    ## Test Files
+    - internal/output/capture_test.go
+    - internal/output/storage_test.go
+    - internal/output/resolver_test.go
+    - internal/output/validator_test.go
+
+    ## Test Cases
+
+    ### Output Capture Tests
+    - [ ] Captures stdout (trimmed)
+    - [ ] Captures stderr (trimmed)
+    - [ ] Reads file contents
+    - [ ] Handles missing file gracefully
+    - [ ] Handles empty output
+
+    ### Output Storage Tests
+    - [ ] Stores outputs on bead
+    - [ ] Persists across save/load
+    - [ ] Visible in bd show
+
+    ### Output Resolver Tests
+    - [ ] Resolves {{bead.outputs.field}}
+    - [ ] Errors on non-existent bead
+    - [ ] Errors on unclosed bead
+    - [ ] Errors on missing field
+    - [ ] Suggests similar beads on typo
+
+    ### Output Validator Tests
+    - [ ] string type validation
+    - [ ] number type validation
+    - [ ] boolean type validation
+    - [ ] bead_id type validation (checks existence)
+    - [ ] file_path type validation (checks existence)
+    - [ ] string[] type validation
+    - [ ] json type validation
+    - [ ] Error messages include expected type
+
+    ## Acceptance Criteria
+    - [ ] All output types have validation tests
+    - [ ] Error messages are helpful
+    - [ ] Edge cases covered (empty, null, unicode)
+
+---
+- id: meow-e11.6
+  type: task
+  title: "Integration tests for orchestrator"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.2, meow-e11.4]
+  labels: [testing, integration]
+  description: Integration tests for orchestrator main loop and state management.
+  notes: |
+    ## Test Files
+    - internal/orchestrator/integration_test.go
+
+    ## Test Scenarios
+
+    ### Basic Execution
+    - [ ] Simple linear workflow (3 code beads)
+    - [ ] Workflow with dependencies (diamond pattern)
+    - [ ] Workflow completes when all beads closed
+
+    ### State Management
+    - [ ] State persists across loop iterations
+    - [ ] Crash recovery resumes from last state
+    - [ ] Lock prevents concurrent orchestrators
+    - [ ] Heartbeat updates regularly
+
+    ### Bead Transitions
+    - [ ] open → in_progress → closed
+    - [ ] Dependency blocking works
+    - [ ] Ready detection is correct
+
+    ### Logging
+    - [ ] All dispatch actions logged
+    - [ ] Log includes bead_id, agent, type
+    - [ ] Errors logged with context
+
+    ## Test Setup
+    ```go
+    func TestOrchestrator_LinearWorkflow(t *testing.T) {
+        workspace := testutil.NewTestWorkspace(t)
+        defer workspace.Cleanup()
+
+        // Create test beads
+        beads := []types.Bead{
+            testutil.NewCodeBead("step1", "echo hello"),
+            testutil.NewCodeBead("step2", "echo world", "step1"),
+            testutil.NewCodeBead("step3", "echo done", "step2"),
+        }
+
+        // Run orchestrator
+        orch := orchestrator.New(testutil.NewTestConfig(t))
+        err := orch.Run(context.Background(), beads)
+
+        require.NoError(t, err)
+        // Assert all beads closed
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] All scenarios pass
+    - [ ] No real tmux sessions created
+    - [ ] Tests run in <5s
+    - [ ] Parallel test execution works
+
+---
+- id: meow-e11.7
+  type: task
+  title: "E2E tests with mock Claude"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.6]
+  labels: [testing, e2e, critical]
+  description: End-to-end tests simulating real workflows with mock Claude.
+  notes: |
+    ## E2E Test Framework
+
+    ### Mock Claude Script
+    ```bash
+    # test/mock_claude.sh
+    #!/bin/bash
+    set -e
+
+    LOG_FILE="${MEOW_TEST_LOG:-/tmp/mock_claude.log}"
+
+    log() {
+        echo "[$(date -Iseconds)] $*" >> "$LOG_FILE"
+    }
+
+    log "Mock Claude started with args: $*"
+
+    # Simulate Claude startup
+    sleep 0.2
+    echo "Claude Code ready"
+
+    # Wait for prompts
+    while IFS= read -r line; do
+        log "Received: $line"
+
+        if [[ "$line" == *"meow prime"* ]]; then
+            log "Executing meow prime"
+            PRIME_OUTPUT=$(meow prime --format json 2>/dev/null || echo '{}')
+            BEAD_ID=$(echo "$PRIME_OUTPUT" | jq -r '.bead_id // empty')
+
+            if [[ -n "$BEAD_ID" ]]; then
+                log "Found bead: $BEAD_ID"
+
+                # Check for required outputs
+                OUTPUTS=$(echo "$PRIME_OUTPUT" | jq -r '.required_outputs // []')
+                OUTPUT_ARGS=""
+
+                if [[ "$OUTPUTS" != "[]" ]]; then
+                    # Generate mock outputs
+                    for output in $(echo "$OUTPUTS" | jq -r '.[].name'); do
+                        OUTPUT_ARGS="$OUTPUT_ARGS --output $output=mock_value"
+                    done
+                fi
+
+                # Close the bead
+                log "Closing bead: meow close $BEAD_ID $OUTPUT_ARGS"
+                meow close "$BEAD_ID" --notes "Mock completed" $OUTPUT_ARGS
+            fi
+        fi
+    done
+    ```
+
+    ### E2E Test Scenarios
+    ```
+    test/e2e/
+    ├── simple_workflow_test.go      # Linear code beads
+    ├── condition_branching_test.go  # on_true/on_false
+    ├── output_passing_test.go       # Code outputs to start
+    ├── task_outputs_test.go         # Claude provides outputs
+    ├── parent_child_test.go         # Call template
+    ├── crash_recovery_test.go       # Kill and resume
+    ├── human_gate_test.go           # meow approve flow
+    └── ephemeral_cleanup_test.go    # Ephemeral bead cleanup
+    ```
+
+    ### Test Structure
+    ```go
+    func TestE2E_ParentChildOrchestration(t *testing.T) {
+        if testing.Short() {
+            t.Skip("Skipping E2E test")
+        }
+
+        workspace := testutil.NewTestWorkspace(t)
+        defer workspace.Cleanup()
+
+        // Setup mock Claude
+        mockClaude := testutil.NewMockClaude(t)
+        mockClaude.OnTask("select-task", func(b *types.Bead) {
+            return map[string]string{"work_bead": "bd-task-001"}
+        })
+
+        // Run workflow
+        result := runE2EWorkflow(t, "work-loop", map[string]string{
+            "agent": "claude-1",
+        })
+
+        // Assertions
+        assert.True(t, result.Completed)
+        assert.Equal(t, 3, result.BeadsExecuted)
+        assertLogContains(t, "Resuming parent")
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] All E2E scenarios pass
+    - [ ] Tests complete in <30s each
+    - [ ] Detailed logging for debugging failures
+    - [ ] No real Claude API calls
+    - [ ] Cleanup removes all temp files/sessions
+
+---
+- id: meow-e11.8
+  type: task
+  title: "E2E test: output binding workflow"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.7]
+  labels: [testing, e2e]
+  description: E2E test verifying output binding works end-to-end.
+  notes: |
+    ## Test Scenario
+    1. Code bead creates worktree, outputs path
+    2. Start bead uses path from output
+    3. Task bead runs in worktree
+    4. Verify all steps executed correctly
+
+    ## Template Under Test
+    ```toml
+    [[steps]]
+    id = "create-worktree"
+    type = "code"
+    code = '''
+    mkdir -p /tmp/test-worktree-$$
+    echo "/tmp/test-worktree-$$"
+    '''
+    outputs = { path = "stdout" }
+
+    [[steps]]
+    id = "start-worker"
+    type = "start"
+    agent = "worker"
+    workdir = "{{create-worktree.outputs.path}}"
+    needs = ["create-worktree"]
+
+    [[steps]]
+    id = "verify-workdir"
+    type = "code"
+    code = 'pwd'
+    outputs = { actual_path = "stdout" }
+    needs = ["start-worker"]
+    ```
+
+    ## Assertions
+    - [ ] create-worktree outputs captured
+    - [ ] start-worker uses correct path
+    - [ ] verify-workdir runs in correct directory
+    - [ ] Output values match
+
+    ## Acceptance Criteria
+    - [ ] Test passes reliably
+    - [ ] Cleanup removes temp worktree
+    - [ ] Logs show output flow
+
+---
+- id: meow-e11.9
+  type: task
+  title: "E2E test: task output validation"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.7]
+  labels: [testing, e2e]
+  description: E2E test verifying task output validation works.
+  notes: |
+    ## Test Scenario
+    1. Task bead requires `work_bead` output of type `bead_id`
+    2. Mock Claude attempts close without output → error
+    3. Mock Claude attempts close with invalid bead_id → error
+    4. Mock Claude attempts close with valid output → success
+    5. Next bead uses the output correctly
+
+    ## Test Implementation
+    ```go
+    func TestE2E_TaskOutputValidation(t *testing.T) {
+        mockClaude := testutil.NewMockClaude(t)
+
+        // First attempt: no output
+        mockClaude.OnTask("select-task", func(b *types.Bead) map[string]string {
+            // Try to close without output
+            err := runCommand("meow", "close", b.ID)
+            require.Error(t, err)
+            require.Contains(t, err.Error(), "missing required outputs")
+
+            // Try to close with invalid bead_id
+            err = runCommand("meow", "close", b.ID, "--output", "work_bead=bd-invalid")
+            require.Error(t, err)
+            require.Contains(t, err.Error(), "does not exist")
+
+            // Return valid output
+            return map[string]string{"work_bead": "bd-task-001"}
+        })
+
+        // Run workflow
+        result := runE2EWorkflow(t, "work-loop-with-outputs", nil)
+
+        assert.True(t, result.Completed)
+        assert.Equal(t, "bd-task-001", result.Beads["select-task"].Outputs["work_bead"])
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Invalid outputs are rejected
+    - [ ] Error messages are helpful
+    - [ ] Valid outputs are stored
+    - [ ] Subsequent beads can read outputs
+
+---
+- id: meow-e11.10
+  type: task
+  title: "E2E test: crash recovery"
+  priority: 0
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.7]
+  labels: [testing, e2e, reliability]
+  description: E2E test verifying crash recovery works correctly.
+  notes: |
+    ## Test Scenario
+    1. Start workflow with 5 beads
+    2. After bead 2 completes, kill orchestrator
+    3. Verify state is persisted
+    4. Restart orchestrator
+    5. Verify workflow resumes from bead 3
+    6. Verify workflow completes
+
+    ## Test Implementation
+    ```go
+    func TestE2E_CrashRecovery(t *testing.T) {
+        workspace := testutil.NewTestWorkspace(t)
+        defer workspace.Cleanup()
+
+        // Start orchestrator in background
+        ctx, cancel := context.WithCancel(context.Background())
+        orch := orchestrator.New(testutil.NewTestConfig(t))
+
+        done := make(chan error)
+        go func() {
+            done <- orch.Run(ctx, beads)
+        }()
+
+        // Wait for bead 2 to complete
+        waitForBeadClosed(t, "step-2", 5*time.Second)
+
+        // Kill orchestrator
+        cancel()
+        <-done
+
+        // Verify state persisted
+        state := loadOrchestratorState(t, workspace.Path)
+        assert.Equal(t, 2, countClosedBeads(state))
+
+        // Restart orchestrator
+        ctx2 := context.Background()
+        orch2 := orchestrator.New(testutil.NewTestConfig(t))
+        err := orch2.Run(ctx2, nil) // Should load from state
+
+        require.NoError(t, err)
+        assert.Equal(t, 5, countClosedBeads(loadState()))
+    }
+    ```
+
+    ## Acceptance Criteria
+    - [ ] State survives crash
+    - [ ] Resume picks up from last state
+    - [ ] In-progress beads from dead agents reset
+    - [ ] Workflow completes after recovery
+
+---
+- id: meow-e11.11
+  type: task
+  title: "Stress tests and performance benchmarks"
+  priority: 1
+  status: open
+  parent: meow-e11
+  needs: [meow-e11.6]
+  labels: [testing, performance]
+  description: Performance tests and benchmarks for critical paths.
+  notes: |
+    ## Benchmark Tests
+    ```
+    internal/benchmark/
+    ├── template_parse_bench_test.go
+    ├── bead_dispatch_bench_test.go
+    ├── output_resolution_bench_test.go
+    └── state_persistence_bench_test.go
+    ```
+
+    ## Performance Requirements
+    | Operation | Target | Max |
+    |-----------|--------|-----|
+    | Template parse | <1ms | 5ms |
+    | Variable substitution | <100µs | 500µs |
+    | Bead dispatch | <10ms | 50ms |
+    | State save | <50ms | 200ms |
+    | Output resolution | <1ms | 5ms |
+
+    ## Stress Tests
+    - [ ] 1000 beads in single workflow
+    - [ ] 100 concurrent output references
+    - [ ] 50 nested template expansions
+    - [ ] Rapid bead state transitions
+
+    ## Memory Profiling
+    - [ ] No memory leaks in long-running workflows
+    - [ ] Memory usage stable over 1000 iterations
+
+    ## Acceptance Criteria
+    - [ ] All benchmarks meet targets
+    - [ ] No degradation over time
+    - [ ] Results logged for CI tracking
+
+---
+- id: meow-e11.12
+  type: task
+  title: "Write user documentation"
+  priority: 1
+  status: open
+  parent: meow-e11
+  labels: [docs]
+  description: Comprehensive user documentation for MEOW Stack.
+  notes: |
+    ## Documentation Structure
+    ```
+    docs/
+    ├── getting-started.md      # Quick start guide
+    ├── concepts.md             # Core concepts (primitives, templates, outputs)
+    ├── template-authoring.md   # How to write templates
+    ├── cli-reference.md        # All CLI commands
+    ├── output-binding.md       # Output capture and references
+    ├── troubleshooting.md      # Common issues and solutions
+    └── examples/
+        ├── simple-workflow.md
+        ├── parent-child.md
+        └── human-gate.md
+    ```
+
+    ## Content Requirements
+    - All 6 primitives documented with examples
+    - Output binding explained with diagrams
+    - Task outputs and validation explained
+    - Ephemeral beads explained
+    - Error codes and recovery
+
+    ## Acceptance Criteria
+    - [ ] Getting started takes <10 min
+    - [ ] All CLI commands documented
+    - [ ] Examples are copy-paste runnable
+    - [ ] Troubleshooting covers common errors
+
+---
+- id: meow-e11.13
+  type: task
+  title: "Create example workflows"
+  priority: 2
+  status: open
+  parent: meow-e11
+  labels: [docs, examples]
+  description: Complete example projects demonstrating MEOW capabilities.
+  notes: |
+    ## Example Projects
+    ```
+    examples/
+    ├── hello-world/           # Simplest possible workflow
+    ├── tdd-implementation/    # TDD with implement template
+    ├── multi-agent/           # Parent/child with call template
+    ├── human-approval/        # Human gate workflow
+    └── context-aware/         # Context checking and refresh
+    ```
+
+    ## Each Example Includes
+    - README with explanation
+    - Complete template files
+    - Expected output/trace
+    - Troubleshooting tips
+
+    ## Acceptance Criteria
+    - [ ] Each example runs standalone
+    - [ ] Examples tested in CI
+    - [ ] README explains what happens
