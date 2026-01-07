@@ -1,0 +1,30 @@
+# bv (beads viewer) local config and caches
+.bv/
+
+# Go build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Go module cache (local)
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# MEOW state (generated at runtime)
+.meow/state/
