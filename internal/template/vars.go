@@ -25,11 +25,7 @@ func NewVarContext() *VarContext {
 	return &VarContext{
 		Variables: make(map[string]any),
 		Outputs:   make(map[string]map[string]any),
-		Builtins: map[string]any{
-			"timestamp": time.Now().Format(time.RFC3339),
-			"date":      time.Now().Format("2006-01-02"),
-			"time":      time.Now().Format("15:04:05"),
-		},
+		Builtins:  make(map[string]any),
 	}
 }
 
@@ -129,6 +125,16 @@ func (c *VarContext) resolve(path string) (any, error) {
 	// Check builtins
 	if val, ok := c.Builtins[root]; ok {
 		return c.resolvePath(val, parts[1:])
+	}
+
+	// Dynamic time builtins - computed fresh at resolution time
+	switch root {
+	case "timestamp":
+		return time.Now().Format(time.RFC3339), nil
+	case "date":
+		return time.Now().Format("2006-01-02"), nil
+	case "time":
+		return time.Now().Format("15:04:05"), nil
 	}
 
 	return nil, fmt.Errorf("undefined variable: %s", root)

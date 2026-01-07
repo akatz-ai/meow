@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -514,19 +515,30 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 		}
 	}
 
-	// Expand the target template if specified
-	if target != nil && target.Template != "" {
-		expandSpec := &types.ExpandSpec{
-			Template:  target.Template,
-			Variables: target.Variables,
-		}
-		if err := o.expander.Expand(ctx, expandSpec, bead); err != nil {
-			o.logger.Error("failed to expand condition branch",
-				"bead", bead.ID,
-				"template", target.Template,
-				"error", err,
-			)
-			return
+	// Expand the target - either template or inline steps
+	if target != nil {
+		if target.Template != "" {
+			expandSpec := &types.ExpandSpec{
+				Template:  target.Template,
+				Variables: target.Variables,
+			}
+			if err := o.expander.Expand(ctx, expandSpec, bead); err != nil {
+				o.logger.Error("failed to expand condition branch",
+					"bead", bead.ID,
+					"template", target.Template,
+					"error", err,
+				)
+				return
+			}
+		} else if len(target.Inline) > 0 {
+			// Process inline steps when no template is specified
+			if err := o.expandInlineSteps(ctx, bead, target.Inline); err != nil {
+				o.logger.Error("failed to expand inline steps",
+					"bead", bead.ID,
+					"error", err,
+				)
+				return
+			}
 		}
 	}
 
@@ -727,4 +739,127 @@ func (o *Orchestrator) cleanupEphemeralBeads(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// inlineStep represents a parsed inline step from JSON.
+// This mirrors template.InlineStep but is defined here to avoid import cycles.
+type inlineStep struct {
+	ID           string   `json:"id"`
+	Type         string   `json:"type"`
+	Description  string   `json:"description,omitempty"`
+	Instructions string   `json:"instructions,omitempty"`
+	Needs        []string `json:"needs,omitempty"`
+}
+
+// expandInlineSteps creates beads from inline step definitions.
+// This handles the case where a condition branch has inline steps instead of a template.
+func (o *Orchestrator) expandInlineSteps(ctx context.Context, parentBead *types.Bead, inlineRaw []json.RawMessage) error {
+	if len(inlineRaw) == 0 {
+		return nil
+	}
+
+	// Check if store supports creation
+	creator, ok := o.store.(interface {
+		Create(context.Context, *types.Bead) error
+	})
+	if !ok {
+		return fmt.Errorf("bead store does not support creation")
+	}
+
+	// Parse inline steps from JSON
+	steps := make([]inlineStep, 0, len(inlineRaw))
+	for i, raw := range inlineRaw {
+		var step inlineStep
+		if err := json.Unmarshal(raw, &step); err != nil {
+			return fmt.Errorf("parsing inline step %d: %w", i, err)
+		}
+		steps = append(steps, step)
+	}
+
+	// Generate bead IDs for all steps first
+	stepToBeadID := make(map[string]string)
+	for _, step := range steps {
+		beadID := fmt.Sprintf("%s.inline.%s", parentBead.ID, step.ID)
+		stepToBeadID[step.ID] = beadID
+	}
+
+	// Create beads from inline steps
+	for _, step := range steps {
+		beadID := stepToBeadID[step.ID]
+
+		// Translate dependencies from step IDs to bead IDs
+		var needs []string
+		hasInternalDep := false
+		for _, need := range step.Needs {
+			if beadNeed, ok := stepToBeadID[need]; ok {
+				needs = append(needs, beadNeed)
+				hasInternalDep = true
+			} else {
+				// Unknown dependency - keep as-is (might be external)
+				needs = append(needs, need)
+			}
+		}
+
+		// Steps without internal dependencies must depend on the parent condition bead.
+		// This ensures they don't execute until the condition evaluation is complete.
+		if !hasInternalDep {
+			needs = append([]string{parentBead.ID}, needs...)
+		}
+
+		// Determine bead type
+		beadType := types.BeadType(step.Type)
+		if !beadType.Valid() {
+			beadType = types.BeadTypeTask
+		}
+
+		bead := &types.Bead{
+			ID:           beadID,
+			Type:         beadType,
+			Title:        step.Description,
+			Description:  step.Instructions,
+			Instructions: step.Instructions,
+			Status:       types.BeadStatusOpen,
+			Needs:        needs,
+			Parent:       parentBead.ID,
+			CreatedAt:    time.Now(),
+		}
+
+		// Set type-specific specs for non-task beads
+		if err := o.setInlineBeadSpec(bead, step); err != nil {
+			return fmt.Errorf("setting spec for inline step %q: %w", step.ID, err)
+		}
+
+		if err := creator.Create(ctx, bead); err != nil {
+			return fmt.Errorf("creating inline bead %s: %w", beadID, err)
+		}
+
+		o.logger.Debug("created inline bead",
+			"bead", beadID,
+			"type", beadType,
+			"parent", parentBead.ID,
+		)
+	}
+
+	return nil
+}
+
+// setInlineBeadSpec sets the type-specific spec for an inline bead.
+// Currently only handles task beads (which need no spec).
+// TODO: Extend to support code/start/stop beads with additional fields in inlineStep.
+func (o *Orchestrator) setInlineBeadSpec(bead *types.Bead, step inlineStep) error {
+	switch bead.Type {
+	case types.BeadTypeTask:
+		// Task beads use Instructions field, no spec needed
+		return nil
+	case types.BeadTypeCondition, types.BeadTypeCode, types.BeadTypeStart, types.BeadTypeStop, types.BeadTypeExpand:
+		// These types require additional fields not available in basic inline steps
+		// For now, log a warning - full support would require extending inlineStep
+		o.logger.Warn("inline step type may need additional configuration",
+			"type", bead.Type,
+			"bead", bead.ID,
+		)
+		return nil
+	default:
+		return fmt.Errorf("unsupported inline bead type: %s", bead.Type)
+	}
 }

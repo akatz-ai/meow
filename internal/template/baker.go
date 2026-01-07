@@ -293,7 +293,7 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 	}
 
 	// Second pass: create beads
-	for i, step := range steps {
+	for _, step := range steps {
 		beadID := stepToID[step.ID]
 
 		// Set step-specific builtins for substitution
@@ -320,13 +320,21 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 
 		// Translate dependencies
 		var needs []string
+		hasInternalDep := false
 		for _, need := range step.Needs {
 			if beadNeed, ok := stepToID[need]; ok {
 				needs = append(needs, beadNeed)
+				hasInternalDep = true
 			} else {
 				// Could be a dependency on the parent or a prior step
 				needs = append(needs, need)
 			}
+		}
+
+		// Steps without internal dependencies must depend on the parent.
+		// This ensures they don't execute until the parent is complete.
+		if !hasInternalDep && parentBeadID != "" {
+			needs = append([]string{parentBeadID}, needs...)
 		}
 
 		beadType := types.BeadType(step.Type)
@@ -344,11 +352,6 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 			Needs:       needs,
 			Parent:      parentBeadID,
 			CreatedAt:   b.Now(),
-		}
-
-		if i == 0 && parentBeadID != "" {
-			// First inline step depends on parent completing
-			bead.Needs = append([]string{parentBeadID}, bead.Needs...)
 		}
 
 		beads = append(beads, bead)
