@@ -201,18 +201,48 @@ func (s *FileBeadStore) Create(ctx context.Context, bead *types.Bead) error {
 	return s.writeLocked()
 }
 
+// BeadFilter specifies filter criteria for listing beads.
+type BeadFilter struct {
+	Status     types.BeadStatus // Filter by status (empty = all)
+	Tier       types.BeadTier   // Filter by tier (empty = all)
+	Assignee   string           // Filter by assignee (empty = all)
+	WorkflowID string           // Filter by workflow ID (empty = all)
+}
+
 // List returns all beads matching the given filter.
 func (s *FileBeadStore) List(ctx context.Context, status types.BeadStatus) ([]*types.Bead, error) {
+	return s.ListFiltered(ctx, BeadFilter{Status: status})
+}
+
+// ListFiltered returns all beads matching the given filter.
+func (s *FileBeadStore) ListFiltered(ctx context.Context, filter BeadFilter) ([]*types.Bead, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var result []*types.Bead
 	for _, bead := range s.beads {
-		if status == "" || bead.Status == status {
+		if s.matchesFilter(bead, filter) {
 			result = append(result, bead)
 		}
 	}
 	return result, nil
+}
+
+// matchesFilter returns true if the bead matches all filter criteria.
+func (s *FileBeadStore) matchesFilter(bead *types.Bead, filter BeadFilter) bool {
+	if filter.Status != "" && bead.Status != filter.Status {
+		return false
+	}
+	if filter.Tier != "" && bead.Tier != filter.Tier {
+		return false
+	}
+	if filter.Assignee != "" && bead.Assignee != filter.Assignee {
+		return false
+	}
+	if filter.WorkflowID != "" && bead.WorkflowID != filter.WorkflowID {
+		return false
+	}
+	return true
 }
 
 // writeLocked writes all beads to the issues file (caller must hold lock).

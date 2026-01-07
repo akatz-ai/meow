@@ -53,8 +53,10 @@ type Var struct {
 // Step represents a single step in a template.
 type Step struct {
 	ID           string            `toml:"id"`
+	Title        string            `toml:"title,omitempty"`        // Human-readable title (module format)
 	Description  string            `toml:"description,omitempty"`
-	Type         string            `toml:"type,omitempty"`         // blocking-gate, restart, etc.
+	Type         string            `toml:"type,omitempty"`         // task, collaborative, gate, condition, etc.
+	Assignee     string            `toml:"assignee,omitempty"`     // Agent ID for task/collaborative
 	Needs        []string          `toml:"needs,omitempty"`        // Dependencies
 	Condition    string            `toml:"condition,omitempty"`    // Shell condition or variable
 	Instructions string            `toml:"instructions,omitempty"` // For task beads

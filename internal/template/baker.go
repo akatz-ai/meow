@@ -39,8 +39,9 @@ func NewBaker(workflowID string) *Baker {
 
 // BakeResult contains the beads generated from baking a template.
 type BakeResult struct {
-	Beads    []*types.Bead
-	StepToID map[string]string // step ID -> bead ID mapping
+	Beads      []*types.Bead
+	StepToID   map[string]string // step ID -> bead ID mapping
+	WorkflowID string            // Unique workflow instance ID
 }
 
 // Bake transforms a template into beads.
@@ -90,9 +91,214 @@ func (b *Baker) Bake(tmpl *Template) (*BakeResult, error) {
 	}
 
 	return &BakeResult{
-		Beads:    beads,
-		StepToID: stepToID,
+		Beads:      beads,
+		StepToID:   stepToID,
+		WorkflowID: b.WorkflowID,
 	}, nil
+}
+
+// BakeWorkflow transforms a module-format workflow into beads with tier detection.
+func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeResult, error) {
+	if workflow == nil {
+		return nil, fmt.Errorf("workflow is nil")
+	}
+
+	// Apply provided variables to context
+	for k, v := range vars {
+		b.VarContext.Set(k, v)
+	}
+
+	// Apply variable defaults from workflow
+	for name, v := range workflow.Variables {
+		if v.Default != nil && b.VarContext.Get(name) == "" {
+			switch d := v.Default.(type) {
+			case string:
+				b.VarContext.Set(name, d)
+			default:
+				b.VarContext.Set(name, fmt.Sprintf("%v", d))
+			}
+		}
+	}
+
+	// Validate required variables
+	for name, v := range workflow.Variables {
+		if v.Required && b.VarContext.Get(name) == "" {
+			return nil, fmt.Errorf("required variable %q not provided", name)
+		}
+	}
+
+	// Set builtin variables
+	b.VarContext.SetBuiltin("workflow_id", b.WorkflowID)
+	b.VarContext.SetBuiltin("molecule_id", b.WorkflowID)
+
+	// Generate step ID to bead ID mapping
+	stepToID := make(map[string]string)
+	for _, step := range workflow.Steps {
+		beadID := b.generateBeadID(step.ID)
+		stepToID[step.ID] = beadID
+	}
+
+	// Determine HookBead from hooks_to variable
+	var hookBead string
+	if workflow.HooksTo != "" {
+		hookBead = b.VarContext.Get(workflow.HooksTo)
+	}
+
+	// Process steps in order (topological sort for complex deps)
+	var beads []*types.Bead
+	for _, step := range workflow.Steps {
+		bead, err := b.workflowStepToBead(step, stepToID, workflow, hookBead)
+		if err != nil {
+			return nil, fmt.Errorf("bake step %q: %w", step.ID, err)
+		}
+		beads = append(beads, bead)
+	}
+
+	return &BakeResult{
+		Beads:      beads,
+		StepToID:   stepToID,
+		WorkflowID: b.WorkflowID,
+	}, nil
+}
+
+// workflowStepToBead converts a module-format workflow step to a bead with tier detection.
+func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workflow *Workflow, hookBead string) (*types.Bead, error) {
+	beadID := stepToID[step.ID]
+
+	// Set step-specific builtins BEFORE substitution
+	b.VarContext.SetBuiltin("step_id", step.ID)
+	b.VarContext.SetBuiltin("bead_id", beadID)
+
+	// Substitute variables in string fields
+	title := step.Title
+	if title == "" {
+		title = step.Description
+	}
+	if title != "" {
+		var err error
+		title, err = b.VarContext.Substitute(title)
+		if err != nil {
+			return nil, fmt.Errorf("substitute title: %w", err)
+		}
+	}
+
+	instructions := step.Instructions
+	if instructions != "" {
+		var err error
+		instructions, err = b.VarContext.Substitute(instructions)
+		if err != nil {
+			return nil, fmt.Errorf("substitute instructions: %w", err)
+		}
+	}
+
+	assignee := step.Assignee
+	if assignee != "" {
+		var err error
+		assignee, err = b.VarContext.Substitute(assignee)
+		if err != nil {
+			return nil, fmt.Errorf("substitute assignee: %w", err)
+		}
+	}
+	// Use default assignee if none specified
+	if assignee == "" {
+		assignee = b.Assignee
+	}
+
+	// Translate dependencies from step IDs to bead IDs
+	var needs []string
+	for _, need := range step.Needs {
+		if beadNeed, ok := stepToID[need]; ok {
+			needs = append(needs, beadNeed)
+		} else {
+			return nil, fmt.Errorf("unknown dependency: %s", need)
+		}
+	}
+
+	// Determine bead type from step.Type
+	beadType := b.determineBeadTypeFromString(step.Type)
+
+	// Determine tier based on workflow and step type
+	tier := b.determineTier(step, workflow)
+
+	// Create bead
+	bead := &types.Bead{
+		ID:             beadID,
+		Type:           beadType,
+		Title:          title,
+		Description:    step.Description,
+		Status:         types.BeadStatusOpen,
+		Assignee:       assignee,
+		Needs:          needs,
+		Parent:         b.ParentBead,
+		Tier:           tier,
+		HookBead:       hookBead,
+		SourceWorkflow: workflow.Name,
+		WorkflowID:     b.WorkflowID,
+		CreatedAt:      b.Now(),
+		Instructions:   instructions,
+	}
+
+	// Validate gate has no assignee
+	if beadType == types.BeadTypeGate {
+		bead.Assignee = ""
+	}
+
+	// Add ephemeral label if step or workflow is ephemeral
+	if step.Ephemeral || workflow.Ephemeral {
+		bead.Labels = append(bead.Labels, "meow:ephemeral")
+	}
+
+	// Set type-specific specs
+	if err := b.setTypeSpec(bead, step, stepToID); err != nil {
+		return nil, err
+	}
+
+	return bead, nil
+}
+
+// determineTier determines the bead tier based on workflow and step type.
+func (b *Baker) determineTier(step *Step, workflow *Workflow) types.BeadTier {
+	stepType := step.Type
+	if stepType == "" {
+		stepType = "task" // Default
+	}
+
+	switch stepType {
+	case "task", "collaborative":
+		if workflow.Ephemeral {
+			return types.TierWisp
+		}
+		return types.TierWork
+	case "gate":
+		return types.TierOrchestrator
+	default:
+		// condition, code, start, stop, expand are all orchestrator
+		return types.TierOrchestrator
+	}
+}
+
+// determineBeadTypeFromString converts a string type to BeadType.
+func (b *Baker) determineBeadTypeFromString(stepType string) types.BeadType {
+	switch stepType {
+	case "task", "":
+		return types.BeadTypeTask
+	case "collaborative":
+		return types.BeadTypeCollaborative
+	case "gate":
+		return types.BeadTypeGate
+	case "condition":
+		return types.BeadTypeCondition
+	case "start":
+		return types.BeadTypeStart
+	case "stop":
+		return types.BeadTypeStop
+	case "code":
+		return types.BeadTypeCode
+	case "expand":
+		return types.BeadTypeExpand
+	default:
+		return types.BeadTypeTask
+	}
 }
 
 // generateBeadID creates a unique bead ID from a step ID.
@@ -195,6 +401,14 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 	switch bead.Type {
 	case types.BeadTypeTask:
 		// Task beads don't need a spec, they use Instructions
+		return nil
+
+	case types.BeadTypeCollaborative:
+		// Collaborative beads also use Instructions, no special spec needed
+		return nil
+
+	case types.BeadTypeGate:
+		// Gates don't need a spec - they're approved by humans via meow approve
 		return nil
 
 	case types.BeadTypeCondition:

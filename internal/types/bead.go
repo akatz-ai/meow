@@ -6,22 +6,42 @@ import (
 	"time"
 )
 
-// BeadType represents the 6 primitive bead types in MEOW.
+// BeadType represents the 8 primitive bead types in MEOW.
 type BeadType string
 
 const (
-	BeadTypeTask      BeadType = "task"      // Agent-executed work
-	BeadTypeCondition BeadType = "condition" // Branching, looping, waiting
-	BeadTypeStop      BeadType = "stop"      // Kill agent session
-	BeadTypeStart     BeadType = "start"     // Spawn agent (with optional resume)
-	BeadTypeCode      BeadType = "code"      // Execute shell code
-	BeadTypeExpand    BeadType = "expand"    // Template expansion
+	BeadTypeTask          BeadType = "task"          // Agent-executed work, auto-continues
+	BeadTypeCollaborative BeadType = "collaborative" // Agent + human conversation, pauses
+	BeadTypeGate          BeadType = "gate"          // Human approval point (no assignee)
+	BeadTypeCondition     BeadType = "condition"     // Branching, looping, waiting
+	BeadTypeStop          BeadType = "stop"          // Kill agent session
+	BeadTypeStart         BeadType = "start"         // Spawn agent (with optional resume)
+	BeadTypeCode          BeadType = "code"          // Execute shell code
+	BeadTypeExpand        BeadType = "expand"        // Template expansion
 )
 
-// Valid returns true if the bead type is one of the 6 primitives.
+// Valid returns true if the bead type is one of the 8 primitives.
 func (t BeadType) Valid() bool {
 	switch t {
-	case BeadTypeTask, BeadTypeCondition, BeadTypeStop, BeadTypeStart, BeadTypeCode, BeadTypeExpand:
+	case BeadTypeTask, BeadTypeCollaborative, BeadTypeGate, BeadTypeCondition, BeadTypeStop, BeadTypeStart, BeadTypeCode, BeadTypeExpand:
+		return true
+	}
+	return false
+}
+
+// BeadTier represents the visibility tier of a bead.
+type BeadTier string
+
+const (
+	TierWork        BeadTier = "work"        // Permanent deliverables (bd-* beads)
+	TierWisp        BeadTier = "wisp"        // Agent workflow steps (ephemeral)
+	TierOrchestrator BeadTier = "orchestrator" // Infrastructure machinery (invisible)
+)
+
+// Valid returns true if the tier is valid.
+func (t BeadTier) Valid() bool {
+	switch t {
+	case TierWork, TierWisp, TierOrchestrator, "":
 		return true
 	}
 	return false
@@ -175,6 +195,13 @@ type Bead struct {
 	Notes       string     `json:"notes,omitempty" toml:"notes,omitempty"`
 	Parent      string     `json:"parent,omitempty" toml:"parent,omitempty"` // Parent bead for nested expansions
 
+	// MEOW-specific: Three-tier visibility
+	Tier           BeadTier  `json:"tier,omitempty" toml:"tier,omitempty"`                       // work | wisp | orchestrator
+	HookBead       string    `json:"hook_bead,omitempty" toml:"hook_bead,omitempty"`             // Work bead this wisp implements
+	SourceWorkflow string    `json:"source_workflow,omitempty" toml:"source_workflow,omitempty"` // Workflow that created this
+	WorkflowID     string    `json:"workflow_id,omitempty" toml:"workflow_id,omitempty"`         // Unique workflow instance ID
+	LastSeen       time.Time `json:"last_seen,omitempty" toml:"last_seen,omitempty"`             // Agent heartbeat timestamp
+
 	// Timestamps
 	CreatedAt time.Time  `json:"created_at" toml:"created_at"`
 	ClosedAt  *time.Time `json:"closed_at,omitempty" toml:"closed_at,omitempty"`
@@ -220,9 +247,24 @@ func (b *Bead) Validate() error {
 	if b.Title == "" {
 		return fmt.Errorf("bead title is required")
 	}
+	if !b.Tier.Valid() {
+		return fmt.Errorf("invalid bead tier: %s", b.Tier)
+	}
 
-	// Validate type-specific specs
+	// Validate type-specific constraints
 	switch b.Type {
+	case BeadTypeTask:
+		// Tasks can have assignee in ephemeral workflows
+	case BeadTypeCollaborative:
+		// Collaborative steps MUST have an assignee
+		if b.Assignee == "" {
+			return fmt.Errorf("collaborative bead requires assignee")
+		}
+	case BeadTypeGate:
+		// Gates MUST NOT have an assignee (human-facing)
+		if b.Assignee != "" {
+			return fmt.Errorf("gate bead must not have assignee")
+		}
 	case BeadTypeCondition:
 		if b.ConditionSpec == nil {
 			return fmt.Errorf("condition bead requires condition_spec")

@@ -34,6 +34,19 @@ func (c *VarContext) SetVariable(name string, value any) {
 	c.Variables[name] = value
 }
 
+// Set is an alias for SetVariable for convenience.
+func (c *VarContext) Set(name string, value any) {
+	c.SetVariable(name, value)
+}
+
+// Get returns the value of a user-defined variable, or empty string if not set.
+func (c *VarContext) Get(name string) string {
+	if val, ok := c.Variables[name]; ok {
+		return fmt.Sprintf("%v", val)
+	}
+	return ""
+}
+
 // SetBuiltin sets a builtin variable (e.g., agent, bead_id).
 func (c *VarContext) SetBuiltin(name string, value any) {
 	c.Builtins[name] = value
