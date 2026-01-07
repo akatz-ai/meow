@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -61,6 +62,10 @@ type Orchestrator struct {
 	executor CodeExecutor
 	logger   *slog.Logger
 
+	// State persistence
+	persister *StatePersister
+	state     *OrchestratorState
+
 	// Shutdown coordination
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -68,6 +73,18 @@ type Orchestrator struct {
 	// Condition goroutines
 	condMu       sync.Mutex
 	condRoutines map[string]context.CancelFunc
+}
+
+// StartupConfig holds configuration for orchestrator startup.
+type StartupConfig struct {
+	// Template to execute (for fresh start)
+	Template string
+
+	// WorkflowID for identification
+	WorkflowID string
+
+	// StateDir is the directory for state files
+	StateDir string
 }
 
 // New creates a new Orchestrator.
@@ -81,6 +98,195 @@ func New(cfg *config.Config, store BeadStore, agents AgentManager, expander Temp
 		logger:       logger,
 		condRoutines: make(map[string]context.CancelFunc),
 	}
+}
+
+// StartOrResume initializes the orchestrator, either resuming from a crash or starting fresh.
+// It acquires the exclusive lock, recovers from any previous crash, and prepares to run.
+func (o *Orchestrator) StartOrResume(ctx context.Context, startCfg *StartupConfig) error {
+	// Initialize persister
+	o.persister = NewStatePersister(startCfg.StateDir)
+
+	// Acquire exclusive lock
+	if err := o.persister.AcquireLock(); err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+
+	// Load bead store
+	if loader, ok := o.store.(interface{ Load(context.Context) error }); ok {
+		if err := loader.Load(ctx); err != nil {
+			o.persister.ReleaseLock()
+			return fmt.Errorf("loading bead store: %w", err)
+		}
+	}
+
+	// Check for existing state (resume vs fresh start)
+	existingState, err := o.persister.LoadState()
+	if err != nil {
+		o.persister.ReleaseLock()
+		return fmt.Errorf("loading state: %w", err)
+	}
+
+	if existingState != nil {
+		// Resume from existing state
+		o.logger.Info("resuming from existing state",
+			"workflow_id", existingState.WorkflowID,
+			"tick_count", existingState.TickCount,
+			"previous_pid", existingState.PID,
+		)
+		o.state = existingState
+
+		// Perform crash recovery
+		if err := o.recoverFromCrash(ctx, existingState); err != nil {
+			o.persister.ReleaseLock()
+			return fmt.Errorf("crash recovery: %w", err)
+		}
+	} else {
+		// Fresh start
+		o.logger.Info("starting fresh workflow",
+			"workflow_id", startCfg.WorkflowID,
+			"template", startCfg.Template,
+		)
+
+		o.state = &OrchestratorState{
+			Version:      "1",
+			WorkflowID:   startCfg.WorkflowID,
+			TemplateName: startCfg.Template,
+			StartedAt:    time.Now(),
+			PID:          os.Getpid(),
+		}
+
+		// If a template is specified, expand it to create initial beads
+		if startCfg.Template != "" {
+			if err := o.expandInitialTemplate(ctx, startCfg); err != nil {
+				o.persister.ReleaseLock()
+				return fmt.Errorf("expanding initial template: %w", err)
+			}
+		}
+	}
+
+	// Update state with current PID
+	o.state.PID = os.Getpid()
+
+	// Save initial state
+	if err := o.persister.SaveState(o.state); err != nil {
+		o.persister.ReleaseLock()
+		return fmt.Errorf("saving state: %w", err)
+	}
+
+	return nil
+}
+
+// recoverFromCrash handles recovery after a crash by:
+// 1. Checking which agents are still running via tmux
+// 2. Resetting in-progress beads from dead agents back to open
+func (o *Orchestrator) recoverFromCrash(ctx context.Context, prevState *OrchestratorState) error {
+	o.logger.Info("performing crash recovery")
+
+	// Get all in-progress beads
+	inProgressBeads, err := o.getInProgressBeads(ctx)
+	if err != nil {
+		return fmt.Errorf("getting in-progress beads: %w", err)
+	}
+
+	if len(inProgressBeads) == 0 {
+		o.logger.Info("no in-progress beads to recover")
+		return nil
+	}
+
+	o.logger.Info("found in-progress beads", "count", len(inProgressBeads))
+
+	// Check each bead's assignee
+	for _, bead := range inProgressBeads {
+		if bead.Assignee == "" {
+			// Orchestrator bead (condition, code, expand, etc.)
+			// These should be reset since the orchestrator crashed mid-execution
+			if bead.Type != types.BeadTypeTask {
+				o.logger.Info("resetting orchestrator bead",
+					"id", bead.ID,
+					"type", bead.Type,
+				)
+				bead.Status = types.BeadStatusOpen
+				if err := o.store.Update(ctx, bead); err != nil {
+					return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
+				}
+			}
+			continue
+		}
+
+		// Task bead - check if the assigned agent is still running
+		running, err := o.agents.IsRunning(ctx, bead.Assignee)
+		if err != nil {
+			o.logger.Warn("error checking agent status",
+				"agent", bead.Assignee,
+				"bead", bead.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		if !running {
+			// Agent is dead - reset the bead so it can be picked up again
+			o.logger.Info("resetting bead from dead agent",
+				"id", bead.ID,
+				"agent", bead.Assignee,
+			)
+			bead.Status = types.BeadStatusOpen
+			if err := o.store.Update(ctx, bead); err != nil {
+				return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
+			}
+		} else {
+			o.logger.Info("agent still running, keeping bead in progress",
+				"id", bead.ID,
+				"agent", bead.Assignee,
+			)
+		}
+	}
+
+	return nil
+}
+
+// getInProgressBeads returns all beads with status in_progress.
+func (o *Orchestrator) getInProgressBeads(ctx context.Context) ([]*types.Bead, error) {
+	// Check if store supports listing
+	if lister, ok := o.store.(interface {
+		List(context.Context, types.BeadStatus) ([]*types.Bead, error)
+	}); ok {
+		return lister.List(ctx, types.BeadStatusInProgress)
+	}
+
+	// Fallback: we can't list beads, return empty
+	o.logger.Warn("bead store does not support listing, skipping recovery scan")
+	return nil, nil
+}
+
+// expandInitialTemplate expands the initial workflow template.
+func (o *Orchestrator) expandInitialTemplate(ctx context.Context, startCfg *StartupConfig) error {
+	expandSpec := &types.ExpandSpec{
+		Template: startCfg.Template,
+	}
+
+	// Create a synthetic parent bead to anchor the expansion
+	parentBead := &types.Bead{
+		ID:     "workflow-root",
+		Type:   types.BeadTypeExpand,
+		Title:  "Workflow: " + startCfg.WorkflowID,
+		Status: types.BeadStatusOpen,
+	}
+
+	if err := o.expander.Expand(ctx, expandSpec, parentBead); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ReleaseLock releases the orchestrator lock.
+// Call this when done with the orchestrator (typically deferred after StartOrResume).
+func (o *Orchestrator) ReleaseLock() error {
+	if o.persister != nil {
+		return o.persister.ReleaseLock()
+	}
+	return nil
 }
 
 // Run starts the orchestrator main loop.
