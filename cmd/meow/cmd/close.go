@@ -62,7 +62,7 @@ func (c *beadChecker) BeadExists(id string) bool {
 }
 
 func runClose(cmd *cobra.Command, args []string) error {
-	if err := checkWorkDir(); err != nil {
+	if err := checkBeadsDir(); err != nil {
 		return err
 	}
 

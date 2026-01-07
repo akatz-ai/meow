@@ -75,6 +75,10 @@ type StepInfo struct {
 }
 
 func runPrime(cmd *cobra.Command, args []string) error {
+	if err := checkBeadsDir(); err != nil {
+		return err
+	}
+
 	// Get agent ID from flag or environment
 	agent := primeAgent
 	if agent == "" {

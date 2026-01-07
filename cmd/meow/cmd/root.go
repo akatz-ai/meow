@@ -70,3 +70,19 @@ func getWorkDir() (string, error) {
 	}
 	return os.Getwd()
 }
+
+// checkBeadsDir ensures we have a .beads directory (for bead-only commands like prime, close).
+// This is less strict than checkWorkDir - doesn't require full MEOW orchestrator setup.
+func checkBeadsDir() error {
+	dir, err := getWorkDir()
+	if err != nil {
+		return err
+	}
+
+	beadsDir := dir + "/.beads"
+	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
+		return fmt.Errorf("no .beads directory found. Are you in a beads project?")
+	}
+
+	return nil
+}
