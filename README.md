@@ -1,11 +1,10 @@
 # MEOW Stack
 
-**Molecular Expression Of Work** — A recursive, composable workflow system for durable AI agent orchestration.
+**Molecular Expression Of Work** — A primitives-first workflow system for durable AI agent orchestration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  "Everything is a molecule. Loops are molecules. Gates are molecules.      │
-│   The whole system is molecules all the way down."                         │
+│  "8 primitives. Everything else is template composition."                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -21,242 +20,97 @@ AI coding agents are powerful but fragile:
 
 ## The Solution
 
-MEOW Stack introduces a **recursive molecule architecture** where:
+MEOW Stack provides **8 primitive bead types** that compose into arbitrary workflows:
 
-1. **Everything is a molecule** — Even loops and gates are molecules
-2. **Molecules contain beads** — Each bead is a step in a workflow
-3. **Beads can expand into molecules** — Recursive composition
-4. **State is git-backed** — Survives crashes, enables resumption anywhere
-5. **Human gates are first-class** — Built into the workflow, not bolted on
+| # | Primitive | Purpose |
+|---|-----------|---------|
+| 1 | `task` | Claude-executed work |
+| 2 | `condition` | Branching, looping, and waiting (can block for gates) |
+| 3 | `stop` | Kill agent session |
+| 4 | `start` | Spawn agent |
+| 5 | `checkpoint` | Save for resume |
+| 6 | `resume` | Resume from checkpoint |
+| 7 | `code` | Arbitrary shell execution |
+| 8 | `expand` | Template composition |
 
-## Core Concepts
+**Everything else—`refresh`, `handoff`, `call`, loops, context management, human approval gates—is template composition using these primitives.**
 
-### The Molecule Stack
+## Design Philosophy
 
-At any point during execution, there's a **stack** of active molecules (like a call stack):
+> **The orchestrator is dumb; the templates are smart.**
 
-```
-┌─────────────────────────────────────────┐
-│ outer-loop-001        [step: run-inner] │ ← Orchestration loop
-├─────────────────────────────────────────┤
-│ meta-mol-001          [step: task-1]    │ ← Batch of related work
-├─────────────────────────────────────────┤
-│ impl-task-1-001       [step: implement] │ ← TDD workflow (CURRENT)
-└─────────────────────────────────────────┘
-```
+The orchestrator is a simple dispatch loop that recognizes 8 bead types. All workflow complexity lives in composable TOML templates that users define and control.
 
-When `impl-task-1-001` completes → pop → resume `meta-mol-001` → continue to `task-2`
-
-### Four Layers of Work
-
-```
-LAYER 0: Feature Idea
-    ↓ (human + Claude planning session)
-LAYER 1: Epics & Tasks (beads with dependencies)
-    ↓ (outer loop selects work, bakes meta-molecule)
-LAYER 2: Meta-Molecule (task batches + human gates)
-    ↓ (each task expands via template)
-LAYER 3: Step Molecules (TDD, test-suite, etc.)
-    ↓ (atomic steps executed directly)
-LAYER 4: Atomic Execution
-```
-
-### Templates
-
-Reusable workflow patterns defined in TOML:
-
-```toml
-# .beads/templates/implement.toml
-[meta]
-name = "implement"
-description = "TDD implementation workflow"
-
-[[steps]]
-id = "load-context"
-description = "Load relevant files and understand the task"
-
-[[steps]]
-id = "write-tests"
-description = "Write failing tests that define success criteria"
-needs = ["load-context"]
-
-[[steps]]
-id = "verify-fail"
-description = "Run tests and verify they fail"
-needs = ["write-tests"]
-
-[[steps]]
-id = "implement"
-description = "Write code to make tests pass"
-needs = ["verify-fail"]
-
-[[steps]]
-id = "commit"
-description = "Commit with descriptive message"
-needs = ["implement"]
-```
-
-### The Execution Loop
-
-Built on [Ralph Wiggum](https://ghuntley.com/ralph/) — a persistent iteration loop:
-
-1. Claude receives prompt + sees accumulated work in files
-2. Executor checks molecule stack → finds current step
-3. If step has template → push child molecule, descend
-4. If step is atomic → execute directly
-5. If step is gate → pause loop, await human
-6. If molecule complete → pop stack, ascend to parent
-7. Loop continues until all work done
+- **No magic context thresholds** — Users define when to check context via `condition` beads
+- **No hardcoded call semantics** — `call` is a template: checkpoint → stop → start → expand → stop → resume
+- **No special gate type** — Gates are blocking `condition` beads: `meow wait-approve --bead xyz`
+- **No built-in worktree management** — Users add `code` beads for git operations
 
 ## Quick Example
 
 ```bash
-# 1. Human provides feature idea
-meow plan "Add user authentication with OAuth support"
+# Start a workflow
+meow run work-loop
 
-# 2. Claude breaks into epics + tasks (stored as beads)
-#    → Epic: User registration
-#    → Epic: Login/logout
-#    → Epic: OAuth providers
-#    Each with 2-3 child tasks
-
-# 3. Start the MEOW loop
-meow start
-
-# 4. Outer loop runs:
-#    - Analyzes project with `bv --robot-triage`
-#    - Picks highest-impact work (Epic 1: registration)
-#    - Bakes meta-molecule: [task-1, task-2, close-epic, test-suite, human-gate]
-#    - Descends into task-1 → expands to implement template
-#    - Executes TDD steps: load-context → write-tests → verify-fail → implement → commit
-#    - Ascends, continues to task-2
-#    - ...eventually hits human-gate
-
-# 5. Human reviews at gate
-meow approve  # or: bd close <gate-id>
-
-# 6. Loop continues with next batch of work
-#    Until all epics complete
+# The orchestrator:
+# 1. Bakes template into beads
+# 2. Spawns Claude in tmux
+# 3. Watches for special bead types
+# 4. Claude executes task beads, closes them
+# 5. Orchestrator handles condition/stop/start/etc
+# 6. Loop continues until all beads complete
 ```
 
-## Why This Architecture?
+A simple work loop template:
 
-### Durability
-The molecule stack lives in beads (git-backed). After a crash:
-```bash
-bd mol stack  # Shows exactly where you were
-bd ready      # Shows next step to execute
-# Resume immediately
-```
-
-### Composability
-Templates can reference other templates. New workflow = new template file:
 ```toml
-[[steps]]
-id = "implement-feature"
-template = "implement"  # Expands to TDD workflow
+# .meow/templates/work-loop.toml
+[meta]
+name = "work-loop"
 
 [[steps]]
-id = "deploy-staging"
-template = "deploy"     # Expands to deployment workflow
-needs = ["implement-feature"]
-```
-
-### Human-in-the-Loop
-Gates aren't special — they're molecules with blocking steps:
-```toml
-# human-gate template
-[[steps]]
-id = "await-approval"
-type = "blocking-gate"  # Pauses loop until human closes
-```
-
-### Intelligent Task Selection
-The outer loop uses [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) for scoring:
-- PageRank-weighted importance
-- Betweenness centrality (bottleneck detection)
-- Unblock count (what does this enable?)
-- Critical path analysis
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           MEOW STACK ARCHITECTURE                           │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                         MOLECULE EXECUTOR                             │ │
-│  │  • Manages molecule stack (push/pop)                                  │ │
-│  │  • Dispatches steps to templates                                      │ │
-│  │  • Handles loop restart semantics                                     │ │
-│  │  • Integrates with Ralph Wiggum stop-hook                             │ │
-│  └───────────────────────────────────────────────────────────────────────┘ │
-│                                    ↓                                        │
-│  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                         TEMPLATE REGISTRY                             │ │
-│  │  .beads/templates/                                                    │ │
-│  │  ├── outer-loop.toml      # Master orchestration loop                 │ │
-│  │  ├── implement.toml       # TDD workflow                              │ │
-│  │  ├── test-suite.toml      # Comprehensive testing                     │ │
-│  │  ├── human-gate.toml      # Human review checkpoint                   │ │
-│  │  ├── analyze-pick.toml    # Task selection with bv                    │ │
-│  │  └── bake-meta.toml       # Dynamic meta-molecule creation            │ │
-│  └───────────────────────────────────────────────────────────────────────┘ │
-│                                    ↓                                        │
-│  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                         BEADS STORAGE                                 │ │
-│  │  .beads/                                                              │ │
-│  │  ├── issues.jsonl         # All beads (git-backed)                    │ │
-│  │  ├── beads.db             # SQLite cache (gitignored)                 │ │
-│  │  └── molecules/           # Active molecule state                     │ │
-│  └───────────────────────────────────────────────────────────────────────┘ │
-│                                    ↓                                        │
-│  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                      BEADS VIEWER (bv)                                │ │
-│  │  • bv --robot-triage      # Ranked task recommendations               │ │
-│  │  • bv --robot-next        # Single top pick                           │ │
-│  │  • PageRank, betweenness, critical path analysis                      │ │
-│  └───────────────────────────────────────────────────────────────────────┘ │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+id = "check-work"
+type = "condition"
+condition = "bd list --type=task --status=open | grep -q ."
+on_true:
+  template = "work-iteration"
+on_false:
+  template = "finalize"
 ```
 
 ## Documentation
 
-- **[Architecture](docs/ARCHITECTURE.md)** — Full technical design
-- **[Execution Model](docs/EXECUTION-MODEL.md)** — How the executor works
-- **[Templates](docs/TEMPLATES.md)** — Template system reference
-- **[Implementation Roadmap](docs/IMPLEMENTATION-ROADMAP.md)** — Build plan
+**[MVP Specification](docs/MVP-SPEC.md)** — The complete technical specification including:
+
+- All 8 primitive types with examples
+- Orchestrator architecture and main loop
+- Template system and composition patterns
+- Agent lifecycle management
+- Complete execution traces
+- Implementation roadmap
 
 ## Related Projects
 
 MEOW Stack builds on:
 
-- **[Beads](https://github.com/steveyegge/beads)** — Git-backed issue tracker with molecule support
+- **[Beads](https://github.com/steveyegge/beads)** — Git-backed issue tracker
 - **[Beads Viewer](https://github.com/Dicklesworthstone/beads_viewer)** — TUI + robot mode for task scoring
 - **[Ralph Wiggum](https://ghuntley.com/ralph/)** — Persistent iteration loop technique
-- **[Gas Town](https://github.com/...)** — Multi-agent orchestrator (inspiration for propulsion principle)
+- **[Gas Town](https://github.com/...)** — Multi-agent orchestrator (propulsion principle inspiration)
 
 ## Philosophy
 
-> **Molecules survive crashes. Any agent can resume where another left off.**
+> **8 primitives compose into any workflow.** Simple orchestrator, smart templates.
+
+> **Beads survive crashes.** Any agent can resume where another left off.
 
 > **The prompt never changes, but the world does.** Each iteration sees accumulated work.
 
-> **Human gates aren't interruptions — they're workflow steps.** Built-in, not bolted on.
-
-> **Everything is a molecule.** Uniform semantics enable arbitrary composition.
+> **Users control everything.** Context management, call semantics, gates—all user-defined.
 
 ## Status
 
-🚧 **Design Phase** — This repository contains the architectural specification. Implementation is planned in phases:
-
-1. Template expansion in beads CLI
-2. Molecule stack management
-3. Loop/restart semantics
-4. Gate integration
-5. Claude Code skill packaging
+**Design Phase** — This repository contains the architectural specification. See [MVP-SPEC.md](docs/MVP-SPEC.md) for implementation roadmap.
 
 ## License
 
@@ -264,4 +118,4 @@ MIT
 
 ---
 
-*"It's a Bash loop. But it's also a molecule. Which contains molecules. All the way down."*
+*"It's just 8 primitives. But they compose into anything."*
