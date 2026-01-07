@@ -2,6 +2,16 @@
 
 This document provides instructions for Claude Code when working with the MEOW Stack system.
 
+## Required Reading
+
+Before working on any task, read the architecture document to understand how your piece fits the whole:
+
+```
+@ARCHITECTURE.md
+```
+
+This document explains the 6 primitives, component relationships, data flow, and key interfaces.
+
 ## Overview
 
 MEOW Stack (Molecular Expression Of Work) is a recursive, composable workflow system for durable AI agent orchestration. You are executing within this system.
