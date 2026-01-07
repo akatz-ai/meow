@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  "8 primitives. Everything else is template composition."                   │
+│  "6 primitives. Everything else is template composition."                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -20,26 +20,24 @@ AI coding agents are powerful but fragile:
 
 ## The Solution
 
-MEOW Stack provides **8 primitive bead types** that compose into arbitrary workflows:
+MEOW Stack provides **6 primitive bead types** that compose into arbitrary workflows:
 
 | # | Primitive | Purpose |
 |---|-----------|---------|
-| 1 | `task` | Claude-executed work |
+| 1 | `task` | Claude-executed work (with optional validated outputs) |
 | 2 | `condition` | Branching, looping, and waiting (can block for gates) |
 | 3 | `stop` | Kill agent session |
-| 4 | `start` | Spawn agent |
-| 5 | `checkpoint` | Save for resume |
-| 6 | `resume` | Resume from checkpoint |
-| 7 | `code` | Arbitrary shell execution |
-| 8 | `expand` | Template composition |
+| 4 | `start` | Spawn agent (with optional resume from session) |
+| 5 | `code` | Arbitrary shell execution (with output capture) |
+| 6 | `expand` | Template composition |
 
-**Everything else—`refresh`, `handoff`, `call`, loops, context management, human approval gates—is template composition using these primitives.**
+**Everything else—`refresh`, `handoff`, `call`, loops, context management, human approval gates, checkpoint/resume—is template composition using these primitives.**
 
 ## Design Philosophy
 
 > **The orchestrator is dumb; the templates are smart.**
 
-The orchestrator is a simple dispatch loop that recognizes 8 bead types. All workflow complexity lives in composable TOML templates that users define and control.
+The orchestrator is a simple dispatch loop that recognizes 6 bead types. All workflow complexity lives in composable TOML templates that users define and control.
 
 - **No magic context thresholds** — Users define when to check context via `condition` beads
 - **No hardcoded call semantics** — `call` is a template: checkpoint → stop → start → expand → stop → resume
@@ -82,7 +80,7 @@ on_false:
 
 **[MVP Specification](docs/MVP-SPEC.md)** — The complete technical specification including:
 
-- All 8 primitive types with examples
+- All 6 primitive types with examples
 - Orchestrator architecture and main loop
 - Template system and composition patterns
 - Agent lifecycle management
@@ -100,7 +98,7 @@ MEOW Stack builds on:
 
 ## Philosophy
 
-> **8 primitives compose into any workflow.** Simple orchestrator, smart templates.
+> **6 primitives compose into any workflow.** Simple orchestrator, smart templates.
 
 > **Beads survive crashes.** Any agent can resume where another left off.
 
@@ -118,4 +116,4 @@ MIT
 
 ---
 
-*"It's just 8 primitives. But they compose into anything."*
+*"It's just 6 primitives. But they compose into anything."*

@@ -6,21 +6,21 @@
 #
 # Structure:
 # - 11 Epics (meow-e1 through meow-e11)
-# - 77 Tasks organized hierarchically
+# - 65 Tasks organized hierarchically
 # - Full dependency graph
 #
 # Epic Summary:
 # - E1: Foundation (7 tasks) - Project setup, types, logging, errors
 # - E2: Template System (5 tasks) - Parser, variables, validation, baking
-# - E3: Orchestrator Core (5 tasks) - Main loop, state, recovery
+# - E3: Orchestrator Core (6 tasks) - Main loop, state, recovery, graceful shutdown
 # - E4: Primitive Handlers (7 tasks) - All 6 primitives + ephemeral cleanup
-# - E5: Agent Management (4 tasks) - tmux, state, spawn, monitoring
-# - E6: Condition System (4 tasks) - Blocking, timeout, gates
+# - E5: Agent Management (5 tasks) - tmux validation, wrapper, state, spawn, monitoring
+# - E6: Condition System (5 tasks) - Blocking, timeout, gates, test-runner helper
 # - E7: Output Binding (4 tasks) - Capture, storage, resolution, validators
 # - E8: Integration (4 tasks) - Beads, hooks, recovery, worktrees
-# - E9: Default Templates (7 tasks) - work-loop, call, implement-tdd, etc.
+# - E9: Default Templates (6 tasks) - work-loop, call, implement-tdd, etc. (consolidated)
 # - E10: CLI Completion (6 tasks) - init, run, prime, close, status, debug
-# - E11: Testing (13 tasks) - Unit, integration, E2E, performance, docs
+# - E11: Testing (10 tasks) - Unit, integration, E2E (consolidated), performance, docs
 #
 # Each bead includes:
 # - Detailed acceptance criteria
@@ -781,6 +781,84 @@
     - [ ] Trace survives crash
     - [ ] meow trace command works
 
+---
+- id: meow-e3.6
+  type: task
+  title: "Implement graceful orchestrator shutdown"
+  priority: 1
+  status: open
+  parent: meow-e3
+  needs: [meow-e3.4, meow-e5.3]
+  labels: [orchestrator, shutdown, reliability]
+  description: Handle SIGTERM/SIGINT gracefully to prevent state corruption.
+  notes: |
+    ## Why This Task
+    Orchestrator can be killed (Ctrl+C, systemd stop, etc.). Without graceful
+    shutdown, we risk:
+    - Corrupted state files (mid-write)
+    - Orphaned tmux sessions
+    - In-progress beads stuck forever
+
+    ## Shutdown Flow
+    1. Receive SIGTERM or SIGINT
+    2. Cancel main loop context
+    3. Save orchestrator state immediately
+    4. For each active agent:
+       - Send graceful stop (Ctrl+C to tmux)
+       - Wait up to grace_period (configurable, default 10s)
+       - Force kill if still running
+    5. Update agent states to "stopped"
+    6. Release lock file
+    7. Exit cleanly
+
+    ## Implementation
+    ```go
+    func (o *Orchestrator) setupSignalHandling(ctx context.Context) context.Context {
+        ctx, cancel := context.WithCancel(ctx)
+
+        sigChan := make(chan os.Signal, 1)
+        signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+        go func() {
+            sig := <-sigChan
+            o.logger.Info("Received signal, shutting down gracefully",
+                "signal", sig)
+
+            // Save state first
+            if err := o.saveState(); err != nil {
+                o.logger.Error("Failed to save state during shutdown", "error", err)
+            }
+
+            // Stop all agents
+            for _, agent := range o.agentStore.ListByStatus(AgentActive) {
+                o.stopAgentGracefully(agent, o.cfg.StopGracePeriod)
+            }
+
+            // Release lock
+            o.lock.Release()
+
+            cancel()
+        }()
+
+        return ctx
+    }
+    ```
+
+    ## Config
+    ```toml
+    [orchestrator]
+    stop_grace_period = 10  # seconds to wait for agent cleanup
+    ```
+
+    ## Acceptance Criteria
+    - [ ] SIGTERM triggers graceful shutdown
+    - [ ] SIGINT (Ctrl+C) triggers graceful shutdown
+    - [ ] State is saved before agent cleanup
+    - [ ] Active agents receive stop signal
+    - [ ] Lock file is released
+    - [ ] Exit code is 0 for clean shutdown
+    - [ ] Integration test: kill -TERM during execution
+
 # =============================================================================
 # EPIC 4: PRIMITIVE HANDLERS
 # =============================================================================
@@ -1077,7 +1155,7 @@
   priority: 1
   status: open
   parent: meow-e4
-  needs: [meow-e4.4]
+  needs: [meow-e4.4, meow-e1.5]
   labels: [primitives, ephemeral]
   description: Clean up ephemeral beads after template completion.
   notes: |
@@ -1126,13 +1204,76 @@
     - Agent state reflects reality
 
 ---
+- id: meow-e5.0
+  type: task
+  title: "Validate tmux availability and version"
+  priority: 0
+  status: open
+  parent: meow-e5
+  needs: [meow-e1.7]
+  labels: [agents, validation, prerequisite]
+  description: Check tmux is installed and meets version requirements at startup.
+  notes: |
+    ## Why This Task
+    MEOW relies heavily on tmux for agent session management. If tmux is missing
+    or too old, users will get confusing errors deep in execution.
+
+    ## Validation Rules
+    - tmux must be in PATH
+    - Version >= 3.0 (required for -c workdir flag)
+    - Provide clear, actionable error if validation fails
+
+    ## Implementation
+    ```go
+    func ValidateTmux() error {
+        // Check existence
+        path, err := exec.LookPath("tmux")
+        if err != nil {
+            return &MeowError{
+                Code:    "AGENT_003",
+                Message: "tmux not found in PATH",
+                Details: map[string]any{
+                    "hint": "Install tmux: apt install tmux / brew install tmux",
+                },
+            }
+        }
+
+        // Check version
+        out, _ := exec.Command("tmux", "-V").Output()
+        version := parseTmuxVersion(string(out)) // e.g., "tmux 3.3a" -> 3.3
+        if version < 3.0 {
+            return &MeowError{
+                Code:    "AGENT_004",
+                Message: fmt.Sprintf("tmux version %v too old (need >= 3.0)", version),
+                Details: map[string]any{
+                    "current": version,
+                    "required": 3.0,
+                    "hint": "Upgrade tmux to 3.0 or later",
+                },
+            }
+        }
+
+        return nil
+    }
+    ```
+
+    ## Call Site
+    Called at orchestrator startup, before any agent operations.
+
+    ## Acceptance Criteria
+    - [ ] Detects missing tmux with helpful message
+    - [ ] Detects old tmux version with upgrade instructions
+    - [ ] Returns nil for valid tmux installation
+    - [ ] Unit test with mock exec
+
+---
 - id: meow-e5.1
   type: task
   title: "Implement tmux wrapper library"
   priority: 0
   status: open
   parent: meow-e5
-  needs: [meow-e1.2]
+  needs: [meow-e5.0, meow-e1.2]
   labels: [agents, tmux]
   description: Create a Go wrapper around tmux commands.
   notes: |
@@ -1267,6 +1408,7 @@
   priority: 1
   status: open
   parent: meow-e6
+  needs: [meow-e6.1]
   labels: [conditions, helpers]
   description: Convenience commands for common blocking patterns.
   notes: |
@@ -1288,6 +1430,91 @@
   description: Human approval unblocking via meow approve.
   notes: |
     `meow approve <bead>` creates marker that `meow wait-approve` detects.
+
+---
+- id: meow-e6.5
+  type: task
+  title: "Implement meow test-runner helper command"
+  priority: 1
+  status: open
+  parent: meow-e6
+  needs: [meow-e6.1]
+  labels: [conditions, helpers, testing]
+  description: Project-type-aware test runner for TDD workflow conditions.
+  notes: |
+    ## Why This Task
+    The implement-tdd template needs to run tests but different projects use
+    different test frameworks (npm test, go test, pytest, cargo test, etc.).
+    Hard-coding framework detection in templates is fragile.
+
+    ## Solution
+    `meow test-runner` abstracts the test command based on project detection.
+
+    ## Usage
+    ```bash
+    meow test-runner                    # Run tests, exit 0 if pass
+    meow test-runner --expect-fail      # Exit 0 if tests FAIL (for TDD)
+    meow test-runner --framework npm    # Force specific framework
+    ```
+
+    ## Project Detection
+    1. If `package.json` exists and has `scripts.test`: npm test
+    2. If `go.mod` exists: go test ./...
+    3. If `Cargo.toml` exists: cargo test
+    4. If `pytest.ini` or `setup.py` exists: pytest
+    5. If `Makefile` with `test` target: make test
+    6. Fallback: error with helpful message
+
+    ## Implementation
+    ```go
+    func (c *TestRunnerCmd) Run() error {
+        framework := c.detectFramework()
+        if framework == "" {
+            return &MeowError{
+                Code:    "TEST_001",
+                Message: "Could not detect test framework",
+                Details: map[string]any{
+                    "hint": "Use --framework to specify manually",
+                    "supported": []string{"npm", "go", "cargo", "pytest", "make"},
+                },
+            }
+        }
+
+        cmd := c.buildCommand(framework)
+        exitCode := runCommand(cmd)
+
+        if c.expectFail {
+            // For TDD: success means tests failed as expected
+            if exitCode != 0 {
+                return nil  // Tests failed = success
+            }
+            return fmt.Errorf("tests passed unexpectedly")
+        }
+
+        if exitCode != 0 {
+            return fmt.Errorf("tests failed with exit code %d", exitCode)
+        }
+        return nil
+    }
+    ```
+
+    ## Use in Templates
+    ```toml
+    # In implement-tdd.toml
+    [[steps]]
+    id = "verify-fail"
+    type = "condition"
+    condition = "meow test-runner --expect-fail"  # Clean, project-agnostic
+    ```
+
+    ## Acceptance Criteria
+    - [ ] Detects npm projects
+    - [ ] Detects Go projects
+    - [ ] Detects Cargo projects
+    - [ ] --expect-fail inverts exit code
+    - [ ] --framework overrides detection
+    - [ ] Helpful error when detection fails
+    - [ ] Unit tests for each detection path
 
 # =============================================================================
 # EPIC 7: OUTPUT BINDING & SESSION MANAGEMENT
@@ -1323,6 +1550,7 @@
   priority: 0
   status: open
   parent: meow-e7
+  needs: [meow-e5.2]
   labels: [session, cli]
   description: Command to discover and output Claude's session ID.
   notes: |
@@ -1775,19 +2003,9 @@
     Check for work → select → implement → check context → loop.
 
 ---
-- id: meow-e9.2
-  type: task
-  title: "Create implement template"
-  priority: 0
-  status: open
-  parent: meow-e9
-  labels: [templates, implement]
-  description: TDD workflow template.
-  notes: |
-    load-context → write-tests → verify-fail → implement →
-    verify-pass → review → commit
+# NOTE: implement template merged into e9.7 (implement-tdd)
+# TDD *is* the implement workflow - no separate non-TDD version needed.
 
----
 - id: meow-e9.3
   type: task
   title: "Create human-gate template"
@@ -1856,7 +2074,7 @@
   priority: 0
   status: open
   parent: meow-e9
-  needs: [meow-e7.1]
+  needs: [meow-e7.1, meow-e7.2, meow-e7.3]
   labels: [templates, call, critical]
   description: Template for spawning child agent, running workflow, resuming parent.
   notes: |
@@ -2005,7 +2223,7 @@
     [[steps]]
     id = "verify-fail"
     type = "condition"
-    condition = "! npm test 2>/dev/null || ! go test ./... 2>/dev/null"
+    condition = "meow test-runner --expect-fail"  # Project-type agnostic
     needs = ["write-tests"]
     on_true:
       inline = []  # Tests fail as expected, continue
@@ -2024,7 +2242,7 @@
     [[steps]]
     id = "verify-pass"
     type = "condition"
-    condition = "npm test 2>/dev/null || go test ./... 2>/dev/null"
+    condition = "meow test-runner"  # Project-type agnostic
     needs = ["implement"]
     on_true:
       inline = []  # Tests pass, continue
@@ -2102,6 +2320,7 @@
   priority: 0
   status: open
   parent: meow-e10
+  needs: [meow-e7.4]
   labels: [cli, prime]
   description: Show next task for agent with required outputs.
   notes: |
@@ -2286,8 +2505,7 @@
   title: "Comprehensive Testing: Unit, Integration, and E2E"
   priority: 0
   status: open
-  needs: [meow-e10]
-  labels: [epic, testing, phase-4, critical]
+  labels: [epic, testing, critical]
   description: |
     Comprehensive test coverage including unit tests, integration tests, and
     end-to-end tests with mock Claude. This epic is CRITICAL for reliability.
@@ -2300,11 +2518,22 @@
     - E2E tests simulating real workflows
     - Detailed logging for debugging test failures
 
+    ## Phased Testing Strategy
+    Testing is NOT a Phase 4 afterthought. Tests are written alongside code:
+
+    | Test Type | Phase | Dependencies |
+    |-----------|-------|--------------|
+    | Test infrastructure (e11.1) | Phase 2 | E1 (types) |
+    | Unit tests (e11.2-e11.5) | Phase 2 | Respective components |
+    | Integration tests (e11.6) | Phase 3 | Core primitives |
+    | E2E tests (e11.7) | Phase 4 | CLI + full system |
+    | Performance (e11.8) | Phase 4 | Full system |
+
     ## Test Categories
-    1. **Unit Tests**: Individual functions and types
-    2. **Integration Tests**: Component interactions
-    3. **E2E Tests**: Full workflow execution with mock Claude
-    4. **Stress Tests**: Performance under load
+    1. **Unit Tests**: Individual functions and types (write with component)
+    2. **Integration Tests**: Component interactions (write after primitives)
+    3. **E2E Tests**: Full workflow execution with mock Claude (write after CLI)
+    4. **Stress Tests**: Performance under load (final phase)
 
     ## Coverage Requirements
     - Minimum 80% line coverage
@@ -2317,7 +2546,8 @@
   priority: 0
   status: open
   parent: meow-e11
-  labels: [testing, infrastructure]
+  needs: [meow-e1.2]
+  labels: [testing, infrastructure, phase-2]
   description: Set up testing infrastructure, fixtures, and helpers.
   notes: |
     ## Test Infrastructure
@@ -2395,7 +2625,7 @@
   status: open
   parent: meow-e11
   needs: [meow-e11.1, meow-e1.2]
-  labels: [testing, unit]
+  labels: [testing, unit, phase-2]
   description: Unit tests for Bead, Agent, Config, and Template types.
   notes: |
     ## Test Files
@@ -2444,7 +2674,7 @@
   status: open
   parent: meow-e11
   needs: [meow-e11.1, meow-e2]
-  labels: [testing, unit]
+  labels: [testing, unit, phase-2]
   description: Unit tests for template parsing, validation, and baking.
   notes: |
     ## Test Files
@@ -2501,7 +2731,7 @@
   status: open
   parent: meow-e11
   needs: [meow-e11.1, meow-e4]
-  labels: [testing, unit]
+  labels: [testing, unit, phase-2]
   description: Unit tests for all 6 primitive handlers.
   notes: |
     ## Test Files
@@ -2571,7 +2801,7 @@
   status: open
   parent: meow-e11
   needs: [meow-e11.1, meow-e7]
-  labels: [testing, unit, outputs]
+  labels: [testing, unit, outputs, phase-2]
   description: Unit tests for output capture, storage, and resolution.
   notes: |
     ## Test Files
@@ -2624,7 +2854,7 @@
   status: open
   parent: meow-e11
   needs: [meow-e11.2, meow-e11.4]
-  labels: [testing, integration]
+  labels: [testing, integration, phase-3]
   description: Integration tests for orchestrator main loop and state management.
   notes: |
     ## Test Files
@@ -2784,183 +3014,66 @@
     }
     ```
 
-    ## Acceptance Criteria
-    - [ ] All E2E scenarios pass
+    ## Acceptance Criteria - Infrastructure
+    - [ ] Mock Claude script works reliably
+    - [ ] Test fixtures create valid test data
     - [ ] Tests complete in <30s each
     - [ ] Detailed logging for debugging failures
     - [ ] No real Claude API calls
     - [ ] Cleanup removes all temp files/sessions
 
----
-- id: meow-e11.8
-  type: task
-  title: "E2E test: output binding workflow"
-  priority: 0
-  status: open
-  parent: meow-e11
-  needs: [meow-e11.7]
-  labels: [testing, e2e]
-  description: E2E test verifying output binding works end-to-end.
-  notes: |
-    ## Test Scenario
-    1. Code bead creates worktree, outputs path
-    2. Start bead uses path from output
-    3. Task bead runs in worktree
-    4. Verify all steps executed correctly
+    ## Acceptance Criteria - Core Scenarios
+    Each of these scenarios must pass:
 
-    ## Template Under Test
-    ```toml
-    [[steps]]
-    id = "create-worktree"
-    type = "code"
-    code = '''
-    mkdir -p /tmp/test-worktree-$$
-    echo "/tmp/test-worktree-$$"
-    '''
-    outputs = { path = "stdout" }
+    ### Simple Workflow (simple_workflow_test.go)
+    - [ ] Linear code beads execute in order
+    - [ ] Dependencies are respected
 
-    [[steps]]
-    id = "start-worker"
-    type = "start"
-    agent = "worker"
-    workdir = "{{create-worktree.outputs.path}}"
-    needs = ["create-worktree"]
+    ### Condition Branching (condition_branching_test.go)
+    - [ ] on_true path works
+    - [ ] on_false path works
+    - [ ] Nested conditions work
 
-    [[steps]]
-    id = "verify-workdir"
-    type = "code"
-    code = 'pwd'
-    outputs = { actual_path = "stdout" }
-    needs = ["start-worker"]
-    ```
+    ### Output Binding (output_passing_test.go)
+    - [ ] Code bead captures stdout to output
+    - [ ] Start bead uses output reference for workdir
+    - [ ] Output values flow correctly between beads
 
-    ## Assertions
-    - [ ] create-worktree outputs captured
-    - [ ] start-worker uses correct path
-    - [ ] verify-workdir runs in correct directory
-    - [ ] Output values match
+    ### Task Output Validation (task_outputs_test.go)
+    - [ ] Missing required outputs are rejected
+    - [ ] Invalid bead_id outputs are rejected with helpful error
+    - [ ] Valid outputs are stored and accessible
+    - [ ] Subsequent beads can read outputs via {{bead.outputs.field}}
 
-    ## Acceptance Criteria
-    - [ ] Test passes reliably
-    - [ ] Cleanup removes temp worktree
-    - [ ] Logs show output flow
+    ### Parent/Child Orchestration (parent_child_test.go)
+    - [ ] call template spawns child correctly
+    - [ ] Parent session is saved
+    - [ ] Child completes work
+    - [ ] Parent resumes with context
 
----
-- id: meow-e11.9
-  type: task
-  title: "E2E test: task output validation"
-  priority: 0
-  status: open
-  parent: meow-e11
-  needs: [meow-e11.7]
-  labels: [testing, e2e]
-  description: E2E test verifying task output validation works.
-  notes: |
-    ## Test Scenario
-    1. Task bead requires `work_bead` output of type `bead_id`
-    2. Mock Claude attempts close without output → error
-    3. Mock Claude attempts close with invalid bead_id → error
-    4. Mock Claude attempts close with valid output → success
-    5. Next bead uses the output correctly
-
-    ## Test Implementation
-    ```go
-    func TestE2E_TaskOutputValidation(t *testing.T) {
-        mockClaude := testutil.NewMockClaude(t)
-
-        // First attempt: no output
-        mockClaude.OnTask("select-task", func(b *types.Bead) map[string]string {
-            // Try to close without output
-            err := runCommand("meow", "close", b.ID)
-            require.Error(t, err)
-            require.Contains(t, err.Error(), "missing required outputs")
-
-            // Try to close with invalid bead_id
-            err = runCommand("meow", "close", b.ID, "--output", "work_bead=bd-invalid")
-            require.Error(t, err)
-            require.Contains(t, err.Error(), "does not exist")
-
-            // Return valid output
-            return map[string]string{"work_bead": "bd-task-001"}
-        })
-
-        // Run workflow
-        result := runE2EWorkflow(t, "work-loop-with-outputs", nil)
-
-        assert.True(t, result.Completed)
-        assert.Equal(t, "bd-task-001", result.Beads["select-task"].Outputs["work_bead"])
-    }
-    ```
-
-    ## Acceptance Criteria
-    - [ ] Invalid outputs are rejected
-    - [ ] Error messages are helpful
-    - [ ] Valid outputs are stored
-    - [ ] Subsequent beads can read outputs
-
----
-- id: meow-e11.10
-  type: task
-  title: "E2E test: crash recovery"
-  priority: 0
-  status: open
-  parent: meow-e11
-  needs: [meow-e11.7]
-  labels: [testing, e2e, reliability]
-  description: E2E test verifying crash recovery works correctly.
-  notes: |
-    ## Test Scenario
-    1. Start workflow with 5 beads
-    2. After bead 2 completes, kill orchestrator
-    3. Verify state is persisted
-    4. Restart orchestrator
-    5. Verify workflow resumes from bead 3
-    6. Verify workflow completes
-
-    ## Test Implementation
-    ```go
-    func TestE2E_CrashRecovery(t *testing.T) {
-        workspace := testutil.NewTestWorkspace(t)
-        defer workspace.Cleanup()
-
-        // Start orchestrator in background
-        ctx, cancel := context.WithCancel(context.Background())
-        orch := orchestrator.New(testutil.NewTestConfig(t))
-
-        done := make(chan error)
-        go func() {
-            done <- orch.Run(ctx, beads)
-        }()
-
-        // Wait for bead 2 to complete
-        waitForBeadClosed(t, "step-2", 5*time.Second)
-
-        // Kill orchestrator
-        cancel()
-        <-done
-
-        // Verify state persisted
-        state := loadOrchestratorState(t, workspace.Path)
-        assert.Equal(t, 2, countClosedBeads(state))
-
-        // Restart orchestrator
-        ctx2 := context.Background()
-        orch2 := orchestrator.New(testutil.NewTestConfig(t))
-        err := orch2.Run(ctx2, nil) // Should load from state
-
-        require.NoError(t, err)
-        assert.Equal(t, 5, countClosedBeads(loadState()))
-    }
-    ```
-
-    ## Acceptance Criteria
-    - [ ] State survives crash
-    - [ ] Resume picks up from last state
+    ### Crash Recovery (crash_recovery_test.go)
+    - [ ] Kill orchestrator mid-workflow
+    - [ ] State is persisted to disk
+    - [ ] Restart resumes from last state
     - [ ] In-progress beads from dead agents reset
-    - [ ] Workflow completes after recovery
+    - [ ] No duplicate work done
+
+    ### Human Gate (human_gate_test.go)
+    - [ ] Blocking condition waits for approval
+    - [ ] meow approve unblocks correctly
+    - [ ] meow reject triggers on_false path
+
+    ### Ephemeral Cleanup (ephemeral_cleanup_test.go)
+    - [ ] Ephemeral beads get correct label
+    - [ ] meow clean --ephemeral removes closed ephemeral beads
+    - [ ] Non-ephemeral beads are preserved
 
 ---
-- id: meow-e11.11
+# NOTE: E2E test scenarios (output binding, task validation, crash recovery)
+# have been consolidated into e11.7 as acceptance criteria.
+# This reduces task overhead while maintaining test coverage requirements.
+
+- id: meow-e11.8
   type: task
   title: "Stress tests and performance benchmarks"
   priority: 1
@@ -3004,7 +3117,7 @@
     - [ ] Results logged for CI tracking
 
 ---
-- id: meow-e11.12
+- id: meow-e11.9
   type: task
   title: "Write user documentation"
   priority: 1
@@ -3042,7 +3155,7 @@
     - [ ] Troubleshooting covers common errors
 
 ---
-- id: meow-e11.13
+- id: meow-e11.10
   type: task
   title: "Create example workflows"
   priority: 2
