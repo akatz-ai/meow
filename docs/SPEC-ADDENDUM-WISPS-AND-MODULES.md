@@ -16,7 +16,7 @@ This document extends the MVP specification with three major enhancements:
 ## Table of Contents
 
 1. [Motivation](#motivation)
-2. [Beads Fork Note](#beads-fork-note)
+2. [Beads Integration Strategy](#beads-integration-strategy)
 3. [Three-Tier Bead Architecture](#three-tier-bead-architecture)
 4. [Module System](#module-system)
 5. [Automatic Wisp Detection](#automatic-wisp-detection)
@@ -58,55 +58,118 @@ This addendum introduces:
 
 ---
 
-## Beads Fork Note
+## Beads Integration Strategy
 
-> **Important**: MEOW Stack will maintain a **fork of the beads CLI/library** to support workflow-specific functionality.
+> **Decision**: MEOW Stack layers its workflow system **on top of upstream beads** rather than maintaining a fork. Both CLIs coexist and operate on the same data.
 
 ### Rationale
 
-The upstream `beads` project is a general-purpose issue tracking system. MEOW requires:
+After analysis, forking beads is unnecessary because:
 
-1. **New bead types** - `start`, `stop`, `condition`, `code`, `expand` as first-class `IssueType` values
-2. **Tier field** - Explicit `Tier` enum on the `Issue` struct (not computed from labels)
-3. **Workflow metadata** - `HookBead`, `SourceWorkflow`, `WorkflowID` fields
-4. **Custom statuses** - Potentially workflow-specific status values
-5. **Output storage** - `Outputs map[string]any` for bead-to-bead data flow
-6. **Type-specific specs** - `ConditionSpec`, `StartSpec`, etc. on the Issue struct
+1. **JSON is schema-flexible** - MEOW can add fields to `issues.jsonl` that upstream `bd` will ignore but preserve
+2. **ID prefix separation** - MEOW workflow beads use `meow-*` prefix, naturally separating them from work beads (`bd-*`)
+3. **CLI separation** - `meow` CLI handles workflow operations; `bd` CLI handles traditional issue tracking
+4. **Upstream beads already has key features** - `HookBead`, `Ephemeral`, `TypeGate`, labels, and rich dependency system
 
-### Fork Strategy
+### How Coexistence Works
 
 ```
-github.com/anthropics/beads           # Upstream (general issue tracking)
-github.com/meow-stack/meow-beads      # Fork (workflow orchestration)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         BEADS INTEGRATION MODEL                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  .beads/issues.jsonl  ←──────────────────────────────────────────────┐      │
+│  ┌─────────────────────────────────────────────────────────────────┐ │      │
+│  │ {"id":"bd-task-123","title":"Implement auth",...}               │ │      │
+│  │ {"id":"meow-abc.load-context","tier":"wisp","hook_bead":...}    │ │      │
+│  │ {"id":"meow-abc.write-tests","tier":"wisp",...}                 │ │      │
+│  │ {"id":"bd-task-456","title":"Fix login bug",...}                │ │      │
+│  └─────────────────────────────────────────────────────────────────┘ │      │
+│                              │                                       │      │
+│              ┌───────────────┴───────────────┐                       │      │
+│              │                               │                       │      │
+│              ▼                               ▼                       │      │
+│  ┌───────────────────────┐      ┌───────────────────────┐           │      │
+│  │     bd CLI            │      │     meow CLI          │           │      │
+│  │  (upstream beads)     │      │  (MEOW orchestrator)  │           │      │
+│  ├───────────────────────┤      ├───────────────────────┤           │      │
+│  │ • bd ready            │      │ • meow prime          │           │      │
+│  │ • bd list             │      │ • meow close          │           │      │
+│  │ • bd show             │      │ • meow run            │           │      │
+│  │ • bd create           │      │ • meow status         │           │      │
+│  │ • bd close            │      │ • meow agents         │           │      │
+│  ├───────────────────────┤      ├───────────────────────┤           │      │
+│  │ Sees: All beads       │      │ Sees: All beads       │           │      │
+│  │ Ignores: MEOW fields  │      │ Understands: Tiers,   │           │      │
+│  │ (tier, condition_spec)│      │ specs, workflows      │           │      │
+│  └───────────────────────┘      └───────────────────────┘           │      │
+│                                                                      │      │
+└──────────────────────────────────────────────────────────────────────┘      │
 ```
 
-The fork will:
-- Maintain compatibility with upstream beads file format where possible
-- Add MEOW-specific fields and types
-- Be versioned independently
-- Potentially contribute general improvements back upstream
+### ID Prefix Convention
 
-### Fields to Add to Issue Struct
+| Prefix | Source | Visible in `bd ready` | Visible in `meow prime` |
+|--------|--------|----------------------|------------------------|
+| `bd-*` | Traditional beads (`bd create`) | Yes | No (unless selected as work bead) |
+| `meow-*` | MEOW workflows | No (filtered by prefix) | Yes (wisps and orchestrator beads) |
 
-```go
-type Issue struct {
-    // Existing beads fields...
+This natural separation means:
+- `bd ready` shows work beads for humans to select
+- `meow prime` shows workflow steps for agents to execute
+- No special filtering logic needed in upstream beads
 
-    // MEOW additions:
-    Tier          BeadTier          `json:"tier"`                     // work | wisp | orchestrator
-    HookBead      string            `json:"hook_bead,omitempty"`      // Work bead this wisp implements
-    SourceWorkflow string           `json:"source_workflow,omitempty"` // Workflow that created this
-    WorkflowID    string            `json:"workflow_id,omitempty"`    // Unique workflow instance ID
-    Outputs       map[string]any    `json:"outputs,omitempty"`        // Captured outputs
+### MEOW-Specific Fields
 
-    // Type-specific specs (only one set based on IssueType)
-    ConditionSpec *ConditionSpec    `json:"condition_spec,omitempty"`
-    StartSpec     *StartSpec        `json:"start_spec,omitempty"`
-    StopSpec      *StopSpec         `json:"stop_spec,omitempty"`
-    CodeSpec      *CodeSpec         `json:"code_spec,omitempty"`
-    ExpandSpec    *ExpandSpec       `json:"expand_spec,omitempty"`
+MEOW extends the JSON schema with fields that upstream `bd` ignores:
+
+```json
+{
+  "id": "meow-abc123.load-context",
+  "title": "Load context for bd-task-456",
+  "status": "open",
+
+  // MEOW-specific fields (ignored by upstream bd, used by meow CLI)
+  "tier": "wisp",
+  "hook_bead": "bd-task-456",
+  "source_workflow": "implement-tdd",
+  "workflow_id": "meow-abc123",
+  "condition_spec": null,
+  "start_spec": null,
+  "code_spec": null,
+  "outputs": {}
 }
 ```
+
+### What Each CLI Handles
+
+| Operation | Use `bd` | Use `meow` |
+|-----------|----------|------------|
+| Create work beads | `bd create --title "..."` | - |
+| View work backlog | `bd ready`, `bv --robot-triage` | - |
+| Run workflow on work bead | - | `meow run implement-tdd --work-bead bd-123` |
+| See current workflow step | - | `meow prime` |
+| Close workflow step | - | `meow close meow-abc.step-1` |
+| Close work bead | `bd close bd-123` | (or via workflow's final step) |
+| View all beads | `bd list` | `meow status --all` |
+| Sync to git | `bd sync` | (uses same mechanism) |
+
+### Benefits of This Approach
+
+1. **No fork maintenance** - Upstream beads improvements come for free
+2. **Clear separation of concerns** - `bd` for issue tracking, `meow` for workflow orchestration
+3. **Gradual adoption** - Teams can use beads without MEOW, then add MEOW later
+4. **Data integrity** - Both CLIs preserve each other's fields
+5. **Simpler architecture** - MEOW defines its own types internally, no import conflicts
+
+### Future Considerations
+
+If deep integration is ever needed (e.g., `bd list --tier=wisp`), options include:
+- Contributing tier-awareness to upstream beads as an optional feature
+- Creating a `bd-meow` plugin for beads
+- At that point, reconsidering a fork
+
+For now, the overlay approach provides all necessary functionality with minimal complexity.
 
 ---
 
@@ -1220,26 +1283,34 @@ func ContinueWorkflow(ctx context.Context, store Store, workflowID string) error
 
 ## Implementation Details
 
-### Schema Changes (Beads Fork)
+### Schema: MEOW Bead Type (Internal)
 
-Add to the Issue struct:
+MEOW defines its own `Bead` struct in `internal/types/bead.go`. This is **not** a fork of beads—it's MEOW's internal representation that gets serialized to the shared `issues.jsonl` file.
 
 ```go
-type Issue struct {
-    // Existing fields...
+// internal/types/bead.go - MEOW's internal type
+type Bead struct {
+    // Core fields (compatible with upstream beads)
+    ID          string     `json:"id"`
+    Title       string     `json:"title"`
+    Description string     `json:"description,omitempty"`
+    Status      BeadStatus `json:"status"`
+    Assignee    string     `json:"assignee,omitempty"`
+    Labels      []string   `json:"labels,omitempty"`
+    Notes       string     `json:"notes,omitempty"`
+    CreatedAt   time.Time  `json:"created_at"`
+    ClosedAt    *time.Time `json:"closed_at,omitempty"`
 
-    // Tier (explicit, not computed)
-    Tier BeadTier `json:"tier"`
+    // MEOW-specific fields (ignored by upstream bd, used by meow CLI)
+    Type        BeadType   `json:"type"`                        // task | condition | start | stop | code | expand
+    Tier        BeadTier   `json:"tier,omitempty"`              // work | wisp | orchestrator
+    HookBead    string     `json:"hook_bead,omitempty"`         // Work bead this wisp implements
+    SourceWorkflow string  `json:"source_workflow,omitempty"`   // Workflow that created this
+    WorkflowID  string     `json:"workflow_id,omitempty"`       // Unique workflow instance ID
+    Needs       []string   `json:"needs,omitempty"`             // Dependency bead IDs
+    Outputs     map[string]any `json:"outputs,omitempty"`       // Captured outputs
 
-    // Workflow tracking
-    HookBead       string `json:"hook_bead,omitempty"`
-    SourceWorkflow string `json:"source_workflow,omitempty"`
-    WorkflowID     string `json:"workflow_id,omitempty"`
-
-    // Output capture
-    Outputs map[string]any `json:"outputs,omitempty"`
-
-    // Type-specific specs
+    // Type-specific specs (only one set based on Type)
     ConditionSpec *ConditionSpec `json:"condition_spec,omitempty"`
     StartSpec     *StartSpec     `json:"start_spec,omitempty"`
     StopSpec      *StopSpec      `json:"stop_spec,omitempty"`
@@ -1247,6 +1318,13 @@ type Issue struct {
     ExpandSpec    *ExpandSpec    `json:"expand_spec,omitempty"`
 }
 ```
+
+**Key insight**: When MEOW writes beads to `issues.jsonl`, upstream `bd` will:
+- Read and display the common fields (`id`, `title`, `status`, etc.)
+- Preserve but ignore MEOW-specific fields (`tier`, `condition_spec`, etc.)
+- Continue working normally for issue tracking
+
+This is JSON's schema flexibility in action—no fork required.
 
 ### Step Struct (Template Parser)
 
@@ -1476,7 +1554,11 @@ This addendum introduces:
 
 6. **Collaborative type** - Enables human-in-the-loop conversation by pausing auto-continuation
 
-7. **Beads fork** - MEOW maintains its own fork of beads with workflow-specific fields
+7. **Beads overlay (no fork)** - MEOW layers on top of upstream beads using:
+   - Internal `Bead` type with MEOW-specific fields
+   - Shared `issues.jsonl` file (JSON schema flexibility)
+   - ID prefix separation (`meow-*` vs `bd-*`)
+   - CLI separation (`meow` for workflows, `bd` for issue tracking)
 
 8. **Crash recovery** - All beads durable, `meow continue` reconstructs state
 
@@ -1488,4 +1570,4 @@ This addendum introduces:
 | `collaborative` | Required | No | Agent | Design review, clarification, debugging |
 | `gate` | None | No | Human | Approval checkpoints |
 
-The key insight: **All beads live in the same store for durability, with tier as an explicit field for fast filtering.** This gives us the best of both worlds - trivial crash recovery AND clean separation of concerns.
+The key insight: **All beads live in the same store for durability, with tier as an explicit field for fast filtering.** MEOW and upstream beads coexist peacefully—no fork required, both CLIs preserve each other's data.
