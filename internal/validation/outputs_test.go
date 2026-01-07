@@ -3,6 +3,7 @@ package validation
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -386,7 +387,7 @@ func TestFormatUsage(t *testing.T) {
 }
 
 func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && (s[0:len(substr)] == substr || containsSubstring(s[1:], substr)))
+	return strings.Contains(s, substr)
 }
 
 func TestOutputValidationError_Error(t *testing.T) {

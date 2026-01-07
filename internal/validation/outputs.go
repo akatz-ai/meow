@@ -168,7 +168,11 @@ func validateAndConvert(name, value string, outputType types.TaskOutputType, bea
 		return obj, nil
 
 	case types.TaskOutputTypeBeadID:
-		if beadChecker == nil || !beadChecker.BeadExists(value) {
+		if beadChecker == nil {
+			// No checker provided - skip validation but accept the value
+			return value, nil
+		}
+		if !beadChecker.BeadExists(value) {
 			return nil, fmt.Errorf("bead not found: %s", value)
 		}
 		return value, nil
@@ -184,8 +188,13 @@ func validateAndConvert(name, value string, outputType types.TaskOutputType, bea
 		}
 		for i := range ids {
 			ids[i] = strings.TrimSpace(ids[i])
-			if beadChecker == nil || !beadChecker.BeadExists(ids[i]) {
-				return nil, fmt.Errorf("bead not found: %s", ids[i])
+		}
+		// Validate each bead ID if checker is available
+		if beadChecker != nil {
+			for _, id := range ids {
+				if !beadChecker.BeadExists(id) {
+					return nil, fmt.Errorf("bead not found: %s", id)
+				}
 			}
 		}
 		return ids, nil

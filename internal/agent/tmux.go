@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -140,8 +139,8 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 	}
 
 	if spec.Graceful {
-		// Try graceful shutdown first: send Ctrl-C
-		_ = m.sendKeys(ctx, sessionName, "C-c")
+		// Try graceful shutdown first: send Ctrl-C (without Enter)
+		_ = m.sendKeysRaw(ctx, sessionName, "C-c", false)
 
 		// Wait for graceful shutdown
 		timeout := spec.Timeout
@@ -292,13 +291,26 @@ func (m *TmuxManager) SyncWithTmux() error {
 
 // sessionExists checks if a tmux session exists.
 func (m *TmuxManager) sessionExists(sessionName string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", sessionName)
+	// Use a short timeout to avoid hanging if tmux is unresponsive
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", sessionName)
 	return cmd.Run() == nil
 }
 
-// sendKeys sends keystrokes to a tmux session.
+// sendKeys sends keystrokes to a tmux session, followed by Enter.
 func (m *TmuxManager) sendKeys(ctx context.Context, sessionName, keys string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", sessionName, keys, "Enter")
+	return m.sendKeysRaw(ctx, sessionName, keys, true)
+}
+
+// sendKeysRaw sends keystrokes to a tmux session.
+// If pressEnter is true, "Enter" is sent after the keys.
+func (m *TmuxManager) sendKeysRaw(ctx context.Context, sessionName, keys string, pressEnter bool) error {
+	args := []string{"send-keys", "-t", sessionName, keys}
+	if pressEnter {
+		args = append(args, "Enter")
+	}
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("send-keys: %w: %s", err, output)
@@ -308,17 +320,27 @@ func (m *TmuxManager) sendKeys(ctx context.Context, sessionName, keys string) er
 
 // listMeowSessions returns all tmux sessions with the meow- prefix.
 func (m *TmuxManager) listMeowSessions() ([]string, error) {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
-	var stdout bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		// No sessions is not an error
-		if strings.Contains(err.Error(), "no server running") {
+		// Check stderr for "no server running" - this is normal when tmux isn't started
+		stderrStr := stderr.String()
+		if strings.Contains(stderrStr, "no server running") ||
+			strings.Contains(stderrStr, "no current session") {
 			return nil, nil
 		}
-		return nil, err
+		// Also handle case where tmux command simply fails with exit code
+		// (e.g., no sessions exist but server is running)
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing tmux sessions: %w: %s", err, stderrStr)
 	}
 
 	var sessions []string
