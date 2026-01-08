@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/agent"
+	"github.com/meow-stack/meow-machine/internal/config"
+	"github.com/meow-stack/meow-machine/internal/executor"
+	"github.com/meow-stack/meow-machine/internal/logging"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/template"
 	"github.com/spf13/cobra"
@@ -137,7 +143,72 @@ func runRun(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s [%s] %s\n", bead.ID, bead.Type, bead.Title)
 		}
 	}
-	fmt.Println("\nRun 'meow prime' to see your first task.")
 
+	// Start the orchestrator to process the beads
+	fmt.Println("\nStarting orchestrator...")
+
+	// Load configuration
+	cfg, err := config.LoadFromDir(dir)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	// Create logger
+	logger, logCloser, err := logging.NewFromConfig(cfg, dir)
+	if err != nil {
+		// Fall back to default logger
+		logger = logging.NewDefault()
+	}
+	if logCloser != nil {
+		defer logCloser.Close()
+	}
+
+	// Create agent manager
+	agentMgr := agent.NewTmuxManager()
+
+	// Create template expander
+	expander := orchestrator.NewFileTemplateExpander(dir, store)
+
+	// Create code executor
+	codeExec := executor.NewShellExecutor()
+
+	// Create orchestrator
+	orch := orchestrator.New(cfg, store, agentMgr, expander, codeExec, logger)
+
+	// Start or resume orchestrator
+	stateDir := filepath.Join(dir, ".meow", "state")
+	startCfg := &orchestrator.StartupConfig{
+		WorkflowID: result.WorkflowID,
+		StateDir:   stateDir,
+	}
+	if err := orch.StartOrResume(ctx, startCfg); err != nil {
+		return fmt.Errorf("starting orchestrator: %w", err)
+	}
+	defer orch.ReleaseLock()
+
+	// Set up signal handling for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create a context that cancels on signal
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		sig := <-sigCh
+		fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+		cancel()
+	}()
+
+	// Run the orchestrator loop
+	if err := orch.Run(runCtx); err != nil {
+		if err == context.Canceled {
+			fmt.Println("Orchestrator stopped.")
+			return nil
+		}
+		return fmt.Errorf("orchestrator error: %w", err)
+	}
+
+	fmt.Println("Workflow completed successfully.")
 	return nil
 }
