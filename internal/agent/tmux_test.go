@@ -80,6 +80,33 @@ func TestValidateTmux_VersionTooOld(t *testing.T) {
 	}
 }
 
+func TestValidateTmux_MultiDigitMinorTooOld(t *testing.T) {
+	// Verify that version 2.10 is correctly identified as < 3.0
+	// This tests the fix for the divisor bug
+	runner := &mockCommandRunner{
+		lookPathResult: "/usr/bin/tmux",
+		outputResult:   []byte("tmux 2.10\n"),
+	}
+
+	err := ValidateTmuxWithRunner(runner)
+	if err == nil {
+		t.Fatal("ValidateTmux should fail for tmux 2.10 (< 3.0)")
+	}
+
+	if !errors.HasCode(err, errors.CodeAgentTmuxTooOld) {
+		t.Errorf("Expected error code %s, got %s", errors.CodeAgentTmuxTooOld, errors.Code(err))
+	}
+
+	meowErr, ok := err.(*errors.MeowError)
+	if !ok {
+		t.Fatal("Expected *errors.MeowError")
+	}
+	// 2.10 should be parsed as 2.10, not 3.0
+	if meowErr.Details["current"] != 2.10 {
+		t.Errorf("Expected current version 2.10, got %v", meowErr.Details["current"])
+	}
+}
+
 func TestValidateTmux_VersionOK(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -140,6 +167,10 @@ func TestParseTmuxVersion(t *testing.T) {
 		{"", 0},
 		{"tmux", 0},
 		{"3.3a", 3.3},
+		// Multi-digit minor versions (hypothetical but should work correctly)
+		{"tmux 2.10", 2.10},
+		{"tmux 3.10", 3.10},
+		{"tmux 3.99", 3.99},
 	}
 
 	for _, tt := range tests {

@@ -86,7 +86,16 @@ func parseTmuxVersion(output string) float64 {
 	major, _ := strconv.Atoi(match[1])
 	minor, _ := strconv.Atoi(match[2])
 
-	return float64(major) + float64(minor)/10.0
+	// Calculate divisor based on number of digits in minor version
+	// This handles multi-digit minor versions correctly:
+	// "3.3" -> 3 + 3/10 = 3.3
+	// "3.10" -> 3 + 10/100 = 3.10
+	divisor := 1.0
+	for i := 0; i < len(match[2]); i++ {
+		divisor *= 10
+	}
+
+	return float64(major) + float64(minor)/divisor
 }
 
 // TmuxManager manages Claude agents via tmux sessions.
