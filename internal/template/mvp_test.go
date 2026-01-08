@@ -325,3 +325,293 @@ title = "Human approval"
 		t.Errorf("gate bead should be orchestrator tier, got %s", gateBead.Tier)
 	}
 }
+
+func TestModule_DefaultWorkflow(t *testing.T) {
+	moduleToml := `
+[main]
+name = "work-loop"
+
+[[main.steps]]
+id = "step-1"
+type = "task"
+
+[other]
+name = "other-workflow"
+
+[[other.steps]]
+id = "step-1"
+type = "task"
+`
+	module, err := ParseModuleString(moduleToml, "test.meow.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	// DefaultWorkflow returns "main"
+	main := module.DefaultWorkflow()
+	if main == nil {
+		t.Fatal("expected DefaultWorkflow to return main")
+	}
+	if main.Name != "work-loop" {
+		t.Errorf("expected main workflow name, got %q", main.Name)
+	}
+}
+
+func TestWorkflow_IsInternal(t *testing.T) {
+	moduleToml := `
+[internal-workflow]
+name = "internal"
+internal = true
+
+[[internal-workflow.steps]]
+id = "step-1"
+type = "task"
+
+[public-workflow]
+name = "public"
+internal = false
+
+[[public-workflow.steps]]
+id = "step-1"
+type = "task"
+`
+	module, err := ParseModuleString(moduleToml, "test.meow.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	internal := module.GetWorkflow("internal-workflow")
+	if !internal.IsInternal() {
+		t.Error("expected internal-workflow to be internal")
+	}
+
+	public := module.GetWorkflow("public-workflow")
+	if public.IsInternal() {
+		t.Error("expected public-workflow to not be internal")
+	}
+}
+
+func TestDetectFormat(t *testing.T) {
+	legacy := `
+[meta]
+name = "test"
+version = "1.0.0"
+
+[[steps]]
+id = "step-1"
+`
+	if DetectFormat(legacy) != FormatLegacy {
+		t.Error("expected FormatLegacy for [meta] content")
+	}
+
+	module := `
+[main]
+name = "work-loop"
+
+[[main.steps]]
+id = "step-1"
+`
+	if DetectFormat(module) != FormatModule {
+		t.Error("expected FormatModule for non-[meta] content")
+	}
+}
+
+func TestParseModuleString_Errors(t *testing.T) {
+	// Invalid TOML
+	_, err := ParseModuleString("{{invalid toml", "test.toml")
+	if err == nil {
+		t.Fatal("expected error for invalid TOML")
+	}
+
+	// No workflows
+	_, err = ParseModuleString("", "test.toml")
+	if err == nil {
+		t.Fatal("expected error for empty module")
+	}
+
+	// Workflow validation error - missing steps
+	_, err = ParseModuleString(`
+[main]
+name = "test"
+`, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for workflow with no steps")
+	}
+}
+
+func TestWorkflow_Validate_Errors(t *testing.T) {
+	// Duplicate step ID
+	_, err := ParseModuleString(`
+[main]
+name = "test"
+
+[[main.steps]]
+id = "step-1"
+type = "task"
+
+[[main.steps]]
+id = "step-1"
+type = "task"
+`, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for duplicate step ID")
+	}
+
+	// Unknown dependency
+	_, err = ParseModuleString(`
+[main]
+name = "test"
+
+[[main.steps]]
+id = "step-1"
+type = "task"
+needs = ["nonexistent"]
+`, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for unknown dependency")
+	}
+
+	// Invalid step type
+	_, err = ParseModuleString(`
+[main]
+name = "test"
+
+[[main.steps]]
+id = "step-1"
+type = "invalid-type"
+`, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for invalid step type")
+	}
+}
+
+func TestParseModuleString_StepMissingID(t *testing.T) {
+	_, err := ParseModuleString(`
+[main]
+name = "test"
+
+[[main.steps]]
+type = "task"
+`, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for step missing ID")
+	}
+}
+
+func TestParseModuleString_AllStepFields(t *testing.T) {
+	moduleToml := `
+[main]
+name = "test"
+
+[[main.steps]]
+id = "full-step"
+type = "condition"
+title = "Check something"
+description = "Description here"
+instructions = "Instructions here"
+assignee = "claude-1"
+condition = "test -f /tmp/ready"
+code = "echo hello"
+timeout = "5m"
+template = "child-template"
+ephemeral = true
+needs = ["other"]
+variables = { key = "value" }
+
+[[main.steps]]
+id = "other"
+type = "task"
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	step := main.Steps[0]
+
+	if step.Title != "Check something" {
+		t.Errorf("expected title, got %q", step.Title)
+	}
+	if step.Description != "Description here" {
+		t.Errorf("expected description, got %q", step.Description)
+	}
+	if step.Instructions != "Instructions here" {
+		t.Errorf("expected instructions, got %q", step.Instructions)
+	}
+	if step.Assignee != "claude-1" {
+		t.Errorf("expected assignee, got %q", step.Assignee)
+	}
+	if step.Condition != "test -f /tmp/ready" {
+		t.Errorf("expected condition, got %q", step.Condition)
+	}
+	if step.Code != "echo hello" {
+		t.Errorf("expected code, got %q", step.Code)
+	}
+	if step.Timeout != "5m" {
+		t.Errorf("expected timeout, got %q", step.Timeout)
+	}
+	if step.Template != "child-template" {
+		t.Errorf("expected template, got %q", step.Template)
+	}
+	if !step.Ephemeral {
+		t.Error("expected ephemeral to be true")
+	}
+	if len(step.Needs) != 1 || step.Needs[0] != "other" {
+		t.Errorf("expected needs ['other'], got %v", step.Needs)
+	}
+	if step.Variables["key"] != "value" {
+		t.Errorf("expected variables, got %v", step.Variables)
+	}
+}
+
+func TestParseModuleString_WorkflowAllFields(t *testing.T) {
+	moduleToml := `
+[main]
+name = "full-workflow"
+description = "A complete workflow"
+ephemeral = true
+internal = true
+hooks_to = "parent_bead"
+
+[main.variables]
+task_id = { required = true, type = "string", description = "Task ID", default = "default-id" }
+
+[[main.steps]]
+id = "step-1"
+type = "task"
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	if main.Description != "A complete workflow" {
+		t.Errorf("expected description, got %q", main.Description)
+	}
+	if !main.Ephemeral {
+		t.Error("expected ephemeral to be true")
+	}
+	if !main.Internal {
+		t.Error("expected internal to be true")
+	}
+	if main.HooksTo != "parent_bead" {
+		t.Errorf("expected hooks_to, got %q", main.HooksTo)
+	}
+
+	// Check variable parsing
+	v := main.Variables["task_id"]
+	if v == nil {
+		t.Fatal("expected variable task_id")
+	}
+	if !v.Required {
+		t.Error("expected required to be true")
+	}
+	if v.Description != "Task ID" {
+		t.Errorf("expected description, got %q", v.Description)
+	}
+	if v.Default != "default-id" {
+		t.Errorf("expected default, got %v", v.Default)
+	}
+}

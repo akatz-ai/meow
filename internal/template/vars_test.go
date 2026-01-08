@@ -377,3 +377,376 @@ func TestVarContext_StringMapVariable(t *testing.T) {
 		t.Errorf("expected substitution, got %q", result)
 	}
 }
+
+func TestVarContext_Get(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("name", "world")
+	ctx.SetVariable("count", 42)
+
+	if ctx.Get("name") != "world" {
+		t.Errorf("expected 'world', got %q", ctx.Get("name"))
+	}
+	if ctx.Get("count") != "42" {
+		t.Errorf("expected '42', got %q", ctx.Get("count"))
+	}
+	// Missing variable returns empty string
+	if ctx.Get("missing") != "" {
+		t.Errorf("expected empty string for missing, got %q", ctx.Get("missing"))
+	}
+}
+
+func TestVarContext_EmptyPath(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Empty braces don't match the pattern, so they pass through unchanged
+	result, err := ctx.Substitute("{{}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "{{}}" {
+		t.Errorf("expected unchanged '{{}}', got %q", result)
+	}
+}
+
+func TestVarContext_NestedOutputAccess(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetOutputs("my-bead", map[string]any{
+		"result": map[string]any{
+			"nested": map[string]any{
+				"value": "deep",
+			},
+		},
+	})
+
+	result, err := ctx.Substitute("{{my-bead.outputs.result.nested.value}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "deep" {
+		t.Errorf("expected 'deep', got %q", result)
+	}
+}
+
+func TestVarContext_AccessFieldOnNonMap(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("scalar", "just-a-string")
+
+	_, err := ctx.Substitute("{{scalar.field}}")
+	if err == nil {
+		t.Fatal("expected error for accessing field on scalar")
+	}
+	if !strings.Contains(err.Error(), "cannot access") {
+		t.Errorf("expected 'cannot access' error, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteMap_Error(t *testing.T) {
+	ctx := NewVarContext()
+
+	m := map[string]string{
+		"url": "http://{{undefined}}/api",
+	}
+
+	_, err := ctx.SubstituteMap(m)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("expected undefined error, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_Validation(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("check", "test -f /tmp/ready")
+
+	step := &Step{
+		ID:         "test-step",
+		Validation: "{{check}}",
+	}
+
+	result, err := ctx.SubstituteStep(step)
+	if err != nil {
+		t.Fatalf("SubstituteStep failed: %v", err)
+	}
+
+	if result.Validation != "test -f /tmp/ready" {
+		t.Errorf("expected validation substitution, got %q", result.Validation)
+	}
+}
+
+func TestVarContext_SubstituteStep_Timeout(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("duration", "10m")
+
+	step := &Step{
+		ID:      "test-step",
+		Timeout: "{{duration}}",
+	}
+
+	result, err := ctx.SubstituteStep(step)
+	if err != nil {
+		t.Fatalf("SubstituteStep failed: %v", err)
+	}
+
+	if result.Timeout != "10m" {
+		t.Errorf("expected timeout substitution, got %q", result.Timeout)
+	}
+}
+
+func TestVarContext_SubstituteStep_OnTimeout(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("handler", "timeout-handler")
+	ctx.SetVariable("reason", "timed out")
+
+	step := &Step{
+		ID: "test-step",
+		OnTimeout: &ExpansionTarget{
+			Template: "{{handler}}",
+			Variables: map[string]string{
+				"msg": "{{reason}}",
+			},
+		},
+	}
+
+	result, err := ctx.SubstituteStep(step)
+	if err != nil {
+		t.Fatalf("SubstituteStep failed: %v", err)
+	}
+
+	if result.OnTimeout == nil {
+		t.Fatal("expected OnTimeout")
+	}
+	if result.OnTimeout.Template != "timeout-handler" {
+		t.Errorf("expected timeout template substitution, got %q", result.OnTimeout.Template)
+	}
+	if result.OnTimeout.Variables["msg"] != "timed out" {
+		t.Errorf("expected timeout variable substitution, got %q", result.OnTimeout.Variables["msg"])
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInDescription(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:          "test-step",
+		Description: "Working on {{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "description") {
+		t.Errorf("expected error about description, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInInstructions(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:           "test-step",
+		Instructions: "Do {{undefined}} work",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "instructions") {
+		t.Errorf("expected error about instructions, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInCondition(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:        "test-step",
+		Condition: "{{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "condition") {
+		t.Errorf("expected error about condition, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInTemplate(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:       "test-step",
+		Template: "{{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "template") {
+		t.Errorf("expected error about template, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInValidation(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:         "test-step",
+		Validation: "{{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "validation") {
+		t.Errorf("expected error about validation, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInTimeout(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:      "test-step",
+		Timeout: "{{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected error about timeout, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInVariables(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID: "test-step",
+		Variables: map[string]string{
+			"key": "{{undefined}}",
+		},
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "variables") {
+		t.Errorf("expected error about variables, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInOnTrue(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID: "test-step",
+		OnTrue: &ExpansionTarget{
+			Template: "{{undefined}}",
+		},
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "on_true") {
+		t.Errorf("expected error about on_true, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInOnFalse(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID: "test-step",
+		OnFalse: &ExpansionTarget{
+			Template: "{{undefined}}",
+		},
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "on_false") {
+		t.Errorf("expected error about on_false, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInOnTimeout(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID: "test-step",
+		OnTimeout: &ExpansionTarget{
+			Template: "{{undefined}}",
+		},
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "on_timeout") {
+		t.Errorf("expected error about on_timeout, got: %v", err)
+	}
+}
+
+func TestVarContext_MaxDepthRecursion(t *testing.T) {
+	ctx := NewVarContext()
+	// Create a long chain that stays within depth
+	ctx.SetVariable("a", "{{b}}")
+	ctx.SetVariable("b", "{{c}}")
+	ctx.SetVariable("c", "{{d}}")
+	ctx.SetVariable("d", "{{e}}")
+	ctx.SetVariable("e", "final")
+
+	result, err := ctx.Substitute("{{a}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "final" {
+		t.Errorf("expected 'final', got %q", result)
+	}
+}
+
+func TestVarContext_NonStringOutput(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetOutputs("my-bead", map[string]any{
+		"count": 42,
+		"valid": true,
+	})
+
+	result, err := ctx.Substitute("Count: {{my-bead.outputs.count}}, Valid: {{my-bead.outputs.valid}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "Count: 42, Valid: true" {
+		t.Errorf("expected formatted output, got %q", result)
+	}
+}
+
+func TestVarContext_OutputAccessOnNonMap(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetOutput("my-bead", "scalar", "just-a-string")
+
+	// Try to access a field on the scalar value
+	_, err := ctx.Substitute("{{my-bead.outputs.scalar.field}}")
+	if err == nil {
+		t.Fatal("expected error for accessing field on non-map output")
+	}
+	if !strings.Contains(err.Error(), "cannot access") {
+		t.Errorf("expected 'cannot access' error, got: %v", err)
+	}
+}

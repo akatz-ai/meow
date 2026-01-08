@@ -369,3 +369,158 @@ func containsError(result *ValidationResult, substr string) bool {
 	}
 	return false
 }
+
+func TestValidateFull_InvalidMetaType(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test", Type: "invalid-type"},
+		Steps: []Step{{ID: "step-1"}},
+	}
+
+	result := ValidateFull(tmpl)
+	if !containsError(result, "invalid type") {
+		t.Errorf("expected type error, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_ValidMetaType(t *testing.T) {
+	for _, typ := range []string{"loop", "linear"} {
+		tmpl := &Template{
+			Meta:  Meta{Name: "test", Type: typ},
+			Steps: []Step{{ID: "step-1"}},
+		}
+
+		result := ValidateFull(tmpl)
+		if containsError(result, "type") {
+			t.Errorf("expected no type error for %q, got: %v", typ, result.Error())
+		}
+	}
+}
+
+func TestValidateFull_OnTimeoutVariables(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Variables: map[string]Var{
+			"handler": {},
+		},
+		Steps: []Step{
+			{
+				ID:        "check",
+				Condition: "test -f /tmp/ready",
+				OnTrue:    &ExpansionTarget{Template: "proceed"},
+				OnTimeout: &ExpansionTarget{
+					Template: "{{handler}}",
+					Variables: map[string]string{
+						"x": "{{undefined}}",
+					},
+				},
+			},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if !containsError(result, "undefined") {
+		t.Errorf("expected undefined variable error in on_timeout.variables, got: %v", result.Error())
+	}
+}
+
+func TestValidationResult_NoErrors(t *testing.T) {
+	result := &ValidationResult{}
+	if result.HasErrors() {
+		t.Error("expected no errors")
+	}
+	if result.Error() != "" {
+		t.Errorf("expected empty error string, got %q", result.Error())
+	}
+}
+
+func TestValidationResult_Add(t *testing.T) {
+	result := &ValidationResult{}
+	result.Add("tmpl", "step-1", "field", "error message", "suggestion")
+
+	if !result.HasErrors() {
+		t.Error("expected errors")
+	}
+	if len(result.Errors) != 1 {
+		t.Errorf("expected 1 error, got %d", len(result.Errors))
+	}
+
+	err := result.Errors[0]
+	if err.Template != "tmpl" {
+		t.Errorf("expected template 'tmpl', got %q", err.Template)
+	}
+	if err.StepID != "step-1" {
+		t.Errorf("expected step 'step-1', got %q", err.StepID)
+	}
+	if err.Field != "field" {
+		t.Errorf("expected field 'field', got %q", err.Field)
+	}
+	if err.Message != "error message" {
+		t.Errorf("expected message, got %q", err.Message)
+	}
+	if err.Suggest != "suggestion" {
+		t.Errorf("expected suggestion, got %q", err.Suggest)
+	}
+}
+
+func TestValidationError_NoLocation(t *testing.T) {
+	err := ValidationError{
+		Message: "plain error",
+	}
+	s := err.Error()
+	if s != "plain error" {
+		t.Errorf("expected plain error, got %q", s)
+	}
+}
+
+func TestValidateFull_VariableInOnTimeoutTemplate(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Variables: map[string]Var{
+			"handler": {},
+		},
+		Steps: []Step{
+			{
+				ID:        "check",
+				Condition: "test -f /tmp/ready",
+				OnTrue:    &ExpansionTarget{Template: "proceed"},
+				OnTimeout: &ExpansionTarget{
+					Template: "{{handler}}",
+				},
+			},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	// handler is defined, so no error expected for that
+	if containsError(result, "handler") {
+		t.Errorf("expected no error for defined handler variable, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_StepTypeInvalid(t *testing.T) {
+	// Note: In legacy format, only blocking-gate and restart are valid types
+	// Other types are valid in module format
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Steps: []Step{
+			{ID: "step-1", Type: "unknown-type"},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if !containsError(result, "invalid step type") {
+		t.Errorf("expected invalid step type error, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_EmptyStepID(t *testing.T) {
+	tmpl := &Template{
+		Meta:  Meta{Name: "test"},
+		Steps: []Step{{ID: "", Description: "Missing ID"}},
+	}
+
+	result := ValidateFull(tmpl)
+	if !containsError(result, "id is required") {
+		t.Errorf("expected ID required error, got: %v", result.Error())
+	}
+}

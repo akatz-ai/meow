@@ -559,3 +559,421 @@ func TestBaker_ConditionWithInlineSteps(t *testing.T) {
 		t.Errorf("expected 1 inline step, got %d", len(bead.ConditionSpec.OnTrue.Inline))
 	}
 }
+
+// Tests for BakeWorkflow with code/start/stop step types
+func TestBaker_BakeWorkflow_CodeStep(t *testing.T) {
+	workflow := &Workflow{
+		Name: "code-test",
+		Steps: []*Step{
+			{
+				ID:   "run-code",
+				Type: "code",
+				Code: "echo 'hello world'",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-code-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(result.Beads))
+	}
+
+	bead := result.Beads[0]
+	if bead.Type != types.BeadTypeCode {
+		t.Errorf("expected code type, got %s", bead.Type)
+	}
+	if bead.CodeSpec == nil {
+		t.Fatal("expected CodeSpec")
+	}
+	if bead.CodeSpec.Code != "echo 'hello world'" {
+		t.Errorf("expected code, got %q", bead.CodeSpec.Code)
+	}
+	if bead.Tier != types.TierOrchestrator {
+		t.Errorf("expected orchestrator tier for code, got %s", bead.Tier)
+	}
+}
+
+func TestBaker_BakeWorkflow_StartStopSteps(t *testing.T) {
+	workflow := &Workflow{
+		Name: "agent-control",
+		Steps: []*Step{
+			{
+				ID:       "start-agent",
+				Type:     "start",
+				Assignee: "claude-worker",
+			},
+			{
+				ID:       "stop-agent",
+				Type:     "stop",
+				Assignee: "claude-worker",
+				Needs:    []string{"start-agent"},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-agent-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Beads) != 2 {
+		t.Fatalf("expected 2 beads, got %d", len(result.Beads))
+	}
+
+	// Check start bead
+	startBead := result.Beads[0]
+	if startBead.Type != types.BeadTypeStart {
+		t.Errorf("expected start type, got %s", startBead.Type)
+	}
+	if startBead.StartSpec == nil {
+		t.Fatal("expected StartSpec")
+	}
+	if startBead.StartSpec.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", startBead.StartSpec.Agent)
+	}
+
+	// Check stop bead
+	stopBead := result.Beads[1]
+	if stopBead.Type != types.BeadTypeStop {
+		t.Errorf("expected stop type, got %s", stopBead.Type)
+	}
+	if stopBead.StopSpec == nil {
+		t.Fatal("expected StopSpec")
+	}
+	if stopBead.StopSpec.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", stopBead.StopSpec.Agent)
+	}
+}
+
+func TestBaker_BakeWorkflow_ExpandStep(t *testing.T) {
+	workflow := &Workflow{
+		Name: "expand-test",
+		Steps: []*Step{
+			{
+				ID:       "expand-impl",
+				Type:     "expand",
+				Template: "implement",
+				Variables: map[string]string{
+					"task": "bd-42",
+				},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-expand-001")
+	baker.Now = fixedTime
+	baker.Assignee = "default-agent"
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.Type != types.BeadTypeExpand {
+		t.Errorf("expected expand type, got %s", bead.Type)
+	}
+	if bead.ExpandSpec == nil {
+		t.Fatal("expected ExpandSpec")
+	}
+	if bead.ExpandSpec.Template != "implement" {
+		t.Errorf("expected template 'implement', got %q", bead.ExpandSpec.Template)
+	}
+	if bead.ExpandSpec.Variables["task"] != "bd-42" {
+		t.Errorf("expected variable, got %v", bead.ExpandSpec.Variables)
+	}
+	if bead.ExpandSpec.Assignee != "default-agent" {
+		t.Errorf("expected default assignee, got %q", bead.ExpandSpec.Assignee)
+	}
+}
+
+func TestBaker_BakeWorkflow_ConditionStep(t *testing.T) {
+	workflow := &Workflow{
+		Name: "condition-test",
+		Steps: []*Step{
+			{
+				ID:        "check",
+				Type:      "condition",
+				Condition: "test -f /tmp/ready",
+				OnTrue:    &ExpansionTarget{Template: "proceed"},
+				OnFalse:   &ExpansionTarget{Template: "wait"},
+				Timeout:   "5m",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-cond-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.Type != types.BeadTypeCondition {
+		t.Errorf("expected condition type, got %s", bead.Type)
+	}
+	if bead.ConditionSpec == nil {
+		t.Fatal("expected ConditionSpec")
+	}
+	if bead.ConditionSpec.Condition != "test -f /tmp/ready" {
+		t.Errorf("expected condition, got %q", bead.ConditionSpec.Condition)
+	}
+	if bead.ConditionSpec.Timeout != "5m" {
+		t.Errorf("expected timeout '5m', got %q", bead.ConditionSpec.Timeout)
+	}
+	if bead.ConditionSpec.OnTrue == nil || bead.ConditionSpec.OnTrue.Template != "proceed" {
+		t.Errorf("expected on_true template")
+	}
+	if bead.ConditionSpec.OnFalse == nil || bead.ConditionSpec.OnFalse.Template != "wait" {
+		t.Errorf("expected on_false template")
+	}
+}
+
+func TestBaker_BakeWorkflow_NilWorkflow(t *testing.T) {
+	baker := NewBaker("wf-nil-001")
+	_, err := baker.BakeWorkflow(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil workflow")
+	}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+func TestBaker_BakeWorkflow_MissingRequiredVariable(t *testing.T) {
+	workflow := &Workflow{
+		Name: "required-var-test",
+		Variables: map[string]*Var{
+			"task_id": {Required: true},
+		},
+		Steps: []*Step{
+			{ID: "step-1", Type: "task"},
+		},
+	}
+
+	baker := NewBaker("wf-var-001")
+	baker.Now = fixedTime
+
+	_, err := baker.BakeWorkflow(workflow, nil)
+	if err == nil {
+		t.Fatal("expected error for missing required variable")
+	}
+	if !strings.Contains(err.Error(), "task_id") {
+		t.Errorf("expected error about task_id, got: %v", err)
+	}
+}
+
+func TestBaker_BakeWorkflow_DefaultVariable(t *testing.T) {
+	workflow := &Workflow{
+		Name: "default-var-test",
+		Variables: map[string]*Var{
+			"framework": {Default: "pytest"},
+		},
+		Steps: []*Step{
+			{ID: "step-1", Type: "task", Title: "Using {{framework}}"},
+		},
+	}
+
+	baker := NewBaker("wf-default-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.Title != "Using pytest" {
+		t.Errorf("expected default variable substitution, got %q", bead.Title)
+	}
+}
+
+func TestBaker_BakeWorkflow_VariableOverride(t *testing.T) {
+	workflow := &Workflow{
+		Name: "var-override-test",
+		Variables: map[string]*Var{
+			"framework": {Default: "pytest"},
+		},
+		Steps: []*Step{
+			{ID: "step-1", Type: "task", Title: "Using {{framework}}"},
+		},
+	}
+
+	baker := NewBaker("wf-override-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, map[string]string{
+		"framework": "jest",
+	})
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.Title != "Using jest" {
+		t.Errorf("expected override variable, got %q", bead.Title)
+	}
+}
+
+func TestBaker_BakeWorkflow_EphemeralStep(t *testing.T) {
+	workflow := &Workflow{
+		Name: "ephemeral-step-test",
+		Steps: []*Step{
+			{ID: "temp", Type: "task", Ephemeral: true},
+		},
+	}
+
+	baker := NewBaker("wf-eph-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if !bead.IsEphemeral() {
+		t.Error("expected bead to be ephemeral")
+	}
+}
+
+func TestBaker_BakeWorkflow_UnknownDependency(t *testing.T) {
+	workflow := &Workflow{
+		Name: "bad-dep-test",
+		Steps: []*Step{
+			{ID: "step-1", Type: "task", Needs: []string{"nonexistent"}},
+		},
+	}
+
+	baker := NewBaker("wf-bad-dep-001")
+	baker.Now = fixedTime
+
+	_, err := baker.BakeWorkflow(workflow, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown dependency")
+	}
+	if !strings.Contains(err.Error(), "unknown dependency") {
+		t.Errorf("expected unknown dependency error, got: %v", err)
+	}
+}
+
+func TestBaker_determineBeadTypeFromString_AllTypes(t *testing.T) {
+	tests := []struct {
+		stepType string
+		expected types.BeadType
+	}{
+		{"task", types.BeadTypeTask},
+		{"", types.BeadTypeTask},
+		{"collaborative", types.BeadTypeCollaborative},
+		{"gate", types.BeadTypeGate},
+		{"condition", types.BeadTypeCondition},
+		{"start", types.BeadTypeStart},
+		{"stop", types.BeadTypeStop},
+		{"code", types.BeadTypeCode},
+		{"expand", types.BeadTypeExpand},
+		{"unknown", types.BeadTypeTask}, // Unknown defaults to task
+	}
+
+	baker := NewBaker("test")
+	for _, tt := range tests {
+		t.Run(tt.stepType, func(t *testing.T) {
+			result := baker.determineBeadTypeFromString(tt.stepType)
+			if result != tt.expected {
+				t.Errorf("expected %s for stepType %q, got %s", tt.expected, tt.stepType, result)
+			}
+		})
+	}
+}
+
+func TestBaker_BakeInline_InvalidType(t *testing.T) {
+	steps := []InlineStep{
+		{ID: "inline-1", Type: "invalid_type_xyz", Description: "Test"},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	// Invalid type should default to task
+	if beads[0].Type != types.BeadTypeTask {
+		t.Errorf("expected task type for invalid, got %s", beads[0].Type)
+	}
+}
+
+func TestBaker_BakeInline_ExternalDependency(t *testing.T) {
+	steps := []InlineStep{
+		{ID: "inline-1", Type: "task", Description: "Test", Needs: []string{"external-bead"}},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	// External dependency should be preserved as-is
+	hasExternal := false
+	for _, need := range beads[0].Needs {
+		if need == "external-bead" {
+			hasExternal = true
+			break
+		}
+	}
+	if !hasExternal {
+		t.Errorf("expected external dependency to be preserved: %v", beads[0].Needs)
+	}
+}
+
+func TestBaker_ConditionWithOnTimeout(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Steps: []Step{
+			{
+				ID:          "check",
+				Description: "Check with timeout",
+				Condition:   "test -f /tmp/ready",
+				OnTrue:      &ExpansionTarget{Template: "proceed"},
+				OnFalse:     &ExpansionTarget{Template: "wait"},
+				OnTimeout:   &ExpansionTarget{Template: "timeout-handler"},
+				Timeout:     "5m",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	result, err := baker.Bake(tmpl)
+	if err != nil {
+		t.Fatalf("Bake failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.ConditionSpec == nil {
+		t.Fatal("expected ConditionSpec")
+	}
+	if bead.ConditionSpec.OnTimeout == nil {
+		t.Fatal("expected OnTimeout")
+	}
+	if bead.ConditionSpec.OnTimeout.Template != "timeout-handler" {
+		t.Errorf("expected on_timeout template, got %q", bead.ConditionSpec.OnTimeout.Template)
+	}
+}
