@@ -283,13 +283,14 @@ func (m *TmuxManager) SetSessionID(agentID, sessionID string) error {
 }
 
 // ListAgents returns all known agents.
+// Returns copies to prevent external mutation of internal state.
 func (m *TmuxManager) ListAgents() []*types.Agent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]*types.Agent, 0, len(m.agents))
 	for _, agent := range m.agents {
-		result = append(result, agent)
+		result = append(result, copyAgent(agent))
 	}
 	return result
 }

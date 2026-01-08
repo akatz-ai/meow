@@ -78,9 +78,7 @@ func (w *TmuxWrapper) NewSession(ctx context.Context, opts SessionOptions) error
 		args = append(args, opts.Command)
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("creating tmux session: %w: %s", err, output)
 	}
@@ -100,11 +98,9 @@ func (w *TmuxWrapper) KillSession(ctx context.Context, name string) error {
 		return nil // Already gone
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", name)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, "kill-session", "-t", name)
 	if err != nil {
-		// Ignore "session not found" errors
+		// Ignore "session not found" errors (race between check and kill)
 		if strings.Contains(string(output), "session not found") {
 			return nil
 		}
@@ -116,22 +112,14 @@ func (w *TmuxWrapper) KillSession(ctx context.Context, name string) error {
 
 // SessionExists checks if a tmux session exists.
 func (w *TmuxWrapper) SessionExists(ctx context.Context, name string) bool {
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", name)
-	return cmd.Run() == nil
+	return w.hasSession(ctx, name)
 }
 
 // ListSessions returns all tmux session names, optionally filtered by prefix.
 // If prefix is empty, all sessions are returned.
 func (w *TmuxWrapper) ListSessions(ctx context.Context, prefix string) ([]string, error) {
-	ctx = w.ensureTimeout(ctx)
-
-	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := w.runCmdWithBuffers(ctx, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
 		stderrStr := stderr.String()
 		// Handle "no server running" - normal when tmux isn't started
 		if strings.Contains(stderrStr, "no server running") ||
@@ -182,9 +170,7 @@ func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string
 		args = append(args, "Enter")
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("send-keys: %w: %s", err, output)
 	}
@@ -224,9 +210,7 @@ func (w *TmuxWrapper) CapturePaneWithOptions(ctx context.Context, session string
 		args = append(args, "-e")
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return "", fmt.Errorf("capture-pane: %w: %s", err, output)
 	}
@@ -244,9 +228,7 @@ func (w *TmuxWrapper) SetEnv(ctx context.Context, session, key, value string) er
 		return fmt.Errorf("environment variable name is required")
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", "set-environment", "-t", session, key, value)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, "set-environment", "-t", session, key, value)
 	if err != nil {
 		return fmt.Errorf("set-environment: %w: %s", err, output)
 	}
@@ -263,9 +245,7 @@ func (w *TmuxWrapper) UnsetEnv(ctx context.Context, session, key string) error {
 		return fmt.Errorf("environment variable name is required")
 	}
 
-	ctx = w.ensureTimeout(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", "set-environment", "-t", session, "-u", key)
-	output, err := cmd.CombinedOutput()
+	output, err := w.runCmd(ctx, "set-environment", "-t", session, "-u", key)
 	if err != nil {
 		return fmt.Errorf("unset-environment: %w: %s", err, output)
 	}
@@ -273,10 +253,41 @@ func (w *TmuxWrapper) UnsetEnv(ctx context.Context, session, key string) error {
 	return nil
 }
 
-// ensureTimeout returns a context with a timeout if none is set.
-func (w *TmuxWrapper) ensureTimeout(ctx context.Context) context.Context {
+// runCmd executes a tmux command with proper timeout handling.
+// If the context has no deadline, a default timeout is applied.
+func (w *TmuxWrapper) runCmd(ctx context.Context, args ...string) ([]byte, error) {
 	if _, ok := ctx.Deadline(); !ok {
-		ctx, _ = context.WithTimeout(ctx, w.defaultTimeout)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
+		defer cancel()
 	}
-	return ctx
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	return cmd.CombinedOutput()
+}
+
+// runCmdWithBuffers executes a tmux command with separate stdout/stderr buffers.
+func (w *TmuxWrapper) runCmdWithBuffers(ctx context.Context, args ...string) (stdout, stderr *bytes.Buffer, err error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	stdout = &bytes.Buffer{}
+	stderr = &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err = cmd.Run()
+	return
+}
+
+// hasSession checks if a session exists (internal helper with proper timeout).
+func (w *TmuxWrapper) hasSession(ctx context.Context, name string) bool {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", name)
+	return cmd.Run() == nil
 }
