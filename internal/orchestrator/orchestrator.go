@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -943,11 +944,18 @@ func (o *Orchestrator) generateWispDigest(wisps []*types.Bead) string {
 		return ""
 	}
 
+	// Sort wisps by CreatedAt for chronological output
+	sortedWisps := make([]*types.Bead, len(wisps))
+	copy(sortedWisps, wisps)
+	sort.Slice(sortedWisps, func(i, j int) bool {
+		return sortedWisps[i].CreatedAt.Before(sortedWisps[j].CreatedAt)
+	})
+
 	// Count by type
 	typeCounts := make(map[types.BeadType]int)
 	var earliestCreated, latestClosed time.Time
 
-	for _, w := range wisps {
+	for _, w := range sortedWisps {
 		typeCounts[w.Type]++
 
 		if earliestCreated.IsZero() || w.CreatedAt.Before(earliestCreated) {
@@ -969,19 +977,27 @@ func (o *Orchestrator) generateWispDigest(wisps []*types.Bead) string {
 	}
 
 	// Counts
-	sb.WriteString(fmt.Sprintf("**Total Steps**: %d\n\n", len(wisps)))
+	sb.WriteString(fmt.Sprintf("**Total Steps**: %d\n\n", len(sortedWisps)))
 
+	// Sort type keys for deterministic output
 	if len(typeCounts) > 0 {
 		sb.WriteString("**Steps by Type**:\n")
-		for t, count := range typeCounts {
-			sb.WriteString(fmt.Sprintf("- %s: %d\n", t, count))
+		typeKeys := make([]types.BeadType, 0, len(typeCounts))
+		for t := range typeCounts {
+			typeKeys = append(typeKeys, t)
+		}
+		sort.Slice(typeKeys, func(i, j int) bool {
+			return string(typeKeys[i]) < string(typeKeys[j])
+		})
+		for _, t := range typeKeys {
+			sb.WriteString(fmt.Sprintf("- %s: %d\n", t, typeCounts[t]))
 		}
 		sb.WriteString("\n")
 	}
 
-	// Step list
+	// Step list (already sorted chronologically)
 	sb.WriteString("**Steps Executed**:\n")
-	for _, w := range wisps {
+	for _, w := range sortedWisps {
 		status := "closed"
 		if w.Status != types.BeadStatusClosed {
 			status = string(w.Status)
