@@ -4,6 +4,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -229,5 +230,250 @@ func TestLoader_LoadFromEmbedded_NoEmbedded(t *testing.T) {
 	_, err := loader.Load("test")
 	if err == nil {
 		t.Fatal("Expected error when no embedded templates")
+	}
+}
+
+// LoadContext tests
+
+func TestNewLoadContext(t *testing.T) {
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	if ctx.FilePath != "/path/to/file.toml" {
+		t.Errorf("FilePath = %s, want /path/to/file.toml", ctx.FilePath)
+	}
+	if ctx.Module != nil {
+		t.Error("Module should be nil initially")
+	}
+	if ctx.Depth() != 0 {
+		t.Errorf("Depth() = %d, want 0", ctx.Depth())
+	}
+	if ctx.CurrentRef() != "" {
+		t.Errorf("CurrentRef() = %s, want empty", ctx.CurrentRef())
+	}
+}
+
+func TestLoadContext_Enter_Exit(t *testing.T) {
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	// Enter first reference
+	if err := ctx.Enter("file1.toml#main"); err != nil {
+		t.Fatalf("Enter failed: %v", err)
+	}
+	if ctx.Depth() != 1 {
+		t.Errorf("Depth() = %d, want 1", ctx.Depth())
+	}
+	if ctx.CurrentRef() != "file1.toml#main" {
+		t.Errorf("CurrentRef() = %s, want file1.toml#main", ctx.CurrentRef())
+	}
+
+	// Enter second reference
+	if err := ctx.Enter("file2.toml#helper"); err != nil {
+		t.Fatalf("Enter failed: %v", err)
+	}
+	if ctx.Depth() != 2 {
+		t.Errorf("Depth() = %d, want 2", ctx.Depth())
+	}
+	if ctx.CurrentRef() != "file2.toml#helper" {
+		t.Errorf("CurrentRef() = %s, want file2.toml#helper", ctx.CurrentRef())
+	}
+
+	// Exit second reference
+	ctx.Exit("file2.toml#helper")
+	if ctx.Depth() != 1 {
+		t.Errorf("Depth() = %d, want 1", ctx.Depth())
+	}
+	if ctx.CurrentRef() != "file1.toml#main" {
+		t.Errorf("CurrentRef() = %s, want file1.toml#main", ctx.CurrentRef())
+	}
+
+	// Exit first reference
+	ctx.Exit("file1.toml#main")
+	if ctx.Depth() != 0 {
+		t.Errorf("Depth() = %d, want 0", ctx.Depth())
+	}
+	if ctx.CurrentRef() != "" {
+		t.Errorf("CurrentRef() = %s, want empty", ctx.CurrentRef())
+	}
+}
+
+func TestLoadContext_CycleDetection(t *testing.T) {
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	// Enter chain: file1 -> file2 -> file3
+	if err := ctx.Enter("file1.toml#main"); err != nil {
+		t.Fatalf("Enter file1 failed: %v", err)
+	}
+	if err := ctx.Enter("file2.toml#helper"); err != nil {
+		t.Fatalf("Enter file2 failed: %v", err)
+	}
+	if err := ctx.Enter("file3.toml#util"); err != nil {
+		t.Fatalf("Enter file3 failed: %v", err)
+	}
+
+	// Try to enter file1 again - should detect cycle
+	err := ctx.Enter("file1.toml#main")
+	if err == nil {
+		t.Fatal("Expected cycle detection error")
+	}
+
+	circErr, ok := err.(*CircularReferenceError)
+	if !ok {
+		t.Fatalf("Expected CircularReferenceError, got %T: %v", err, err)
+	}
+
+	if circErr.Reference != "file1.toml#main" {
+		t.Errorf("Reference = %s, want file1.toml#main", circErr.Reference)
+	}
+
+	// Check that error message contains cycle path
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "file1.toml#main") {
+		t.Errorf("Error should contain 'file1.toml#main': %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "file2.toml#helper") {
+		t.Errorf("Error should contain 'file2.toml#helper': %s", errMsg)
+	}
+}
+
+func TestLoadContext_SelfReference(t *testing.T) {
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	// Enter a reference
+	if err := ctx.Enter("file.toml#workflow"); err != nil {
+		t.Fatalf("Enter failed: %v", err)
+	}
+
+	// Try to enter the same reference - self-reference cycle
+	err := ctx.Enter("file.toml#workflow")
+	if err == nil {
+		t.Fatal("Expected cycle detection for self-reference")
+	}
+
+	if _, ok := err.(*CircularReferenceError); !ok {
+		t.Errorf("Expected CircularReferenceError, got %T", err)
+	}
+}
+
+func TestLoadContext_Child(t *testing.T) {
+	parent := NewLoadContext("/path/to/parent.toml")
+
+	// Enter a reference in parent
+	if err := parent.Enter("parent.toml#main"); err != nil {
+		t.Fatalf("Enter in parent failed: %v", err)
+	}
+
+	// Create child context
+	child := parent.Child("/path/to/child.toml")
+
+	// Child should have different file path
+	if child.FilePath != "/path/to/child.toml" {
+		t.Errorf("child.FilePath = %s, want /path/to/child.toml", child.FilePath)
+	}
+
+	// Child should share visited set with parent
+	if err := child.Enter("child.toml#helper"); err != nil {
+		t.Fatalf("Enter in child failed: %v", err)
+	}
+
+	// Parent's visited set should see child's entry (shared)
+	err := parent.Enter("child.toml#helper")
+	if err == nil {
+		t.Fatal("Expected cycle detection - child added to shared visited set")
+	}
+
+	// Child trying to enter parent's ref should also detect cycle
+	err = child.Enter("parent.toml#main")
+	if err == nil {
+		t.Fatal("Expected cycle detection - parent added to shared visited set")
+	}
+}
+
+func TestCircularReferenceError_Error(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *CircularReferenceError
+		contains []string
+	}{
+		{
+			name: "simple cycle",
+			err: &CircularReferenceError{
+				Reference: "file.toml#main",
+				Path:      []string{"file.toml#main"},
+			},
+			contains: []string{"circular reference", "file.toml#main"},
+		},
+		{
+			name: "longer cycle",
+			err: &CircularReferenceError{
+				Reference: "a.toml#x",
+				Path:      []string{"a.toml#x", "b.toml#y", "c.toml#z", "a.toml#x"},
+			},
+			contains: []string{"a.toml#x", "b.toml#y", "c.toml#z", "→"},
+		},
+		{
+			name: "empty path",
+			err: &CircularReferenceError{
+				Reference: "file.toml",
+				Path:      nil,
+			},
+			contains: []string{"circular reference", "file.toml"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := tt.err.Error()
+			for _, s := range tt.contains {
+				if !strings.Contains(msg, s) {
+					t.Errorf("Error message should contain %q: %s", s, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadContext_ExitWrongRef(t *testing.T) {
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	// Enter a reference
+	if err := ctx.Enter("file.toml#main"); err != nil {
+		t.Fatalf("Enter failed: %v", err)
+	}
+
+	// Exit with wrong ref - should not pop
+	ctx.Exit("wrong.toml#other")
+	if ctx.Depth() != 1 {
+		t.Errorf("Depth() = %d, want 1 (exit with wrong ref should not pop)", ctx.Depth())
+	}
+
+	// Exit with correct ref - should pop
+	ctx.Exit("file.toml#main")
+	if ctx.Depth() != 0 {
+		t.Errorf("Depth() = %d, want 0", ctx.Depth())
+	}
+}
+
+func TestLoadContext_WithModule(t *testing.T) {
+	ctx := NewLoadContext("/path/to/module.meow.toml")
+
+	// Module is nil initially
+	if ctx.Module != nil {
+		t.Error("Module should be nil initially")
+	}
+
+	// Set module after parsing
+	ctx.Module = &Module{
+		Path: "/path/to/module.meow.toml",
+		Workflows: map[string]*Workflow{
+			"main": {Name: "main"},
+		},
+	}
+
+	// Now module is accessible
+	if ctx.Module == nil {
+		t.Error("Module should not be nil after setting")
+	}
+	if ctx.Module.Workflows["main"] == nil {
+		t.Error("Module should have main workflow")
 	}
 }

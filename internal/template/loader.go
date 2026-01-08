@@ -227,3 +227,118 @@ type TemplateNotFoundError struct {
 func (e *TemplateNotFoundError) Error() string {
 	return fmt.Sprintf("template %q not found in: %v", e.Name, e.SearchPaths)
 }
+
+// LoadContext tracks state during template/module loading for cycle detection
+// and local reference resolution.
+//
+// When loading templates that reference other templates (via template fields
+// or expansion targets), LoadContext ensures:
+//   - Circular references are detected and reported
+//   - Local references (.workflow) can resolve against the current module
+//   - File paths are tracked for meaningful error messages
+type LoadContext struct {
+	// FilePath is the absolute path of the file currently being loaded.
+	// Used for resolving relative references and error messages.
+	FilePath string
+
+	// Module is the parsed module from FilePath, if loading a module-format file.
+	// Used for resolving local references (.workflow syntax).
+	// Nil when loading legacy-format templates.
+	Module *Module
+
+	// visited tracks all file#workflow references we've seen during loading.
+	// Used to detect circular references. Keys are normalized reference strings
+	// like "path/to/file.toml#workflow" or "path/to/file.toml" for legacy.
+	visited map[string]bool
+
+	// stack holds the loading path for error messages when a cycle is detected.
+	// Each entry is a reference string showing the chain of loads.
+	stack []string
+}
+
+// NewLoadContext creates a new LoadContext for loading from the given file path.
+func NewLoadContext(filePath string) *LoadContext {
+	return &LoadContext{
+		FilePath: filePath,
+		visited:  make(map[string]bool),
+		stack:    []string{},
+	}
+}
+
+// Enter marks that we are entering a reference during loading.
+// Returns an error if entering this reference would create a cycle.
+// The reference should be a normalized string like "file.toml#workflow".
+func (c *LoadContext) Enter(ref string) error {
+	if c.visited[ref] {
+		// Build cycle path for error message
+		cyclePath := append(c.stack, ref)
+		return &CircularReferenceError{
+			Reference: ref,
+			Path:      cyclePath,
+		}
+	}
+
+	c.visited[ref] = true
+	c.stack = append(c.stack, ref)
+	return nil
+}
+
+// Exit marks that we are done loading a reference.
+// Should be called after Enter when loading is complete.
+func (c *LoadContext) Exit(ref string) {
+	if len(c.stack) > 0 && c.stack[len(c.stack)-1] == ref {
+		c.stack = c.stack[:len(c.stack)-1]
+	}
+}
+
+// Child creates a child LoadContext for loading a referenced file.
+// The child inherits the visited set and stack but has its own FilePath.
+// The child's Module is initially nil; set it after parsing the file.
+func (c *LoadContext) Child(filePath string) *LoadContext {
+	return &LoadContext{
+		FilePath: filePath,
+		Module:   nil, // Set after parsing
+		visited:  c.visited,
+		stack:    c.stack,
+	}
+}
+
+// CurrentRef returns the current reference being loaded (top of stack),
+// or empty string if the stack is empty.
+func (c *LoadContext) CurrentRef() string {
+	if len(c.stack) == 0 {
+		return ""
+	}
+	return c.stack[len(c.stack)-1]
+}
+
+// Depth returns the current nesting depth of reference resolution.
+func (c *LoadContext) Depth() int {
+	return len(c.stack)
+}
+
+// CircularReferenceError is returned when a circular reference is detected.
+type CircularReferenceError struct {
+	Reference string   // The reference that caused the cycle
+	Path      []string // The full path showing the cycle
+}
+
+func (e *CircularReferenceError) Error() string {
+	if len(e.Path) == 0 {
+		return fmt.Sprintf("circular reference detected: %s", e.Reference)
+	}
+	return fmt.Sprintf("circular reference detected: %s (path: %s)",
+		e.Reference, formatCyclePath(e.Path))
+}
+
+// formatCyclePath formats the cycle path for display.
+func formatCyclePath(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	result := path[0]
+	for i := 1; i < len(path); i++ {
+		result += " → " + path[i]
+	}
+	return result
+}
