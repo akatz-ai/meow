@@ -473,17 +473,17 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 		return nil
 
 	case types.BeadTypeStart:
-		// Start beads need a StartSpec - agent comes from assignee
+		// Start beads need a StartSpec - agent comes from bead's assignee (already substituted)
 		spec := &types.StartSpec{
-			Agent: step.Assignee,
+			Agent: bead.Assignee,
 		}
 		bead.StartSpec = spec
 		return nil
 
 	case types.BeadTypeStop:
-		// Stop beads need a StopSpec - agent comes from assignee
+		// Stop beads need a StopSpec - agent comes from bead's assignee (already substituted)
 		spec := &types.StopSpec{
-			Agent: step.Assignee,
+			Agent: bead.Assignee,
 		}
 		bead.StopSpec = spec
 		return nil
@@ -585,15 +585,17 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 		}
 
 		bead := &types.Bead{
-			ID:          beadID,
-			Type:        beadType,
-			Title:       description,
-			Description: instructions,
-			Status:      types.BeadStatusOpen,
-			Assignee:    b.Assignee,
-			Needs:       needs,
-			Parent:      parentBeadID,
-			CreatedAt:   b.Now(),
+			ID:           beadID,
+			Type:         beadType,
+			Title:        description,
+			Description:  instructions,
+			Status:       types.BeadStatusOpen,
+			Assignee:     b.Assignee,
+			Needs:        needs,
+			Parent:       parentBeadID,
+			Tier:         types.TierWisp, // Inline beads from conditions are wisps
+			Instructions: instructions,
+			CreatedAt:    b.Now(),
 		}
 
 		beads = append(beads, bead)

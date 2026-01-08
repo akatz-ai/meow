@@ -947,3 +947,93 @@ func TestBaker_ConditionWithOnTimeout(t *testing.T) {
 		t.Errorf("expected on_timeout template, got %q", bead.ConditionSpec.OnTimeout.Template)
 	}
 }
+
+// Test for meow-5tm: Start/Stop specs should use substituted assignee, not raw template value
+func TestBaker_BakeWorkflow_StartStopWithVariableAssignee(t *testing.T) {
+	workflow := &Workflow{
+		Name: "agent-control-var",
+		Variables: map[string]*Var{
+			"agent": {Required: true},
+		},
+		Steps: []*Step{
+			{
+				ID:       "start-agent",
+				Type:     "start",
+				Assignee: "{{agent}}",
+			},
+			{
+				ID:       "stop-agent",
+				Type:     "stop",
+				Assignee: "{{agent}}",
+				Needs:    []string{"start-agent"},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-agent-var-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, map[string]string{
+		"agent": "claude-worker-42",
+	})
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Beads) != 2 {
+		t.Fatalf("expected 2 beads, got %d", len(result.Beads))
+	}
+
+	// Check start bead - agent should be substituted value, not raw "{{agent}}"
+	startBead := result.Beads[0]
+	if startBead.StartSpec == nil {
+		t.Fatal("expected StartSpec")
+	}
+	if startBead.StartSpec.Agent != "claude-worker-42" {
+		t.Errorf("expected substituted agent 'claude-worker-42', got %q", startBead.StartSpec.Agent)
+	}
+
+	// Check stop bead - agent should be substituted value, not raw "{{agent}}"
+	stopBead := result.Beads[1]
+	if stopBead.StopSpec == nil {
+		t.Fatal("expected StopSpec")
+	}
+	if stopBead.StopSpec.Agent != "claude-worker-42" {
+		t.Errorf("expected substituted agent 'claude-worker-42', got %q", stopBead.StopSpec.Agent)
+	}
+}
+
+// Test for meow-a28: BakeInline should set Tier and Instructions fields
+func TestBaker_BakeInline_TierAndInstructions(t *testing.T) {
+	steps := []InlineStep{
+		{ID: "inline-1", Type: "task", Description: "First inline", Instructions: "Do this first"},
+		{ID: "inline-2", Type: "task", Description: "Second inline", Instructions: "Do this second", Needs: []string{"inline-1"}},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	if len(beads) != 2 {
+		t.Fatalf("expected 2 beads, got %d", len(beads))
+	}
+
+	// All inline beads should have Tier set to wisp
+	for i, bead := range beads {
+		if bead.Tier != types.TierWisp {
+			t.Errorf("bead %d: expected tier 'wisp', got %q", i, bead.Tier)
+		}
+	}
+
+	// Check Instructions field is set
+	if beads[0].Instructions != "Do this first" {
+		t.Errorf("expected instructions 'Do this first', got %q", beads[0].Instructions)
+	}
+	if beads[1].Instructions != "Do this second" {
+		t.Errorf("expected instructions 'Do this second', got %q", beads[1].Instructions)
+	}
+}
