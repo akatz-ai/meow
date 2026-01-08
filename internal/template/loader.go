@@ -270,8 +270,10 @@ func NewLoadContext(filePath string) *LoadContext {
 // The reference should be a normalized string like "file.toml#workflow".
 func (c *LoadContext) Enter(ref string) error {
 	if c.visited[ref] {
-		// Build cycle path for error message
-		cyclePath := append(c.stack, ref)
+		// Build cycle path for error message - make a copy to avoid sharing backing array
+		cyclePath := make([]string, len(c.stack)+1)
+		copy(cyclePath, c.stack)
+		cyclePath[len(c.stack)] = ref
 		return &CircularReferenceError{
 			Reference: ref,
 			Path:      cyclePath,
@@ -285,21 +287,30 @@ func (c *LoadContext) Enter(ref string) error {
 
 // Exit marks that we are done loading a reference.
 // Should be called after Enter when loading is complete.
+// This removes the reference from both the stack and visited set,
+// allowing the same reference to be entered again from a different path
+// (supporting diamond dependencies like A→B, A→C→B).
 func (c *LoadContext) Exit(ref string) {
 	if len(c.stack) > 0 && c.stack[len(c.stack)-1] == ref {
 		c.stack = c.stack[:len(c.stack)-1]
+		delete(c.visited, ref)
 	}
 }
 
 // Child creates a child LoadContext for loading a referenced file.
-// The child inherits the visited set and stack but has its own FilePath.
+// The child inherits the visited set (shared for cycle detection) and
+// a copy of the current stack (for accurate error paths).
 // The child's Module is initially nil; set it after parsing the file.
 func (c *LoadContext) Child(filePath string) *LoadContext {
+	// Copy the stack to avoid interference between parent and child appends
+	stackCopy := make([]string, len(c.stack))
+	copy(stackCopy, c.stack)
+
 	return &LoadContext{
 		FilePath: filePath,
 		Module:   nil, // Set after parsing
 		visited:  c.visited,
-		stack:    c.stack,
+		stack:    stackCopy,
 	}
 }
 

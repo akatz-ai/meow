@@ -477,3 +477,86 @@ func TestLoadContext_WithModule(t *testing.T) {
 		t.Error("Module should have main workflow")
 	}
 }
+
+func TestLoadContext_DiamondDependency(t *testing.T) {
+	// Test diamond dependency pattern: A→B, A→C→B
+	// B should be loadable from both A directly and through C
+	ctx := NewLoadContext("/path/to/a.toml")
+
+	// A enters
+	if err := ctx.Enter("a.toml#main"); err != nil {
+		t.Fatalf("Enter A failed: %v", err)
+	}
+
+	// A loads B
+	childB := ctx.Child("/path/to/b.toml")
+	if err := childB.Enter("b.toml#helper"); err != nil {
+		t.Fatalf("Enter B (first time) failed: %v", err)
+	}
+	// B completes
+	childB.Exit("b.toml#helper")
+
+	// A loads C
+	childC := ctx.Child("/path/to/c.toml")
+	if err := childC.Enter("c.toml#util"); err != nil {
+		t.Fatalf("Enter C failed: %v", err)
+	}
+
+	// C loads B (should succeed - diamond dependency, not a cycle)
+	grandchildB := childC.Child("/path/to/b.toml")
+	if err := grandchildB.Enter("b.toml#helper"); err != nil {
+		t.Errorf("Enter B (second time, from C) should succeed for diamond dependency: %v", err)
+	}
+}
+
+func TestLoadContext_ExitAllowsReentry(t *testing.T) {
+	// After Exit, the same ref should be enterable again
+	ctx := NewLoadContext("/path/to/file.toml")
+
+	// Enter and exit
+	if err := ctx.Enter("file.toml#workflow"); err != nil {
+		t.Fatalf("First Enter failed: %v", err)
+	}
+	ctx.Exit("file.toml#workflow")
+
+	// Should be able to enter again
+	if err := ctx.Enter("file.toml#workflow"); err != nil {
+		t.Errorf("Second Enter after Exit should succeed: %v", err)
+	}
+}
+
+func TestLoadContext_ChildStackIndependence(t *testing.T) {
+	// Verify child has independent stack (copy, not shared)
+	parent := NewLoadContext("/path/to/parent.toml")
+
+	if err := parent.Enter("parent.toml#main"); err != nil {
+		t.Fatalf("Parent Enter failed: %v", err)
+	}
+
+	child := parent.Child("/path/to/child.toml")
+
+	// Child enters something
+	if err := child.Enter("child.toml#helper"); err != nil {
+		t.Fatalf("Child Enter failed: %v", err)
+	}
+
+	// Parent stack should still be depth 1
+	if parent.Depth() != 1 {
+		t.Errorf("Parent depth = %d after child Enter, want 1", parent.Depth())
+	}
+
+	// Child stack should be depth 2
+	if child.Depth() != 2 {
+		t.Errorf("Child depth = %d, want 2", child.Depth())
+	}
+
+	// Parent's current ref should still be its own
+	if parent.CurrentRef() != "parent.toml#main" {
+		t.Errorf("Parent CurrentRef = %s, want parent.toml#main", parent.CurrentRef())
+	}
+
+	// Child's current ref should be its own
+	if child.CurrentRef() != "child.toml#helper" {
+		t.Errorf("Child CurrentRef = %s, want child.toml#helper", child.CurrentRef())
+	}
+}
