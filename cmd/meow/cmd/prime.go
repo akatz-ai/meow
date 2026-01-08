@@ -67,11 +67,12 @@ type WorkBeadInfo struct {
 
 // StepInfo describes a workflow step.
 type StepInfo struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Status       string `json:"status"`
-	IsCurrent    bool   `json:"is_current,omitempty"`
-	Instructions string `json:"instructions,omitempty"`
+	ID              string                  `json:"id"`
+	Title           string                  `json:"title"`
+	Status          string                  `json:"status"`
+	IsCurrent       bool                    `json:"is_current,omitempty"`
+	Instructions    string                  `json:"instructions,omitempty"`
+	RequiredOutputs []types.TaskOutputDef   `json:"required_outputs,omitempty"`
 }
 
 func runPrime(cmd *cobra.Command, args []string) error {
@@ -235,8 +236,23 @@ func getPrimeOutput(ctx context.Context, store *orchestrator.FileBeadStore, agen
 		if s.ID == current.ID {
 			step.IsCurrent = true
 			step.Instructions = s.Instructions
+			if s.TaskOutputs != nil && len(s.TaskOutputs.Required) > 0 {
+				step.RequiredOutputs = s.TaskOutputs.Required
+			}
 		}
 		steps = append(steps, step)
+	}
+
+	// Build current step with required outputs
+	currentStep := &StepInfo{
+		ID:           current.ID,
+		Title:        current.Title,
+		Status:       string(current.Status),
+		IsCurrent:    true,
+		Instructions: current.Instructions,
+	}
+	if current.TaskOutputs != nil && len(current.TaskOutputs.Required) > 0 {
+		currentStep.RequiredOutputs = current.TaskOutputs.Required
 	}
 
 	return &PrimeOutput{
@@ -247,14 +263,8 @@ func getPrimeOutput(ctx context.Context, store *orchestrator.FileBeadStore, agen
 			Completed: completed,
 			Steps:     steps,
 		},
-		WorkBead: workBead,
-		CurrentStep: &StepInfo{
-			ID:           current.ID,
-			Title:        current.Title,
-			Status:       string(current.Status),
-			IsCurrent:    true,
-			Instructions: current.Instructions,
-		},
+		WorkBead:    workBead,
+		CurrentStep: currentStep,
 	}, nil
 }
 
@@ -312,7 +322,19 @@ func formatText(output *PrimeOutput) string {
 		sb.WriteString(fmt.Sprintf("Current step: %s\n\n", output.CurrentStep.ID))
 		if output.CurrentStep.Instructions != "" {
 			sb.WriteString("Instructions:\n")
-			sb.WriteString(fmt.Sprintf("  %s\n", output.CurrentStep.Instructions))
+			sb.WriteString(fmt.Sprintf("  %s\n\n", output.CurrentStep.Instructions))
+		}
+		if len(output.CurrentStep.RequiredOutputs) > 0 {
+			sb.WriteString("Required outputs:\n")
+			for _, out := range output.CurrentStep.RequiredOutputs {
+				desc := ""
+				if out.Description != "" {
+					desc = fmt.Sprintf(" - %s", out.Description)
+				}
+				sb.WriteString(fmt.Sprintf("  • %s (%s)%s\n", out.Name, out.Type, desc))
+			}
+		} else {
+			sb.WriteString("Required outputs: (none)\n")
 		}
 	}
 	sb.WriteString("───────────────────────────────────────────────────────────────\n")
@@ -339,6 +361,17 @@ func formatPrompt(output *PrimeOutput) string {
 		if output.CurrentStep.Instructions != "" {
 			sb.WriteString(output.CurrentStep.Instructions)
 			sb.WriteString("\n\n")
+		}
+		if len(output.CurrentStep.RequiredOutputs) > 0 {
+			sb.WriteString("**Required outputs:**\n")
+			for _, out := range output.CurrentStep.RequiredOutputs {
+				desc := ""
+				if out.Description != "" {
+					desc = fmt.Sprintf(": %s", out.Description)
+				}
+				sb.WriteString(fmt.Sprintf("- `%s` (%s)%s\n", out.Name, out.Type, desc))
+			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString(fmt.Sprintf("When done, run: `meow close %s`\n", output.CurrentStep.ID))
 	}
