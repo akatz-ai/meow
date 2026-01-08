@@ -457,25 +457,31 @@ func (o *Orchestrator) handleCondition(ctx context.Context, bead *types.Bead) er
 	o.condRoutines[bead.ID] = cancel
 	o.condMu.Unlock()
 
+	// Capture immutable data for goroutine to avoid race condition.
+	// The bead pointer is shared with the main loop, so we extract
+	// the ID and spec before spawning the goroutine.
+	beadID := bead.ID
+	spec := bead.ConditionSpec
+
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
 		defer func() {
 			o.condMu.Lock()
-			delete(o.condRoutines, bead.ID)
+			delete(o.condRoutines, beadID)
 			o.condMu.Unlock()
 		}()
 
-		o.evalCondition(condCtx, bead)
+		o.evalCondition(condCtx, beadID, spec)
 	}()
 
 	return nil
 }
 
 // evalCondition runs the condition command and handles the result.
-func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
-	spec := bead.ConditionSpec
-
+// Takes beadID and spec separately to avoid holding a bead pointer that
+// could race with the main tick loop.
+func (o *Orchestrator) evalCondition(ctx context.Context, beadID string, spec *types.ConditionSpec) {
 	// Parse timeout if specified
 	var timeout time.Duration
 	if spec.Timeout != "" {
@@ -483,7 +489,7 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 		timeout, err = time.ParseDuration(spec.Timeout)
 		if err != nil {
 			o.logger.Warn("invalid condition timeout, ignoring",
-				"bead", bead.ID,
+				"bead", beadID,
 				"timeout", spec.Timeout,
 				"error", err,
 			)
@@ -511,7 +517,7 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 
 	if isTimeout {
 		o.logger.Info("condition timed out",
-			"bead", bead.ID,
+			"bead", beadID,
 			"timeout", timeout,
 		)
 		if spec.OnTimeout != nil {
@@ -522,18 +528,18 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 		}
 	} else if err != nil {
 		o.logger.Info("condition evaluated false",
-			"bead", bead.ID,
+			"bead", beadID,
 			"error", err,
 		)
 		target = spec.OnFalse
 	} else {
 		exitCode, _ := outputs["exit_code"].(int)
 		if exitCode == 0 {
-			o.logger.Info("condition evaluated true", "bead", bead.ID)
+			o.logger.Info("condition evaluated true", "bead", beadID)
 			target = spec.OnTrue
 		} else {
 			o.logger.Info("condition evaluated false",
-				"bead", bead.ID,
+				"bead", beadID,
 				"exit_code", exitCode,
 			)
 			target = spec.OnFalse
@@ -541,7 +547,21 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 	}
 
 	// Expand the target - either template or inline steps
+	// Fetch fresh bead for expansion to avoid race with main loop.
 	if target != nil {
+		bead, err := o.store.Get(ctx, beadID)
+		if err != nil {
+			o.logger.Error("failed to get bead for expansion",
+				"bead", beadID,
+				"error", err,
+			)
+			return
+		}
+		if bead == nil {
+			o.logger.Error("bead not found for expansion", "bead", beadID)
+			return
+		}
+
 		if target.Template != "" {
 			expandSpec := &types.ExpandSpec{
 				Template:  target.Template,
@@ -549,7 +569,7 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 			}
 			if err := o.expander.Expand(ctx, expandSpec, bead); err != nil {
 				o.logger.Error("failed to expand condition branch",
-					"bead", bead.ID,
+					"bead", beadID,
 					"template", target.Template,
 					"error", err,
 				)
@@ -559,7 +579,7 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 			// Process inline steps when no template is specified
 			if err := o.expandInlineSteps(ctx, bead, target.Inline); err != nil {
 				o.logger.Error("failed to expand inline steps",
-					"bead", bead.ID,
+					"bead", beadID,
 					"error", err,
 				)
 				return
@@ -567,17 +587,31 @@ func (o *Orchestrator) evalCondition(ctx context.Context, bead *types.Bead) {
 		}
 	}
 
-	// Close the condition bead
-	if err := bead.Close(nil); err != nil {
-		o.logger.Error("failed to close condition bead",
-			"bead", bead.ID,
+	// Fetch fresh bead for closing to get current state.
+	freshBead, err := o.store.Get(ctx, beadID)
+	if err != nil {
+		o.logger.Error("failed to get bead for closing",
+			"bead", beadID,
 			"error", err,
 		)
 		return
 	}
-	if err := o.store.Update(ctx, bead); err != nil {
+	if freshBead == nil {
+		o.logger.Error("bead not found for closing", "bead", beadID)
+		return
+	}
+
+	// Close the condition bead
+	if err := freshBead.Close(nil); err != nil {
+		o.logger.Error("failed to close condition bead",
+			"bead", beadID,
+			"error", err,
+		)
+		return
+	}
+	if err := o.store.Update(ctx, freshBead); err != nil {
 		o.logger.Error("failed to save closed condition bead",
-			"bead", bead.ID,
+			"bead", beadID,
 			"error", err,
 		)
 	}
@@ -1086,6 +1120,7 @@ func (o *Orchestrator) expandInlineSteps(ctx context.Context, parentBead *types.
 			Description:  step.Instructions,
 			Instructions: step.Instructions,
 			Status:       types.BeadStatusOpen,
+			Tier:         types.TierWisp,
 			Needs:        needs,
 			Parent:       parentBead.ID,
 			CreatedAt:    time.Now(),
