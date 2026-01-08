@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+// BeadInfo contains the information needed from a bead for output resolution.
+type BeadInfo struct {
+	ID      string
+	Status  string // "open", "in_progress", "closed"
+	Outputs map[string]any
+}
+
+// BeadLookupFunc retrieves bead information by ID.
+// Returns nil, nil if the bead is not found.
+type BeadLookupFunc func(beadID string) (*BeadInfo, error)
+
 // VarContext holds the context for variable substitution.
 type VarContext struct {
 	// Variables are user-defined template variables
@@ -18,6 +29,11 @@ type VarContext struct {
 
 	// Builtins are auto-populated variables
 	Builtins map[string]any
+
+	// BeadLookup is an optional function to fetch bead outputs dynamically.
+	// When set, resolveOutput will use this to fetch outputs for beads not
+	// already in the Outputs map.
+	BeadLookup BeadLookupFunc
 }
 
 // NewVarContext creates a new variable context with default builtins.
@@ -63,6 +79,13 @@ func (c *VarContext) SetOutput(beadID, field string, value any) {
 // SetOutputs sets all outputs for a bead.
 func (c *VarContext) SetOutputs(beadID string, outputs map[string]any) {
 	c.Outputs[beadID] = outputs
+}
+
+// SetBeadLookup sets the function used to look up bead outputs dynamically.
+// When a {{bead_id.outputs.field}} reference is encountered and the bead's outputs
+// are not in the cache, this function will be called to fetch them.
+func (c *VarContext) SetBeadLookup(fn BeadLookupFunc) {
+	c.BeadLookup = fn
 }
 
 // varPattern matches {{variable.path}} patterns
@@ -154,10 +177,33 @@ func (c *VarContext) resolve(path string) (any, error) {
 }
 
 // resolveOutput looks up a bead output.
+// If the bead's outputs are not cached and a BeadLookup function is set,
+// it will be used to fetch the bead and its outputs.
 func (c *VarContext) resolveOutput(beadID, field string) (any, error) {
 	outputs, ok := c.Outputs[beadID]
 	if !ok {
-		return nil, fmt.Errorf("no outputs for bead %q", beadID)
+		// Try to fetch from BeadLookup if available
+		if c.BeadLookup != nil {
+			info, err := c.BeadLookup(beadID)
+			if err != nil {
+				return nil, fmt.Errorf("looking up bead %q: %w", beadID, err)
+			}
+			if info == nil {
+				return nil, fmt.Errorf("bead %q not found", beadID)
+			}
+			// Check if bead is closed (outputs only available after closing)
+			if info.Status != "closed" {
+				return nil, fmt.Errorf("bead %q is not closed (status: %s), outputs not available", beadID, info.Status)
+			}
+			if info.Outputs == nil {
+				return nil, fmt.Errorf("bead %q has no outputs", beadID)
+			}
+			// Cache the outputs for future lookups
+			c.Outputs[beadID] = info.Outputs
+			outputs = info.Outputs
+		} else {
+			return nil, fmt.Errorf("no outputs for bead %q", beadID)
+		}
 	}
 
 	// Handle nested field access

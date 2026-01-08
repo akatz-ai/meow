@@ -1,6 +1,7 @@
 package template
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -748,5 +749,267 @@ func TestVarContext_OutputAccessOnNonMap(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cannot access") {
 		t.Errorf("expected 'cannot access' error, got: %v", err)
+	}
+}
+
+// Tests for BeadLookup functionality
+
+func TestVarContext_BeadLookup_ResolvesOutputsFromStore(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Set up a mock bead lookup function
+	beadStore := map[string]*BeadInfo{
+		"create-worktree": {
+			ID:     "create-worktree",
+			Status: "closed",
+			Outputs: map[string]any{
+				"path":   "/tmp/worktree",
+				"branch": "feature-x",
+			},
+		},
+	}
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		if info, ok := beadStore[beadID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	// Test resolving output reference
+	result, err := ctx.Substitute("Path: {{create-worktree.outputs.path}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "Path: /tmp/worktree" {
+		t.Errorf("expected 'Path: /tmp/worktree', got %q", result)
+	}
+
+	// Test using output.bead.field format
+	result, err = ctx.Substitute("Branch: {{output.create-worktree.branch}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "Branch: feature-x" {
+		t.Errorf("expected 'Branch: feature-x', got %q", result)
+	}
+}
+
+func TestVarContext_BeadLookup_CachesOutputs(t *testing.T) {
+	ctx := NewVarContext()
+
+	lookupCount := 0
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		lookupCount++
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "closed",
+			Outputs: map[string]any{
+				"value": "cached",
+			},
+		}, nil
+	})
+
+	// First lookup
+	_, err := ctx.Substitute("{{my-bead.outputs.value}}")
+	if err != nil {
+		t.Fatalf("First substitute failed: %v", err)
+	}
+
+	// Second lookup should use cache
+	_, err = ctx.Substitute("{{my-bead.outputs.value}}")
+	if err != nil {
+		t.Fatalf("Second substitute failed: %v", err)
+	}
+
+	// Should only have called lookup once
+	if lookupCount != 1 {
+		t.Errorf("expected 1 lookup call (cached), got %d", lookupCount)
+	}
+}
+
+func TestVarContext_BeadLookup_BeadNotFound(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return nil, nil // Not found
+	})
+
+	_, err := ctx.Substitute("{{missing-bead.outputs.field}}")
+	if err == nil {
+		t.Fatal("expected error for missing bead")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_BeadNotClosed(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "in_progress",
+			Outputs: map[string]any{
+				"value": "incomplete",
+			},
+		}, nil
+	})
+
+	_, err := ctx.Substitute("{{running-bead.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error for unclosed bead")
+	}
+	if !strings.Contains(err.Error(), "not closed") {
+		t.Errorf("expected 'not closed' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "in_progress") {
+		t.Errorf("expected error to include status, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_OpenBeadError(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "open",
+		}, nil
+	})
+
+	_, err := ctx.Substitute("{{open-bead.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error for open bead")
+	}
+	if !strings.Contains(err.Error(), "not closed") {
+		t.Errorf("expected 'not closed' error, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_ClosedButNoOutputs(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:      beadID,
+			Status:  "closed",
+			Outputs: nil, // No outputs
+		}, nil
+	})
+
+	_, err := ctx.Substitute("{{empty-bead.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error for bead with no outputs")
+	}
+	if !strings.Contains(err.Error(), "has no outputs") {
+		t.Errorf("expected 'has no outputs' error, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_LookupError(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return nil, fmt.Errorf("database connection failed")
+	})
+
+	_, err := ctx.Substitute("{{some-bead.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error from lookup")
+	}
+	if !strings.Contains(err.Error(), "database connection failed") {
+		t.Errorf("expected lookup error to be propagated, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_NestedOutputAccess(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "closed",
+			Outputs: map[string]any{
+				"result": map[string]any{
+					"nested": map[string]any{
+						"value": "deep",
+					},
+				},
+			},
+		}, nil
+	})
+
+	result, err := ctx.Substitute("{{my-bead.outputs.result.nested.value}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "deep" {
+		t.Errorf("expected 'deep', got %q", result)
+	}
+}
+
+func TestVarContext_BeadLookup_PrefersCachedOutputs(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Manually set outputs (cached)
+	ctx.SetOutputs("cached-bead", map[string]any{
+		"value": "from-cache",
+	})
+
+	// Set up lookup that would return different value
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "closed",
+			Outputs: map[string]any{
+				"value": "from-lookup",
+			},
+		}, nil
+	})
+
+	// Should use cached value, not lookup
+	result, err := ctx.Substitute("{{cached-bead.outputs.value}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "from-cache" {
+		t.Errorf("expected 'from-cache', got %q (should prefer cache over lookup)", result)
+	}
+}
+
+func TestVarContext_BeadLookup_MissingOutputField(t *testing.T) {
+	ctx := NewVarContext()
+
+	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+		return &BeadInfo{
+			ID:     beadID,
+			Status: "closed",
+			Outputs: map[string]any{
+				"existing": "value",
+			},
+		}, nil
+	})
+
+	_, err := ctx.Substitute("{{my-bead.outputs.nonexistent}}")
+	if err == nil {
+		t.Fatal("expected error for missing output field")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestVarContext_BeadLookup_WithoutLookupFuncFallsBackToError(t *testing.T) {
+	ctx := NewVarContext()
+	// No BeadLookup set
+
+	_, err := ctx.Substitute("{{unknown-bead.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error when no lookup func and bead not cached")
+	}
+	if !strings.Contains(err.Error(), "no outputs") {
+		t.Errorf("expected 'no outputs' error, got: %v", err)
 	}
 }
