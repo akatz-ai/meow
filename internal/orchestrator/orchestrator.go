@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -309,9 +310,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				if err == errAllDone {
 					o.logger.Info("all work complete")
 					o.waitForConditions()
-					// Clean up ephemeral beads
-					if cleanupErr := o.cleanupEphemeralBeads(ctx); cleanupErr != nil {
-						o.logger.Warn("failed to cleanup ephemeral beads", "error", cleanupErr)
+					// Clean up workflow beads (tier-based cleanup)
+					if o.state != nil && o.state.WorkflowID != "" {
+						if cleanupErr := o.cleanupWorkflow(ctx, o.state.WorkflowID); cleanupErr != nil {
+							o.logger.Warn("failed to cleanup workflow beads", "error", cleanupErr)
+						}
 					}
 					return nil
 				}
@@ -716,6 +719,7 @@ func (o *Orchestrator) waitForConditions() {
 // cleanupEphemeralBeads removes all beads labeled as ephemeral.
 // This is called after workflow completion to clean up machinery beads
 // that were created during execution.
+// Deprecated: Use cleanupWorkflow for tier-based cleanup instead.
 func (o *Orchestrator) cleanupEphemeralBeads(ctx context.Context) error {
 	// Check if store supports deletion
 	deleter, ok := o.store.(interface {
@@ -760,6 +764,232 @@ func (o *Orchestrator) cleanupEphemeralBeads(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// cleanupWorkflow removes all non-work beads (wisps and orchestrator) for a workflow
+// once all beads in that workflow are closed. This is the tier-based cleanup approach.
+//
+// Cleanup only happens when:
+// - All beads in the workflow are closed
+// - Cleanup config is set to "on_complete" (default)
+//
+// Work beads are preserved as they represent permanent deliverables.
+func (o *Orchestrator) cleanupWorkflow(ctx context.Context, workflowID string) error {
+	if o.cfg.Cleanup.Ephemeral != config.EphemeralCleanupOnComplete {
+		o.logger.Debug("cleanup disabled by config", "config", o.cfg.Cleanup.Ephemeral)
+		return nil
+	}
+
+	// Check if store supports filtered listing
+	lister, ok := o.store.(interface {
+		ListFiltered(context.Context, BeadFilter) ([]*types.Bead, error)
+	})
+	if !ok {
+		o.logger.Debug("bead store does not support filtered listing, skipping workflow cleanup")
+		return nil
+	}
+
+	// Check if store supports deletion
+	deleter, ok := o.store.(interface {
+		Delete(context.Context, string) error
+	})
+	if !ok {
+		o.logger.Debug("bead store does not support deletion, skipping workflow cleanup")
+		return nil
+	}
+
+	// Get all beads for this workflow
+	beads, err := lister.ListFiltered(ctx, BeadFilter{WorkflowID: workflowID})
+	if err != nil {
+		return fmt.Errorf("listing workflow beads: %w", err)
+	}
+
+	if len(beads) == 0 {
+		o.logger.Debug("no beads found for workflow", "workflow_id", workflowID)
+		return nil
+	}
+
+	// Check if all beads are closed
+	for _, bead := range beads {
+		if bead.Status != types.BeadStatusClosed {
+			o.logger.Debug("workflow not fully complete, skipping cleanup",
+				"workflow_id", workflowID,
+				"incomplete_bead", bead.ID,
+				"status", bead.Status,
+			)
+			return nil
+		}
+	}
+
+	// All beads closed - burn non-work tier beads
+	return o.burnWisps(ctx, beads, deleter)
+}
+
+// burnWisps deletes all wisp and orchestrator tier beads from the given list.
+// Work tier beads are preserved as permanent deliverables.
+func (o *Orchestrator) burnWisps(ctx context.Context, beads []*types.Bead, deleter interface {
+	Delete(context.Context, string) error
+}) error {
+	var deleted int
+	for _, bead := range beads {
+		// Only delete non-work tier beads
+		if bead.Tier == types.TierWork || bead.Tier == "" {
+			continue
+		}
+
+		if err := deleter.Delete(ctx, bead.ID); err != nil {
+			o.logger.Warn("failed to delete wisp bead",
+				"bead", bead.ID,
+				"tier", bead.Tier,
+				"error", err,
+			)
+			continue
+		}
+		deleted++
+	}
+
+	if deleted > 0 {
+		o.logger.Info("burned wisp beads", "count", deleted)
+	}
+
+	return nil
+}
+
+// squashWisps creates a digest summary of all wisps and appends it to the work bead's notes,
+// then burns the wisps. This preserves a record of the workflow execution while cleaning up
+// the ephemeral machinery.
+//
+// The digest includes:
+// - List of wisp step titles and statuses
+// - Workflow duration (first created to last closed)
+// - Count of steps by type
+func (o *Orchestrator) squashWisps(ctx context.Context, workflowID string, workBeadID string) error {
+	if o.cfg.Cleanup.Ephemeral != config.EphemeralCleanupOnComplete {
+		o.logger.Debug("cleanup disabled by config", "config", o.cfg.Cleanup.Ephemeral)
+		return nil
+	}
+
+	// Check if store supports filtered listing
+	lister, ok := o.store.(interface {
+		ListFiltered(context.Context, BeadFilter) ([]*types.Bead, error)
+	})
+	if !ok {
+		return fmt.Errorf("bead store does not support filtered listing")
+	}
+
+	// Check if store supports deletion
+	deleter, ok := o.store.(interface {
+		Delete(context.Context, string) error
+	})
+	if !ok {
+		return fmt.Errorf("bead store does not support deletion")
+	}
+
+	// Get all wisp beads for this workflow
+	wisps, err := lister.ListFiltered(ctx, BeadFilter{
+		WorkflowID: workflowID,
+		Tier:       types.TierWisp,
+	})
+	if err != nil {
+		return fmt.Errorf("listing wisps: %w", err)
+	}
+
+	if len(wisps) == 0 {
+		o.logger.Debug("no wisps found for workflow", "workflow_id", workflowID)
+		return nil
+	}
+
+	// Generate digest
+	digest := o.generateWispDigest(wisps)
+
+	// Get and update work bead
+	workBead, err := o.store.Get(ctx, workBeadID)
+	if err != nil {
+		return fmt.Errorf("getting work bead: %w", err)
+	}
+	if workBead == nil {
+		return fmt.Errorf("work bead %s not found", workBeadID)
+	}
+
+	// Append digest to notes
+	if workBead.Notes != "" {
+		workBead.Notes += "\n\n"
+	}
+	workBead.Notes += digest
+
+	if err := o.store.Update(ctx, workBead); err != nil {
+		return fmt.Errorf("updating work bead with digest: %w", err)
+	}
+
+	o.logger.Info("squashed wisps to digest",
+		"workflow_id", workflowID,
+		"work_bead", workBeadID,
+		"wisp_count", len(wisps),
+	)
+
+	// Get all beads for burning (including orchestrator tier)
+	allBeads, err := lister.ListFiltered(ctx, BeadFilter{WorkflowID: workflowID})
+	if err != nil {
+		return fmt.Errorf("listing all workflow beads: %w", err)
+	}
+
+	// Burn the wisps and orchestrator beads
+	return o.burnWisps(ctx, allBeads, deleter)
+}
+
+// generateWispDigest creates a summary of wisp execution for preservation.
+func (o *Orchestrator) generateWispDigest(wisps []*types.Bead) string {
+	if len(wisps) == 0 {
+		return ""
+	}
+
+	// Count by type
+	typeCounts := make(map[types.BeadType]int)
+	var earliestCreated, latestClosed time.Time
+
+	for _, w := range wisps {
+		typeCounts[w.Type]++
+
+		if earliestCreated.IsZero() || w.CreatedAt.Before(earliestCreated) {
+			earliestCreated = w.CreatedAt
+		}
+		if w.ClosedAt != nil && (latestClosed.IsZero() || w.ClosedAt.After(latestClosed)) {
+			latestClosed = *w.ClosedAt
+		}
+	}
+
+	// Build digest
+	var sb strings.Builder
+	sb.WriteString("## Workflow Execution Digest\n\n")
+
+	// Duration
+	if !earliestCreated.IsZero() && !latestClosed.IsZero() {
+		duration := latestClosed.Sub(earliestCreated)
+		sb.WriteString(fmt.Sprintf("**Duration**: %s\n", duration.Round(time.Second)))
+	}
+
+	// Counts
+	sb.WriteString(fmt.Sprintf("**Total Steps**: %d\n\n", len(wisps)))
+
+	if len(typeCounts) > 0 {
+		sb.WriteString("**Steps by Type**:\n")
+		for t, count := range typeCounts {
+			sb.WriteString(fmt.Sprintf("- %s: %d\n", t, count))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Step list
+	sb.WriteString("**Steps Executed**:\n")
+	for _, w := range wisps {
+		status := "closed"
+		if w.Status != types.BeadStatusClosed {
+			status = string(w.Status)
+		}
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", status, w.Title))
+	}
+
+	return sb.String()
 }
 
 // inlineStep represents a parsed inline step from JSON.

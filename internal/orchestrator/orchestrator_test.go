@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2373,8 +2374,8 @@ func TestHandler_Condition_ExpandsInlineSteps(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_CleanupEphemeralBeads(t *testing.T) {
-	store := newMockBeadStoreWithCreateAndDelete()
+func TestOrchestrator_Run_CleansUpWispsOnCompletion(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
 	agents := newMockAgentManager()
 	expander := &mockTemplateExpander{}
 	executor := newMockCodeExecutor()
@@ -2382,29 +2383,39 @@ func TestOrchestrator_CleanupEphemeralBeads(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupOnComplete
 
 	orch := New(cfg, store, agents, expander, executor, logger)
 
-	// Add a non-ephemeral bead (normal work bead)
+	// Initialize state (needed for cleanupWorkflow to know the workflow ID)
+	workflowID := "wf-run-cleanup"
+	orch.state = &OrchestratorState{
+		WorkflowID: workflowID,
+	}
+
+	// Add a work bead (should NOT be deleted)
 	workBead := &types.Bead{
-		ID:     "bd-work-001",
-		Type:   types.BeadTypeTask,
-		Title:  "Normal work bead",
-		Status: types.BeadStatusClosed,
+		ID:         "bd-work-001",
+		Type:       types.BeadTypeTask,
+		Title:      "Normal work bead",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWork,
+		WorkflowID: workflowID,
 	}
 	store.beads[workBead.ID] = workBead
 
-	// Add an ephemeral bead (machinery)
-	ephemeralBead := &types.Bead{
-		ID:     "bd-eph-001",
-		Type:   types.BeadTypeCode,
-		Title:  "Ephemeral machinery",
-		Status: types.BeadStatusClosed,
-		Labels: []string{"meow:ephemeral"},
+	// Add a wisp bead (should be deleted on completion)
+	wispBead := &types.Bead{
+		ID:         "wisp-step-001",
+		Type:       types.BeadTypeTask,
+		Title:      "Wisp step",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
 	}
-	store.beads[ephemeralBead.ID] = ephemeralBead
+	store.beads[wispBead.ID] = wispBead
 
-	// No ready beads - should complete immediately and cleanup ephemerals
+	// No ready beads - should complete immediately and cleanup wisps
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -2418,9 +2429,9 @@ func TestOrchestrator_CleanupEphemeralBeads(t *testing.T) {
 		t.Error("Work bead should NOT be deleted")
 	}
 
-	// Ephemeral bead should be deleted
-	if store.beads["bd-eph-001"] != nil {
-		t.Error("Ephemeral bead should be deleted")
+	// Wisp bead should be deleted
+	if store.beads["wisp-step-001"] != nil {
+		t.Error("Wisp bead should be deleted on workflow completion")
 	}
 }
 
@@ -2627,5 +2638,433 @@ func TestOrchestrator_DispatchCollaborative(t *testing.T) {
 	// Verify collaborative was marked in_progress (like a task)
 	if store.beads["bd-collab-001"].Status != types.BeadStatusInProgress {
 		t.Errorf("Collaborative status = %s, want in_progress", store.beads["bd-collab-001"].Status)
+	}
+}
+
+// =============================================================================
+// WISP LIFECYCLE MANAGEMENT TESTS
+// =============================================================================
+
+// mockBeadStoreWithFilteredListing extends mockBeadStoreWithCreateAndDelete with ListFiltered support.
+type mockBeadStoreWithFilteredListing struct {
+	*mockBeadStoreWithCreateAndDelete
+}
+
+func newMockBeadStoreWithFilteredListing() *mockBeadStoreWithFilteredListing {
+	return &mockBeadStoreWithFilteredListing{
+		mockBeadStoreWithCreateAndDelete: newMockBeadStoreWithCreateAndDelete(),
+	}
+}
+
+func (m *mockBeadStoreWithFilteredListing) ListFiltered(ctx context.Context, filter BeadFilter) ([]*types.Bead, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []*types.Bead
+	for _, bead := range m.beads {
+		if filter.Status != "" && bead.Status != filter.Status {
+			continue
+		}
+		if filter.Tier != "" && bead.Tier != filter.Tier {
+			continue
+		}
+		if filter.Assignee != "" && bead.Assignee != filter.Assignee {
+			continue
+		}
+		if filter.WorkflowID != "" && bead.WorkflowID != filter.WorkflowID {
+			continue
+		}
+		if filter.HookBead != "" && bead.HookBead != filter.HookBead {
+			continue
+		}
+		result = append(result, bead)
+	}
+	return result, nil
+}
+
+func TestOrchestrator_CleanupWorkflow_DeletesWispsAndOrchestrator(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupOnComplete
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	workflowID := "wf-test-001"
+
+	// Add a work bead (should NOT be deleted)
+	workBead := &types.Bead{
+		ID:         "bd-work-001",
+		Type:       types.BeadTypeTask,
+		Title:      "Work bead",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWork,
+		WorkflowID: workflowID,
+	}
+	store.beads[workBead.ID] = workBead
+
+	// Add wisp beads (should be deleted)
+	wispBead1 := &types.Bead{
+		ID:         "wisp-step-1",
+		Type:       types.BeadTypeTask,
+		Title:      "Wisp step 1",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispBead1.ID] = wispBead1
+
+	wispBead2 := &types.Bead{
+		ID:         "wisp-step-2",
+		Type:       types.BeadTypeTask,
+		Title:      "Wisp step 2",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispBead2.ID] = wispBead2
+
+	// Add orchestrator bead (should be deleted)
+	orchBead := &types.Bead{
+		ID:         "orch-cond-1",
+		Type:       types.BeadTypeCondition,
+		Title:      "Orchestrator condition",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierOrchestrator,
+		WorkflowID: workflowID,
+	}
+	store.beads[orchBead.ID] = orchBead
+
+	ctx := context.Background()
+	err := orch.cleanupWorkflow(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("cleanupWorkflow() error = %v", err)
+	}
+
+	// Work bead should still exist
+	if store.beads["bd-work-001"] == nil {
+		t.Error("Work bead should NOT be deleted")
+	}
+
+	// Wisp beads should be deleted
+	if store.beads["wisp-step-1"] != nil {
+		t.Error("Wisp step 1 should be deleted")
+	}
+	if store.beads["wisp-step-2"] != nil {
+		t.Error("Wisp step 2 should be deleted")
+	}
+
+	// Orchestrator bead should be deleted
+	if store.beads["orch-cond-1"] != nil {
+		t.Error("Orchestrator bead should be deleted")
+	}
+}
+
+func TestOrchestrator_CleanupWorkflow_SkipsIfNotAllClosed(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupOnComplete
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	workflowID := "wf-test-002"
+
+	// Add a closed wisp
+	wispClosed := &types.Bead{
+		ID:         "wisp-closed",
+		Type:       types.BeadTypeTask,
+		Title:      "Closed wisp",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispClosed.ID] = wispClosed
+
+	// Add an in-progress wisp
+	wispInProgress := &types.Bead{
+		ID:         "wisp-in-progress",
+		Type:       types.BeadTypeTask,
+		Title:      "In progress wisp",
+		Status:     types.BeadStatusInProgress,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispInProgress.ID] = wispInProgress
+
+	ctx := context.Background()
+	err := orch.cleanupWorkflow(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("cleanupWorkflow() error = %v", err)
+	}
+
+	// Both beads should still exist (cleanup skipped)
+	if store.beads["wisp-closed"] == nil {
+		t.Error("Wisp-closed should NOT be deleted when workflow incomplete")
+	}
+	if store.beads["wisp-in-progress"] == nil {
+		t.Error("Wisp-in-progress should NOT be deleted when workflow incomplete")
+	}
+}
+
+func TestOrchestrator_CleanupWorkflow_RespectsConfigDisabled(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupNever // Disabled
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	workflowID := "wf-test-003"
+
+	// Add a wisp bead
+	wispBead := &types.Bead{
+		ID:         "wisp-no-delete",
+		Type:       types.BeadTypeTask,
+		Title:      "Should not delete",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispBead.ID] = wispBead
+
+	ctx := context.Background()
+	err := orch.cleanupWorkflow(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("cleanupWorkflow() error = %v", err)
+	}
+
+	// Wisp should still exist (cleanup disabled)
+	if store.beads["wisp-no-delete"] == nil {
+		t.Error("Wisp should NOT be deleted when cleanup disabled")
+	}
+}
+
+func TestOrchestrator_SquashWisps_CreatesDigestAndBurns(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupOnComplete
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	workflowID := "wf-squash-001"
+	workBeadID := "bd-work-squash"
+
+	// Add the work bead
+	closedAt := time.Now()
+	workBead := &types.Bead{
+		ID:         workBeadID,
+		Type:       types.BeadTypeTask,
+		Title:      "Implement feature X",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWork,
+		WorkflowID: workflowID,
+		Notes:      "Original notes",
+	}
+	store.beads[workBead.ID] = workBead
+
+	// Add wisps
+	wisp1 := &types.Bead{
+		ID:         "wisp-1",
+		Type:       types.BeadTypeTask,
+		Title:      "Write tests",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+		CreatedAt:  time.Now().Add(-10 * time.Minute),
+		ClosedAt:   &closedAt,
+	}
+	store.beads[wisp1.ID] = wisp1
+
+	wisp2 := &types.Bead{
+		ID:         "wisp-2",
+		Type:       types.BeadTypeCode,
+		Title:      "Run build",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+		CreatedAt:  time.Now().Add(-5 * time.Minute),
+		ClosedAt:   &closedAt,
+	}
+	store.beads[wisp2.ID] = wisp2
+
+	ctx := context.Background()
+	err := orch.squashWisps(ctx, workflowID, workBeadID)
+	if err != nil {
+		t.Fatalf("squashWisps() error = %v", err)
+	}
+
+	// Work bead should have digest appended
+	updatedWorkBead := store.beads[workBeadID]
+	if updatedWorkBead == nil {
+		t.Fatal("Work bead should still exist")
+	}
+
+	if updatedWorkBead.Notes == "Original notes" {
+		t.Error("Work bead notes should be updated with digest")
+	}
+
+	if !strings.Contains(updatedWorkBead.Notes, "Workflow Execution Digest") {
+		t.Error("Notes should contain 'Workflow Execution Digest'")
+	}
+
+	if !strings.Contains(updatedWorkBead.Notes, "Write tests") {
+		t.Error("Notes should contain wisp title 'Write tests'")
+	}
+
+	// Wisps should be deleted
+	if store.beads["wisp-1"] != nil {
+		t.Error("Wisp-1 should be deleted after squash")
+	}
+	if store.beads["wisp-2"] != nil {
+		t.Error("Wisp-2 should be deleted after squash")
+	}
+}
+
+func TestOrchestrator_GenerateWispDigest(t *testing.T) {
+	orch := &Orchestrator{}
+
+	closedAt := time.Now()
+	createdAt := time.Now().Add(-15 * time.Minute)
+
+	wisps := []*types.Bead{
+		{
+			ID:        "wisp-1",
+			Type:      types.BeadTypeTask,
+			Title:     "First task",
+			Status:    types.BeadStatusClosed,
+			CreatedAt: createdAt,
+			ClosedAt:  &closedAt,
+		},
+		{
+			ID:        "wisp-2",
+			Type:      types.BeadTypeTask,
+			Title:     "Second task",
+			Status:    types.BeadStatusClosed,
+			CreatedAt: createdAt.Add(5 * time.Minute),
+			ClosedAt:  &closedAt,
+		},
+		{
+			ID:        "wisp-3",
+			Type:      types.BeadTypeCode,
+			Title:     "Build step",
+			Status:    types.BeadStatusClosed,
+			CreatedAt: createdAt.Add(10 * time.Minute),
+			ClosedAt:  &closedAt,
+		},
+	}
+
+	digest := orch.generateWispDigest(wisps)
+
+	// Check structure
+	if !strings.Contains(digest, "## Workflow Execution Digest") {
+		t.Error("Digest should have header")
+	}
+
+	if !strings.Contains(digest, "**Total Steps**: 3") {
+		t.Error("Digest should have total steps count")
+	}
+
+	if !strings.Contains(digest, "**Steps by Type**") {
+		t.Error("Digest should have steps by type section")
+	}
+
+	if !strings.Contains(digest, "task: 2") {
+		t.Error("Digest should show 2 task types")
+	}
+
+	if !strings.Contains(digest, "code: 1") {
+		t.Error("Digest should show 1 code type")
+	}
+
+	if !strings.Contains(digest, "**Steps Executed**") {
+		t.Error("Digest should have steps executed section")
+	}
+
+	if !strings.Contains(digest, "[closed] First task") {
+		t.Error("Digest should list step titles with status")
+	}
+}
+
+func TestOrchestrator_GenerateWispDigest_EmptyList(t *testing.T) {
+	orch := &Orchestrator{}
+
+	digest := orch.generateWispDigest(nil)
+	if digest != "" {
+		t.Errorf("Digest should be empty for nil wisps, got: %s", digest)
+	}
+
+	digest = orch.generateWispDigest([]*types.Bead{})
+	if digest != "" {
+		t.Errorf("Digest should be empty for empty wisps, got: %s", digest)
+	}
+}
+
+func TestOrchestrator_CleanupWorkflow_PreservesEmptyTierAsWork(t *testing.T) {
+	store := newMockBeadStoreWithFilteredListing()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Cleanup.Ephemeral = config.EphemeralCleanupOnComplete
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	workflowID := "wf-empty-tier"
+
+	// Add a bead with empty tier (should be treated as work and NOT deleted)
+	emptyTierBead := &types.Bead{
+		ID:         "bd-empty-tier",
+		Type:       types.BeadTypeTask,
+		Title:      "Bead with empty tier",
+		Status:     types.BeadStatusClosed,
+		Tier:       "", // Empty tier should default to work behavior
+		WorkflowID: workflowID,
+	}
+	store.beads[emptyTierBead.ID] = emptyTierBead
+
+	// Add a wisp (should be deleted)
+	wispBead := &types.Bead{
+		ID:         "wisp-to-delete",
+		Type:       types.BeadTypeTask,
+		Title:      "Wisp to delete",
+		Status:     types.BeadStatusClosed,
+		Tier:       types.TierWisp,
+		WorkflowID: workflowID,
+	}
+	store.beads[wispBead.ID] = wispBead
+
+	ctx := context.Background()
+	err := orch.cleanupWorkflow(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("cleanupWorkflow() error = %v", err)
+	}
+
+	// Empty tier bead should still exist
+	if store.beads["bd-empty-tier"] == nil {
+		t.Error("Bead with empty tier should NOT be deleted (treated as work)")
+	}
+
+	// Wisp should be deleted
+	if store.beads["wisp-to-delete"] != nil {
+		t.Error("Wisp should be deleted")
 	}
 }
