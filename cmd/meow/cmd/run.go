@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -202,7 +203,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Run the orchestrator loop
 	if err := orch.Run(runCtx); err != nil {
-		if err == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 			fmt.Println("Orchestrator stopped.")
 			return nil
 		}

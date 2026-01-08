@@ -19,9 +19,6 @@ type FileTemplateExpander struct {
 
 	// Store is used to create the resulting beads
 	Store BeadStore
-
-	// Loader loads templates from various sources
-	Loader *template.Loader
 }
 
 // NewFileTemplateExpander creates a new FileTemplateExpander.
@@ -29,7 +26,6 @@ func NewFileTemplateExpander(baseDir string, store BeadStore) *FileTemplateExpan
 	return &FileTemplateExpander{
 		BaseDir: baseDir,
 		Store:   store,
-		Loader:  template.NewLoader(baseDir),
 	}
 }
 
