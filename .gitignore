@@ -4,6 +4,7 @@
 # Go build artifacts
 bin/
 dist/
+meow
 *.exe
 *.exe~
 *.dll
