@@ -12,6 +12,8 @@ func TestBeadType_Valid(t *testing.T) {
 		want     bool
 	}{
 		{BeadTypeTask, true},
+		{BeadTypeCollaborative, true},
+		{BeadTypeGate, true},
 		{BeadTypeCondition, true},
 		{BeadTypeStop, true},
 		{BeadTypeStart, true},
@@ -25,6 +27,31 @@ func TestBeadType_Valid(t *testing.T) {
 		t.Run(string(tt.beadType), func(t *testing.T) {
 			if got := tt.beadType.Valid(); got != tt.want {
 				t.Errorf("BeadType.Valid() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBeadTier_Valid(t *testing.T) {
+	tests := []struct {
+		tier BeadTier
+		want bool
+	}{
+		{TierWork, true},
+		{TierWisp, true},
+		{TierOrchestrator, true},
+		{BeadTier(""), true}, // Empty is valid (defaults to work)
+		{BeadTier("invalid"), false},
+	}
+
+	for _, tt := range tests {
+		name := string(tt.tier)
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			if got := tt.tier.Valid(); got != tt.want {
+				t.Errorf("BeadTier.Valid() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -53,9 +80,9 @@ func TestBeadStatus_Valid(t *testing.T) {
 
 func TestBeadStatus_CanTransitionTo(t *testing.T) {
 	tests := []struct {
-		from   BeadStatus
-		to     BeadStatus
-		want   bool
+		from BeadStatus
+		to   BeadStatus
+		want bool
 	}{
 		{BeadStatusOpen, BeadStatusInProgress, true},
 		{BeadStatusOpen, BeadStatusClosed, true},
@@ -66,6 +93,10 @@ func TestBeadStatus_CanTransitionTo(t *testing.T) {
 		{BeadStatusClosed, BeadStatusOpen, true}, // Reopen
 		{BeadStatusClosed, BeadStatusInProgress, false},
 		{BeadStatusClosed, BeadStatusClosed, false},
+		// Invalid status transitions
+		{BeadStatus("invalid"), BeadStatusOpen, false},
+		{BeadStatus("invalid"), BeadStatusInProgress, false},
+		{BeadStatus("invalid"), BeadStatusClosed, false},
 	}
 
 	for _, tt := range tests {
@@ -246,6 +277,164 @@ func TestBead_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid collaborative bead",
+			bead: &Bead{
+				ID:       "bd-001",
+				Type:     BeadTypeCollaborative,
+				Title:    "Test",
+				Status:   BeadStatusOpen,
+				Assignee: "claude-1",
+			},
+			wantErr: false,
+		},
+		{
+			name: "collaborative without assignee",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeCollaborative,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid gate bead",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeGate,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: false,
+		},
+		{
+			name: "gate with assignee",
+			bead: &Bead{
+				ID:       "bd-001",
+				Type:     BeadTypeGate,
+				Title:    "Test",
+				Status:   BeadStatusOpen,
+				Assignee: "claude-1",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid tier",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeTask,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+				Tier:   BeadTier("invalid"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid status",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeTask,
+				Title:  "Test",
+				Status: BeadStatus("invalid"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "condition without condition command",
+			bead: &Bead{
+				ID:            "bd-001",
+				Type:          BeadTypeCondition,
+				Title:         "Test",
+				Status:        BeadStatusOpen,
+				ConditionSpec: &ConditionSpec{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "stop without spec",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeStop,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: true,
+		},
+		{
+			name: "stop without agent",
+			bead: &Bead{
+				ID:       "bd-001",
+				Type:     BeadTypeStop,
+				Title:    "Test",
+				Status:   BeadStatusOpen,
+				StopSpec: &StopSpec{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "start without spec",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeStart,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: true,
+		},
+		{
+			name: "start without agent",
+			bead: &Bead{
+				ID:        "bd-001",
+				Type:      BeadTypeStart,
+				Title:     "Test",
+				Status:    BeadStatusOpen,
+				StartSpec: &StartSpec{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "code without spec",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeCode,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: true,
+		},
+		{
+			name: "code without code",
+			bead: &Bead{
+				ID:       "bd-001",
+				Type:     BeadTypeCode,
+				Title:    "Test",
+				Status:   BeadStatusOpen,
+				CodeSpec: &CodeSpec{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "expand without spec",
+			bead: &Bead{
+				ID:     "bd-001",
+				Type:   BeadTypeExpand,
+				Title:  "Test",
+				Status: BeadStatusOpen,
+			},
+			wantErr: true,
+		},
+		{
+			name: "expand without template",
+			bead: &Bead{
+				ID:         "bd-001",
+				Type:       BeadTypeExpand,
+				Title:      "Test",
+				Status:     BeadStatusOpen,
+				ExpandSpec: &ExpandSpec{},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -281,32 +470,65 @@ func TestBead_IsEphemeral(t *testing.T) {
 }
 
 func TestBead_Close(t *testing.T) {
-	bead := &Bead{
-		ID:     "bd-001",
-		Type:   BeadTypeTask,
-		Title:  "Test",
-		Status: BeadStatusInProgress,
-	}
+	t.Run("close from in_progress with outputs", func(t *testing.T) {
+		bead := &Bead{
+			ID:     "bd-001",
+			Type:   BeadTypeTask,
+			Title:  "Test",
+			Status: BeadStatusInProgress,
+		}
 
-	outputs := map[string]any{"result": "success"}
-	if err := bead.Close(outputs); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
+		outputs := map[string]any{"result": "success"}
+		if err := bead.Close(outputs); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
 
-	if bead.Status != BeadStatusClosed {
-		t.Errorf("Status = %s, want closed", bead.Status)
-	}
-	if bead.ClosedAt == nil {
-		t.Error("ClosedAt should be set")
-	}
-	if bead.Outputs["result"] != "success" {
-		t.Errorf("Outputs[result] = %v, want success", bead.Outputs["result"])
-	}
+		if bead.Status != BeadStatusClosed {
+			t.Errorf("Status = %s, want closed", bead.Status)
+		}
+		if bead.ClosedAt == nil {
+			t.Error("ClosedAt should be set")
+		}
+		if bead.Outputs["result"] != "success" {
+			t.Errorf("Outputs[result] = %v, want success", bead.Outputs["result"])
+		}
+	})
 
-	// Try to close again
-	if err := bead.Close(nil); err == nil {
-		t.Error("Expected error when closing already closed bead")
-	}
+	t.Run("close from open", func(t *testing.T) {
+		bead := &Bead{
+			ID:     "bd-001",
+			Type:   BeadTypeTask,
+			Title:  "Test",
+			Status: BeadStatusOpen,
+		}
+
+		if err := bead.Close(nil); err != nil {
+			t.Fatalf("Close from open failed: %v", err)
+		}
+
+		if bead.Status != BeadStatusClosed {
+			t.Errorf("Status = %s, want closed", bead.Status)
+		}
+		if bead.ClosedAt == nil {
+			t.Error("ClosedAt should be set")
+		}
+		if bead.Outputs != nil {
+			t.Errorf("Outputs should be nil, got %v", bead.Outputs)
+		}
+	})
+
+	t.Run("close already closed", func(t *testing.T) {
+		bead := &Bead{
+			ID:     "bd-001",
+			Type:   BeadTypeTask,
+			Title:  "Test",
+			Status: BeadStatusClosed,
+		}
+
+		if err := bead.Close(nil); err == nil {
+			t.Error("Expected error when closing already closed bead")
+		}
+	})
 }
 
 func TestCodeSpec_JSONRoundTrip(t *testing.T) {

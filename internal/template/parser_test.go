@@ -510,3 +510,318 @@ description = "First"
 		t.Errorf("expected first enum 'bv-triage', got %q", v.Enum[0])
 	}
 }
+
+func TestParseString_StepWithID_Empty(t *testing.T) {
+	toml := `
+[meta]
+name = "test"
+version = "1.0.0"
+
+[[steps]]
+description = "Missing ID"
+`
+
+	_, err := ParseString(toml)
+	if err == nil {
+		t.Fatal("expected error for missing step ID")
+	}
+	if !strings.Contains(err.Error(), "id is required") {
+		t.Errorf("expected ID required error, got: %v", err)
+	}
+}
+
+func TestParseString_StepWithCode(t *testing.T) {
+	toml := `
+[meta]
+name = "test-code"
+version = "1.0.0"
+
+[[steps]]
+id = "run-script"
+description = "Run a script"
+code = "echo 'hello world'"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Code != "echo 'hello world'" {
+		t.Errorf("expected code, got %q", step.Code)
+	}
+}
+
+func TestParseString_StepWithAction(t *testing.T) {
+	toml := `
+[meta]
+name = "test-action"
+version = "1.0.0"
+
+[[steps]]
+id = "notify"
+description = "Notify user"
+action = "send-slack"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Action != "send-slack" {
+		t.Errorf("expected action 'send-slack', got %q", step.Action)
+	}
+}
+
+func TestParseString_StepWithValidation(t *testing.T) {
+	toml := `
+[meta]
+name = "test-validation"
+version = "1.0.0"
+
+[[steps]]
+id = "build"
+description = "Build project"
+validation = "test -f ./build/output"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Validation != "test -f ./build/output" {
+		t.Errorf("expected validation, got %q", step.Validation)
+	}
+}
+
+func TestParseString_MetaFields(t *testing.T) {
+	toml := `
+[meta]
+name = "full-meta"
+version = "1.0.0"
+description = "A complete template"
+author = "test-author"
+type = "loop"
+fits_in_context = true
+requires_human = true
+estimated_minutes = 30
+max_iterations = 50
+on_error = "inject-gate"
+error_gate_template = "error-handler"
+max_retries = 3
+
+[[steps]]
+id = "step-1"
+description = "First"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	if tmpl.Meta.Description != "A complete template" {
+		t.Errorf("expected description, got %q", tmpl.Meta.Description)
+	}
+	if tmpl.Meta.Author != "test-author" {
+		t.Errorf("expected author 'test-author', got %q", tmpl.Meta.Author)
+	}
+	if !tmpl.Meta.FitsInContext {
+		t.Error("expected fits_in_context to be true")
+	}
+	if tmpl.Meta.EstimatedMinutes != 30 {
+		t.Errorf("expected estimated_minutes 30, got %d", tmpl.Meta.EstimatedMinutes)
+	}
+	if tmpl.Meta.OnError != "inject-gate" {
+		t.Errorf("expected on_error 'inject-gate', got %q", tmpl.Meta.OnError)
+	}
+	if tmpl.Meta.ErrorGateTemplate != "error-handler" {
+		t.Errorf("expected error_gate_template 'error-handler', got %q", tmpl.Meta.ErrorGateTemplate)
+	}
+	if tmpl.Meta.MaxRetries != 3 {
+		t.Errorf("expected max_retries 3, got %d", tmpl.Meta.MaxRetries)
+	}
+}
+
+func TestParseString_StepWithTimeout(t *testing.T) {
+	toml := `
+[meta]
+name = "test-timeout"
+version = "1.0.0"
+
+[[steps]]
+id = "wait"
+description = "Wait for condition"
+condition = "test -f /tmp/ready"
+timeout = "10m"
+
+[steps.on_true]
+template = "proceed"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Timeout != "10m" {
+		t.Errorf("expected timeout '10m', got %q", step.Timeout)
+	}
+}
+
+func TestParseString_StepWithAssignee(t *testing.T) {
+	toml := `
+[meta]
+name = "test-assignee"
+version = "1.0.0"
+
+[[steps]]
+id = "work"
+description = "Do work"
+assignee = "claude-1"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Assignee != "claude-1" {
+		t.Errorf("expected assignee 'claude-1', got %q", step.Assignee)
+	}
+}
+
+func TestParseString_StepWithOnTimeout(t *testing.T) {
+	toml := `
+[meta]
+name = "test-on-timeout"
+version = "1.0.0"
+
+[[steps]]
+id = "check"
+description = "Check with timeout handler"
+condition = "test -f /tmp/ready"
+timeout = "5m"
+
+[steps.on_true]
+template = "proceed"
+
+[steps.on_false]
+template = "wait"
+
+[steps.on_timeout]
+template = "handle-timeout"
+variables = { reason = "timed out" }
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.OnTimeout == nil {
+		t.Fatal("expected on_timeout")
+	}
+	if step.OnTimeout.Template != "handle-timeout" {
+		t.Errorf("expected on_timeout template, got %q", step.OnTimeout.Template)
+	}
+	if step.OnTimeout.Variables["reason"] != "timed out" {
+		t.Errorf("expected on_timeout variable, got %v", step.OnTimeout.Variables)
+	}
+}
+
+func TestParseString_InlineStepsInCondition(t *testing.T) {
+	toml := `
+[meta]
+name = "test-inline"
+version = "1.0.0"
+
+[[steps]]
+id = "check"
+description = "Check and do inline work"
+condition = "test -f /tmp/flag"
+
+[steps.on_true]
+inline = [
+	{ id = "action-1", type = "task", description = "First action" },
+	{ id = "action-2", type = "task", description = "Second action", needs = ["action-1"] }
+]
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.OnTrue == nil {
+		t.Fatal("expected on_true")
+	}
+	if len(step.OnTrue.Inline) != 2 {
+		t.Errorf("expected 2 inline steps, got %d", len(step.OnTrue.Inline))
+	}
+	if step.OnTrue.Inline[0].ID != "action-1" {
+		t.Errorf("expected first inline id 'action-1', got %q", step.OnTrue.Inline[0].ID)
+	}
+	if len(step.OnTrue.Inline[1].Needs) != 1 || step.OnTrue.Inline[1].Needs[0] != "action-1" {
+		t.Errorf("expected second inline to need action-1")
+	}
+}
+
+func TestParseString_IntVariable(t *testing.T) {
+	toml := `
+[meta]
+name = "test-int-var"
+version = "1.0.0"
+
+[variables]
+max_count = { required = false, default = 100, type = "int" }
+
+[[steps]]
+id = "step-1"
+description = "First"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	v := tmpl.Variables["max_count"]
+	if v.Type != VarTypeInt {
+		t.Errorf("expected int type, got %q", v.Type)
+	}
+}
+
+func TestParseString_VariableWithDescription(t *testing.T) {
+	toml := `
+[meta]
+name = "test-var-desc"
+version = "1.0.0"
+
+[variables]
+task_id = { required = true, description = "The ID of the task to work on" }
+
+[[steps]]
+id = "step-1"
+description = "First"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	v := tmpl.Variables["task_id"]
+	if v.Description != "The ID of the task to work on" {
+		t.Errorf("expected description, got %q", v.Description)
+	}
+}

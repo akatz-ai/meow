@@ -368,6 +368,11 @@ func (o *Orchestrator) dispatch(ctx context.Context, bead *types.Bead) error {
 	switch bead.Type {
 	case types.BeadTypeTask:
 		return o.handleTask(ctx, bead)
+	case types.BeadTypeCollaborative:
+		// Collaborative beads work like tasks but with multiple agents
+		return o.handleTask(ctx, bead)
+	case types.BeadTypeGate:
+		return o.handleGate(ctx, bead)
 	case types.BeadTypeCondition:
 		return o.handleCondition(ctx, bead)
 	case types.BeadTypeStop:
@@ -409,6 +414,22 @@ func (o *Orchestrator) handleTask(ctx context.Context, bead *types.Bead) error {
 	}
 
 	// Task beads are closed by agents via `meow close`
+	// The orchestrator just waits - it will be picked up on next tick
+	return nil
+}
+
+// handleGate waits for human approval via `meow approve`.
+// Gates block workflow progress until explicitly approved.
+func (o *Orchestrator) handleGate(ctx context.Context, bead *types.Bead) error {
+	// Mark as in_progress if not already
+	if bead.Status == types.BeadStatusOpen {
+		bead.Status = types.BeadStatusInProgress
+		if err := o.store.Update(ctx, bead); err != nil {
+			return fmt.Errorf("updating gate bead status: %w", err)
+		}
+	}
+
+	// Gate beads are closed by humans via `meow approve`
 	// The orchestrator just waits - it will be picked up on next tick
 	return nil
 }
@@ -844,21 +865,27 @@ func (o *Orchestrator) expandInlineSteps(ctx context.Context, parentBead *types.
 }
 
 // setInlineBeadSpec sets the type-specific spec for an inline bead.
-// Currently only handles task beads (which need no spec).
-// TODO: Extend to support code/start/stop beads with additional fields in inlineStep.
+// Inline steps currently only support task and collaborative types.
+// Complex types (condition, code, start, stop, expand) require additional
+// configuration fields not available in inline step definitions.
 func (o *Orchestrator) setInlineBeadSpec(bead *types.Bead, step inlineStep) error {
 	switch bead.Type {
-	case types.BeadTypeTask:
-		// Task beads use Instructions field, no spec needed
+	case types.BeadTypeTask, types.BeadTypeCollaborative:
+		// Task and collaborative beads use Instructions field, no spec needed
 		return nil
-	case types.BeadTypeCondition, types.BeadTypeCode, types.BeadTypeStart, types.BeadTypeStop, types.BeadTypeExpand:
-		// These types require additional fields not available in basic inline steps
-		// For now, log a warning - full support would require extending inlineStep
-		o.logger.Warn("inline step type may need additional configuration",
-			"type", bead.Type,
-			"bead", bead.ID,
-		)
+	case types.BeadTypeGate:
+		// Gate beads don't need a spec - they're approved by humans
 		return nil
+	case types.BeadTypeCondition:
+		return fmt.Errorf("condition beads cannot be defined inline (requires condition command and branches)")
+	case types.BeadTypeCode:
+		return fmt.Errorf("code beads cannot be defined inline (requires code field)")
+	case types.BeadTypeStart:
+		return fmt.Errorf("start beads cannot be defined inline (requires agent specification)")
+	case types.BeadTypeStop:
+		return fmt.Errorf("stop beads cannot be defined inline (requires agent specification)")
+	case types.BeadTypeExpand:
+		return fmt.Errorf("expand beads cannot be defined inline (requires template reference)")
 	default:
 		return fmt.Errorf("unsupported inline bead type: %s", bead.Type)
 	}

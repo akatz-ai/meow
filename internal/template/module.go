@@ -320,5 +320,62 @@ func (w *Workflow) Validate() error {
 		}
 	}
 
+	// Check for dependency cycles
+	if cycle := w.findCycle(); len(cycle) > 0 {
+		return fmt.Errorf("circular dependency detected: %s", strings.Join(cycle, " → "))
+	}
+
+	return nil
+}
+
+// findCycle returns the cycle path if one exists, empty slice otherwise.
+func (w *Workflow) findCycle() []string {
+	// Build adjacency list (step -> its dependencies)
+	deps := make(map[string][]string)
+	for _, step := range w.Steps {
+		deps[step.ID] = step.Needs
+	}
+
+	// States: 0 = unvisited, 1 = visiting, 2 = visited
+	state := make(map[string]int)
+	parent := make(map[string]string)
+
+	var cycle []string
+
+	var dfs func(id string) bool
+	dfs = func(id string) bool {
+		state[id] = 1 // visiting
+
+		for _, dep := range deps[id] {
+			if state[dep] == 1 {
+				// Found cycle - reconstruct path
+				cycle = []string{dep}
+				for cur := id; cur != dep; {
+					cycle = append([]string{cur}, cycle...)
+					cur = parent[cur]
+				}
+				cycle = append([]string{dep}, cycle...)
+				return true
+			}
+			if state[dep] == 0 {
+				parent[dep] = id
+				if dfs(dep) {
+					return true
+				}
+			}
+		}
+
+		state[id] = 2 // visited
+		return false
+	}
+
+	for _, step := range w.Steps {
+		if state[step.ID] == 0 {
+			if dfs(step.ID) {
+				return cycle
+			}
+		}
+	}
+
 	return nil
 }
