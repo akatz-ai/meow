@@ -157,8 +157,6 @@ func validateSteps(t *Template, name string, result *ValidationResult) {
 				"start":         true,
 				"stop":          true,
 				"expand":        true,
-				"blocking-gate": true, // Legacy type (becomes condition)
-				"restart":       true, // Legacy type (becomes condition)
 			}
 			if !valid[step.Type] {
 				result.Add(name, step.ID, "type",
@@ -325,7 +323,7 @@ func checkVarRefs(text, name, stepID, field string, defined map[string]bool, t *
 func validateTypeSpecific(t *Template, name string, result *ValidationResult) {
 	for _, step := range t.Steps {
 		// Condition steps should have branches
-		if step.Condition != "" && step.OnTrue == nil && step.OnFalse == nil && step.Type != "restart" {
+		if step.Condition != "" && step.OnTrue == nil && step.OnFalse == nil {
 			result.Add(name, step.ID, "condition",
 				"condition without on_true or on_false branch",
 				"add on_true and/or on_false to specify branch actions")
@@ -336,17 +334,10 @@ func validateTypeSpecific(t *Template, name string, result *ValidationResult) {
 			// Static template reference - could validate existence but that's runtime
 		}
 
-		// Restart steps should have condition
-		if step.Type == "restart" && step.Condition == "" {
+		// Gate steps should have instructions
+		if step.Type == "gate" && step.Instructions == "" {
 			result.Add(name, step.ID, "type",
-				"restart step without condition",
-				"add condition to control when loop restarts")
-		}
-
-		// blocking-gate type should be explicit
-		if step.Type == "blocking-gate" && step.Instructions == "" {
-			result.Add(name, step.ID, "type",
-				"blocking-gate without instructions",
+				"gate without instructions",
 				"add instructions explaining what the human should do")
 		}
 	}

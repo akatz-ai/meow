@@ -17,7 +17,7 @@ version = "1.0.0"
 description = "Master orchestration loop for MEOW Stack"
 author = "meow-stack"
 
-# This is a loop template - it restarts until condition is false
+# This is a loop template - it continues via condition until no more work remains
 type = "loop"
 max_iterations = 100
 
@@ -66,9 +66,9 @@ needs = ["bake-meta"]
 template = "{{output.bake-meta.molecule_id}}"
 
 [[steps]]
-id = "restart"
-description = "Loop back to process next batch of work"
-type = "restart"
+id = "check-continue"
+description = "Check if more work remains and loop back"
+type = "condition"
 needs = ["run-inner"]
 # Shell-based condition: continue while open epics exist and under iteration limit
 condition = """
@@ -77,3 +77,11 @@ condition = """
   # Check iteration limit
   test $(jq -r '.iteration // 0' .beads/molecules/meow-state.json 2>/dev/null || echo 0) -lt 100
 """
+
+[steps.on_true]
+# More work exists - expand outer-loop again to continue
+template = "outer-loop"
+
+[steps.on_false]
+# No more work - workflow completes
+inline = []

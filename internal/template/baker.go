@@ -376,15 +376,25 @@ func (b *Baker) stepToBead(step *Step, stepToID map[string]string) (*types.Bead,
 func (b *Baker) determineBeadType(step *Step) types.BeadType {
 	// Explicit type via step.Type
 	switch step.Type {
-	case "blocking-gate":
-		// Blocking gates are condition beads that wait
+	case "task":
+		return types.BeadTypeTask
+	case "collaborative":
+		return types.BeadTypeCollaborative
+	case "gate":
+		return types.BeadTypeGate
+	case "condition":
 		return types.BeadTypeCondition
-	case "restart":
-		// Restart is a condition that controls loop continuation
-		return types.BeadTypeCondition
+	case "code":
+		return types.BeadTypeCode
+	case "start":
+		return types.BeadTypeStart
+	case "stop":
+		return types.BeadTypeStop
+	case "expand":
+		return types.BeadTypeExpand
 	}
 
-	// Infer from other fields
+	// Infer from other fields if type not specified
 	if step.Template != "" {
 		return types.BeadTypeExpand
 	}
@@ -437,12 +447,6 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 				return fmt.Errorf("converting on_timeout: %w", err)
 			}
 			spec.OnTimeout = target
-		}
-
-		// For blocking-gate type, set a blocking condition
-		if step.Type == "blocking-gate" {
-			// The orchestrator will handle this specially
-			spec.Condition = "meow wait-approve --bead " + bead.ID
 		}
 
 		bead.ConditionSpec = spec

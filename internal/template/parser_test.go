@@ -259,9 +259,15 @@ max_iterations = 100
 on_error = "inject-gate"
 
 [[steps]]
-id = "restart"
-type = "restart"
+id = "check-continue"
+type = "condition"
 condition = "bd list --status=open | grep -q ."
+
+[steps.on_true]
+template = "outer-loop"
+
+[steps.on_false]
+inline = []
 `
 
 	tmpl, err := ParseString(toml)
@@ -275,8 +281,8 @@ condition = "bd list --status=open | grep -q ."
 	if tmpl.Meta.MaxIterations != 100 {
 		t.Errorf("expected max_iterations 100, got %d", tmpl.Meta.MaxIterations)
 	}
-	if tmpl.Steps[0].Type != "restart" {
-		t.Errorf("expected step type 'restart', got %q", tmpl.Steps[0].Type)
+	if tmpl.Steps[0].Type != "condition" {
+		t.Errorf("expected step type 'condition', got %q", tmpl.Steps[0].Type)
 	}
 }
 
@@ -434,7 +440,7 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-func TestParseString_BlockingGate(t *testing.T) {
+func TestParseString_GateStep(t *testing.T) {
 	toml := `
 [meta]
 name = "test-gate"
@@ -444,7 +450,7 @@ requires_human = true
 [[steps]]
 id = "await"
 description = "Wait for approval"
-type = "blocking-gate"
+type = "gate"
 instructions = "Wait for human"
 `
 
@@ -456,8 +462,8 @@ instructions = "Wait for human"
 	if !tmpl.Meta.RequiresHuman {
 		t.Error("expected requires_human to be true")
 	}
-	if tmpl.Steps[0].Type != "blocking-gate" {
-		t.Errorf("expected type 'blocking-gate', got %q", tmpl.Steps[0].Type)
+	if tmpl.Steps[0].Type != "gate" {
+		t.Errorf("expected type 'gate', got %q", tmpl.Steps[0].Type)
 	}
 }
 

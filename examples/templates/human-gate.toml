@@ -120,7 +120,7 @@ This step records that notification should be sent.
 [[steps]]
 id = "await-approval"
 description = "Wait for human to review and approve"
-type = "blocking-gate"
+type = "gate"
 needs = ["notify"]
 instructions = """
 ## Awaiting Human Approval

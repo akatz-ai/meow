@@ -238,14 +238,14 @@ func TestBaker_ExpandBead(t *testing.T) {
 	}
 }
 
-func TestBaker_BlockingGate(t *testing.T) {
+func TestBaker_GateStep(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
 			{
 				ID:           "gate",
 				Description:  "Wait for approval",
-				Type:         "blocking-gate",
+				Type:         "gate",
 				Instructions: "Review and approve",
 			},
 		},
@@ -260,42 +260,12 @@ func TestBaker_BlockingGate(t *testing.T) {
 	}
 
 	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeCondition {
-		t.Errorf("expected condition type for gate, got %s", bead.Type)
+	if bead.Type != types.BeadTypeGate {
+		t.Errorf("expected gate type, got %s", bead.Type)
 	}
-	if bead.ConditionSpec == nil {
-		t.Fatal("expected ConditionSpec")
-	}
-	// Blocking gate should have a wait-approve condition
-	if !strings.Contains(bead.ConditionSpec.Condition, "wait-approve") {
-		t.Errorf("expected wait-approve condition, got %q", bead.ConditionSpec.Condition)
-	}
-}
-
-func TestBaker_RestartStep(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{
-				ID:          "restart",
-				Description: "Check if loop should continue",
-				Type:        "restart",
-				Condition:   "bd list --status=open | grep -q .",
-			},
-		},
-	}
-
-	baker := NewBaker("wf-001")
-	baker.Now = fixedTime
-
-	result, err := baker.Bake(tmpl)
-	if err != nil {
-		t.Fatalf("Bake failed: %v", err)
-	}
-
-	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeCondition {
-		t.Errorf("expected condition type for restart, got %s", bead.Type)
+	// Gate beads don't need a spec - they're closed by humans
+	if bead.ConditionSpec != nil {
+		t.Errorf("gate should not have ConditionSpec")
 	}
 }
 

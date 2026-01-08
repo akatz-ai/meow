@@ -257,45 +257,31 @@ func TestValidateFull_ConditionWithBranches(t *testing.T) {
 	}
 }
 
-func TestValidateFull_RestartWithoutCondition(t *testing.T) {
+func TestValidateFull_GateWithoutInstructions(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "restart", Type: "restart"},
+			{ID: "gate", Type: "gate"},
 		},
 	}
 
 	result := ValidateFull(tmpl)
-	if !containsError(result, "restart step without condition") {
-		t.Errorf("expected restart error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFull_RestartWithCondition(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{ID: "restart", Type: "restart", Condition: "bd list --status=open | grep -q ."},
-		},
-	}
-
-	result := ValidateFull(tmpl)
-	if containsError(result, "restart step without condition") {
-		t.Errorf("expected no restart error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFull_BlockingGateWithoutInstructions(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{ID: "gate", Type: "blocking-gate"},
-		},
-	}
-
-	result := ValidateFull(tmpl)
-	if !containsError(result, "blocking-gate without instructions") {
+	if !containsError(result, "gate without instructions") {
 		t.Errorf("expected gate error, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_GateWithInstructions(t *testing.T) {
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Steps: []Step{
+			{ID: "gate", Type: "gate", Instructions: "Review and approve the changes"},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if containsError(result, "gate without instructions") {
+		t.Errorf("expected no gate error, got: %v", result.Error())
 	}
 }
 
@@ -498,8 +484,6 @@ func TestValidateFull_VariableInOnTimeoutTemplate(t *testing.T) {
 }
 
 func TestValidateFull_StepTypeInvalid(t *testing.T) {
-	// Note: In legacy format, only blocking-gate and restart are valid types
-	// Other types are valid in module format
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
@@ -510,6 +494,23 @@ func TestValidateFull_StepTypeInvalid(t *testing.T) {
 	result := ValidateFull(tmpl)
 	if !containsError(result, "invalid step type") {
 		t.Errorf("expected invalid step type error, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_AllValidStepTypes(t *testing.T) {
+	validTypes := []string{"task", "collaborative", "gate", "condition", "code", "start", "stop", "expand"}
+	for _, typ := range validTypes {
+		tmpl := &Template{
+			Meta: Meta{Name: "test"},
+			Steps: []Step{
+				{ID: "step-1", Type: typ, Instructions: "test instructions"},
+			},
+		}
+
+		result := ValidateFull(tmpl)
+		if containsError(result, "invalid step type") {
+			t.Errorf("expected no error for valid type %q, got: %v", typ, result.Error())
+		}
 	}
 }
 
