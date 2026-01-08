@@ -18,17 +18,14 @@ type Spawner struct {
 	store *Store
 
 	// Default configurations
-	defaultPrompt  string
-	readyTimeout   time.Duration
-	startupDelay   time.Duration
+	defaultPrompt string
+	startupDelay  time.Duration
 }
 
 // SpawnerConfig holds configuration for creating a Spawner.
 type SpawnerConfig struct {
 	// DefaultPrompt is sent to Claude after startup (default: "meow prime")
 	DefaultPrompt string
-	// ReadyTimeout is how long to wait for Claude to be ready (default: 30s)
-	ReadyTimeout time.Duration
 	// StartupDelay is how long to wait after creating the session (default: 500ms)
 	StartupDelay time.Duration
 }
@@ -39,16 +36,12 @@ func NewSpawner(tmux *TmuxWrapper, store *Store, cfg *SpawnerConfig) *Spawner {
 		tmux:          tmux,
 		store:         store,
 		defaultPrompt: "meow prime",
-		readyTimeout:  30 * time.Second,
 		startupDelay:  500 * time.Millisecond,
 	}
 
 	if cfg != nil {
 		if cfg.DefaultPrompt != "" {
 			s.defaultPrompt = cfg.DefaultPrompt
-		}
-		if cfg.ReadyTimeout > 0 {
-			s.readyTimeout = cfg.ReadyTimeout
 		}
 		if cfg.StartupDelay > 0 {
 			s.startupDelay = cfg.StartupDelay
@@ -250,14 +243,20 @@ func (s *Spawner) Despawn(ctx context.Context, agentID string, graceful bool, ti
 }
 
 // markStopped updates the agent's status to stopped in the store.
+// Returns nil if the agent doesn't exist (idempotent).
 func (s *Spawner) markStopped(ctx context.Context, agentID string) error {
-	return s.store.Update(ctx, agentID, func(a *types.Agent) error {
+	err := s.store.Update(ctx, agentID, func(a *types.Agent) error {
 		a.Status = types.AgentStatusStopped
 		now := time.Now()
 		a.StoppedAt = &now
 		a.CurrentBead = ""
 		return nil
 	})
+	// Ignore "not found" errors - agent may have been deleted or never existed
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		return nil
+	}
+	return err
 }
 
 // IsRunning checks if an agent's tmux session is alive.

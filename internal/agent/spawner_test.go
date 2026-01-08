@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,16 +193,12 @@ func newTestSpawner(t *testing.T, cfg *SpawnerConfig) *testSpawner {
 		tmux:          nil, // Will be set via reflection or we need interface
 		store:         store,
 		defaultPrompt: "meow prime",
-		readyTimeout:  30 * time.Second,
 		startupDelay:  10 * time.Millisecond, // Short for tests
 	}
 
 	if cfg != nil {
 		if cfg.DefaultPrompt != "" {
 			spawner.defaultPrompt = cfg.DefaultPrompt
-		}
-		if cfg.ReadyTimeout > 0 {
-			spawner.readyTimeout = cfg.ReadyTimeout
 		}
 		if cfg.StartupDelay > 0 {
 			spawner.startupDelay = cfg.StartupDelay
@@ -342,13 +339,18 @@ func (ts *testSpawner) Despawn(ctx context.Context, agentID string, graceful boo
 }
 
 func (ts *testSpawner) markStopped(ctx context.Context, agentID string) error {
-	return ts.store.Update(ctx, agentID, func(a *types.Agent) error {
+	err := ts.store.Update(ctx, agentID, func(a *types.Agent) error {
 		a.Status = types.AgentStatusStopped
 		now := time.Now()
 		a.StoppedAt = &now
 		a.CurrentBead = ""
 		return nil
 	})
+	// Ignore "not found" errors - agent may have been deleted or never existed
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		return nil
+	}
+	return err
 }
 
 func (ts *testSpawner) IsRunning(ctx context.Context, agentID string) bool {
@@ -433,8 +435,8 @@ func TestNewSpawner(t *testing.T) {
 	if s.defaultPrompt != "meow prime" {
 		t.Errorf("defaultPrompt = %s, want 'meow prime'", s.defaultPrompt)
 	}
-	if s.readyTimeout != 30*time.Second {
-		t.Errorf("readyTimeout = %v, want 30s", s.readyTimeout)
+	if s.startupDelay != 500*time.Millisecond {
+		t.Errorf("startupDelay = %v, want 500ms", s.startupDelay)
 	}
 }
 
@@ -445,16 +447,12 @@ func TestNewSpawner_WithConfig(t *testing.T) {
 
 	cfg := &SpawnerConfig{
 		DefaultPrompt: "custom prompt",
-		ReadyTimeout:  1 * time.Minute,
 		StartupDelay:  2 * time.Second,
 	}
 
 	s := NewSpawner(tmux, store, cfg)
 	if s.defaultPrompt != "custom prompt" {
 		t.Errorf("defaultPrompt = %s, want 'custom prompt'", s.defaultPrompt)
-	}
-	if s.readyTimeout != 1*time.Minute {
-		t.Errorf("readyTimeout = %v, want 1m", s.readyTimeout)
 	}
 	if s.startupDelay != 2*time.Second {
 		t.Errorf("startupDelay = %v, want 2s", s.startupDelay)
@@ -808,6 +806,18 @@ func TestSpawner_Despawn_NonexistentSession(t *testing.T) {
 	stored, _ := ts.store.Get(ctx, "test-agent")
 	if stored.Status != types.AgentStatusStopped {
 		t.Errorf("agent.Status = %s, want 'stopped'", stored.Status)
+	}
+}
+
+func TestSpawner_Despawn_CompletelyNonexistent(t *testing.T) {
+	ts := newTestSpawner(t, nil)
+	ctx := context.Background()
+
+	// Despawning an agent that doesn't exist anywhere (no session, no store)
+	// should succeed silently (idempotent behavior)
+	err := ts.Despawn(ctx, "totally-nonexistent", false, 0)
+	if err != nil {
+		t.Errorf("Despawn() should succeed for nonexistent agent, got error = %v", err)
 	}
 }
 
