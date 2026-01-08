@@ -99,6 +99,7 @@ type InlineStep struct {
 	Type         string   `toml:"type"`
 	Description  string   `toml:"description,omitempty"`
 	Instructions string   `toml:"instructions,omitempty"`
+	Assignee     string   `toml:"assignee,omitempty"`
 	Needs        []string `toml:"needs,omitempty"`
 }
 

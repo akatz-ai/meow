@@ -1049,6 +1049,7 @@ type inlineStep struct {
 	Type         string   `json:"type"`
 	Description  string   `json:"description,omitempty"`
 	Instructions string   `json:"instructions,omitempty"`
+	Assignee     string   `json:"assignee,omitempty"`
 	Needs        []string `json:"needs,omitempty"`
 }
 
@@ -1119,6 +1120,7 @@ func (o *Orchestrator) expandInlineSteps(ctx context.Context, parentBead *types.
 			Title:        step.Description,
 			Description:  step.Instructions,
 			Instructions: step.Instructions,
+			Assignee:     step.Assignee,
 			Status:       types.BeadStatusOpen,
 			Tier:         types.TierWisp,
 			Needs:        needs,

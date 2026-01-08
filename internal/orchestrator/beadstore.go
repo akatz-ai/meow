@@ -72,6 +72,7 @@ func (s *FileBeadStore) loadLocked() error {
 }
 
 // GetNextReady returns the next bead that is ready to execute.
+// Returns a copy to prevent callers from mutating internal state.
 func (s *FileBeadStore) GetNextReady(ctx context.Context) (*types.Bead, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -97,7 +98,8 @@ func (s *FileBeadStore) GetNextReady(ctx context.Context) (*types.Bead, error) {
 		return s.beadPriority(ready[i]) < s.beadPriority(ready[j])
 	})
 
-	return ready[0], nil
+	// Return a copy to prevent callers from mutating internal state
+	return copyBead(ready[0]), nil
 }
 
 // isReadyLocked checks if a bead is ready (caller must hold lock).
@@ -409,32 +411,151 @@ func copyBead(b *types.Bead) *types.Bead {
 		}
 	}
 
-	// Deep copy specs (shallow copy of the struct is sufficient for most uses,
-	// as specs are typically read-only after creation)
+	// Deep copy specs with their nested structures
 	if b.TaskOutputs != nil {
-		spec := *b.TaskOutputs
-		cp.TaskOutputs = &spec
+		cp.TaskOutputs = copyTaskOutputSpec(b.TaskOutputs)
 	}
 	if b.ConditionSpec != nil {
-		spec := *b.ConditionSpec
-		cp.ConditionSpec = &spec
+		cp.ConditionSpec = copyConditionSpec(b.ConditionSpec)
 	}
 	if b.StopSpec != nil {
 		spec := *b.StopSpec
 		cp.StopSpec = &spec
 	}
 	if b.StartSpec != nil {
-		spec := *b.StartSpec
-		cp.StartSpec = &spec
+		cp.StartSpec = copyStartSpec(b.StartSpec)
 	}
 	if b.CodeSpec != nil {
-		spec := *b.CodeSpec
-		cp.CodeSpec = &spec
+		cp.CodeSpec = copyCodeSpec(b.CodeSpec)
 	}
 	if b.ExpandSpec != nil {
-		spec := *b.ExpandSpec
-		cp.ExpandSpec = &spec
+		cp.ExpandSpec = copyExpandSpec(b.ExpandSpec)
 	}
 
 	return &cp
+}
+
+// copyTaskOutputSpec creates a deep copy of a TaskOutputSpec.
+func copyTaskOutputSpec(spec *types.TaskOutputSpec) *types.TaskOutputSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := &types.TaskOutputSpec{}
+	if spec.Required != nil {
+		cp.Required = make([]types.TaskOutputDef, len(spec.Required))
+		copy(cp.Required, spec.Required)
+	}
+	if spec.Optional != nil {
+		cp.Optional = make([]types.TaskOutputDef, len(spec.Optional))
+		copy(cp.Optional, spec.Optional)
+	}
+	return cp
+}
+
+// copyConditionSpec creates a deep copy of a ConditionSpec.
+func copyConditionSpec(spec *types.ConditionSpec) *types.ConditionSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := &types.ConditionSpec{
+		Condition: spec.Condition,
+		Timeout:   spec.Timeout,
+	}
+	if spec.OnTrue != nil {
+		cp.OnTrue = copyExpansionTarget(spec.OnTrue)
+	}
+	if spec.OnFalse != nil {
+		cp.OnFalse = copyExpansionTarget(spec.OnFalse)
+	}
+	if spec.OnTimeout != nil {
+		cp.OnTimeout = copyExpansionTarget(spec.OnTimeout)
+	}
+	return cp
+}
+
+// copyExpansionTarget creates a deep copy of an ExpansionTarget.
+func copyExpansionTarget(target *types.ExpansionTarget) *types.ExpansionTarget {
+	if target == nil {
+		return nil
+	}
+	cp := &types.ExpansionTarget{
+		Template: target.Template,
+	}
+	if target.Variables != nil {
+		cp.Variables = make(map[string]string, len(target.Variables))
+		for k, v := range target.Variables {
+			cp.Variables[k] = v
+		}
+	}
+	if target.Inline != nil {
+		cp.Inline = make([]json.RawMessage, len(target.Inline))
+		for i, raw := range target.Inline {
+			cp.Inline[i] = make(json.RawMessage, len(raw))
+			copy(cp.Inline[i], raw)
+		}
+	}
+	return cp
+}
+
+// copyStartSpec creates a deep copy of a StartSpec.
+func copyStartSpec(spec *types.StartSpec) *types.StartSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := &types.StartSpec{
+		Agent:         spec.Agent,
+		Workdir:       spec.Workdir,
+		Prompt:        spec.Prompt,
+		ResumeSession: spec.ResumeSession,
+	}
+	if spec.Env != nil {
+		cp.Env = make(map[string]string, len(spec.Env))
+		for k, v := range spec.Env {
+			cp.Env[k] = v
+		}
+	}
+	return cp
+}
+
+// copyCodeSpec creates a deep copy of a CodeSpec.
+func copyCodeSpec(spec *types.CodeSpec) *types.CodeSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := &types.CodeSpec{
+		Code:       spec.Code,
+		Workdir:    spec.Workdir,
+		OnError:    spec.OnError,
+		MaxRetries: spec.MaxRetries,
+	}
+	if spec.Env != nil {
+		cp.Env = make(map[string]string, len(spec.Env))
+		for k, v := range spec.Env {
+			cp.Env[k] = v
+		}
+	}
+	if spec.Outputs != nil {
+		cp.Outputs = make([]types.OutputSpec, len(spec.Outputs))
+		copy(cp.Outputs, spec.Outputs)
+	}
+	return cp
+}
+
+// copyExpandSpec creates a deep copy of an ExpandSpec.
+func copyExpandSpec(spec *types.ExpandSpec) *types.ExpandSpec {
+	if spec == nil {
+		return nil
+	}
+	cp := &types.ExpandSpec{
+		Template:  spec.Template,
+		Assignee:  spec.Assignee,
+		Ephemeral: spec.Ephemeral,
+	}
+	if spec.Variables != nil {
+		cp.Variables = make(map[string]string, len(spec.Variables))
+		for k, v := range spec.Variables {
+			cp.Variables[k] = v
+		}
+	}
+	return cp
 }

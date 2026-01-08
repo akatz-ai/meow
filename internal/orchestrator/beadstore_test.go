@@ -683,3 +683,156 @@ func TestFileBeadStore_FilterByHookBead(t *testing.T) {
 		t.Errorf("ListFiltered(hook_bead=bd-other) count = %d, want 1", len(wisps2))
 	}
 }
+
+func TestFileBeadStore_GetNextReady_ReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	// Create a bead with no dependencies so it's immediately ready
+	content := `{"id":"bd-001","type":"task","title":"Task 1","status":"open","labels":["label1"],"created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the next ready bead twice
+	bead1, err := store.GetNextReady(ctx)
+	if err != nil {
+		t.Fatalf("GetNextReady() error = %v", err)
+	}
+	bead2, err := store.GetNextReady(ctx)
+	if err != nil {
+		t.Fatalf("GetNextReady() error = %v", err)
+	}
+
+	// Modify bead1
+	bead1.Title = "Modified"
+	bead1.Labels = append(bead1.Labels, "label2")
+
+	// bead2 should be unchanged (separate copy)
+	if bead2.Title == "Modified" {
+		t.Error("GetNextReady() returned pointer to internal state - title was mutated")
+	}
+	if len(bead2.Labels) != 1 {
+		t.Error("GetNextReady() returned pointer to internal state - labels slice was mutated")
+	}
+
+	// Verify internal state is also unchanged
+	bead3, err := store.Get(ctx, "bd-001")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if bead3.Title == "Modified" {
+		t.Error("Internal state was mutated via returned pointer from GetNextReady - title changed")
+	}
+	if len(bead3.Labels) != 1 {
+		t.Error("Internal state was mutated via returned pointer from GetNextReady - labels slice changed")
+	}
+}
+
+func TestFileBeadStore_Get_DeepCopySpecs(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a bead with a ConditionSpec that has nested ExpansionTargets with Variables
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-cond","type":"condition","title":"Condition","status":"open","condition_spec":{"condition":"test -f foo","on_true":{"template":"tpl","variables":{"key":"value"}},"on_false":{"template":"other"}},"created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-expand","type":"expand","title":"Expand","status":"open","expand_spec":{"template":"tpl","variables":{"var1":"val1"}},"created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-start","type":"start","title":"Start","status":"open","start_spec":{"agent":"test-agent","env":{"ENV_VAR":"value"}},"created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-code","type":"code","title":"Code","status":"open","code_spec":{"code":"echo hello","env":{"PATH":"/bin"}},"created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test ConditionSpec deep copy
+	cond1, err := store.Get(ctx, "bd-cond")
+	if err != nil || cond1 == nil {
+		t.Fatalf("Get(bd-cond) error = %v", err)
+	}
+	cond2, err := store.Get(ctx, "bd-cond")
+	if err != nil || cond2 == nil {
+		t.Fatalf("Get(bd-cond) error = %v", err)
+	}
+
+	// Modify cond1's nested structure
+	cond1.ConditionSpec.OnTrue.Variables["key"] = "modified"
+	cond1.ConditionSpec.OnTrue.Template = "modified-tpl"
+
+	// cond2 should be unchanged
+	if cond2.ConditionSpec.OnTrue.Variables["key"] != "value" {
+		t.Error("ConditionSpec.OnTrue.Variables was not deep copied")
+	}
+	if cond2.ConditionSpec.OnTrue.Template != "tpl" {
+		t.Error("ConditionSpec.OnTrue.Template was not deep copied")
+	}
+
+	// Test ExpandSpec deep copy
+	exp1, err := store.Get(ctx, "bd-expand")
+	if err != nil || exp1 == nil {
+		t.Fatalf("Get(bd-expand) error = %v", err)
+	}
+	exp2, err := store.Get(ctx, "bd-expand")
+	if err != nil || exp2 == nil {
+		t.Fatalf("Get(bd-expand) error = %v", err)
+	}
+
+	exp1.ExpandSpec.Variables["var1"] = "modified"
+
+	if exp2.ExpandSpec.Variables["var1"] != "val1" {
+		t.Error("ExpandSpec.Variables was not deep copied")
+	}
+
+	// Test StartSpec deep copy
+	start1, err := store.Get(ctx, "bd-start")
+	if err != nil || start1 == nil {
+		t.Fatalf("Get(bd-start) error = %v", err)
+	}
+	start2, err := store.Get(ctx, "bd-start")
+	if err != nil || start2 == nil {
+		t.Fatalf("Get(bd-start) error = %v", err)
+	}
+
+	start1.StartSpec.Env["ENV_VAR"] = "modified"
+
+	if start2.StartSpec.Env["ENV_VAR"] != "value" {
+		t.Error("StartSpec.Env was not deep copied")
+	}
+
+	// Test CodeSpec deep copy
+	code1, err := store.Get(ctx, "bd-code")
+	if err != nil || code1 == nil {
+		t.Fatalf("Get(bd-code) error = %v", err)
+	}
+	code2, err := store.Get(ctx, "bd-code")
+	if err != nil || code2 == nil {
+		t.Fatalf("Get(bd-code) error = %v", err)
+	}
+
+	code1.CodeSpec.Env["PATH"] = "/modified"
+
+	if code2.CodeSpec.Env["PATH"] != "/bin" {
+		t.Error("CodeSpec.Env was not deep copied")
+	}
+}

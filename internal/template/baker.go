@@ -614,13 +614,19 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 			beadType = types.BeadTypeTask
 		}
 
+		// Use step's assignee if specified, otherwise fall back to baker's default
+		assignee := step.Assignee
+		if assignee == "" {
+			assignee = b.Assignee
+		}
+
 		bead := &types.Bead{
 			ID:           beadID,
 			Type:         beadType,
 			Title:        description,
 			Description:  instructions,
 			Status:       types.BeadStatusOpen,
-			Assignee:     b.Assignee,
+			Assignee:     assignee,
 			Needs:        needs,
 			Parent:       parentBeadID,
 			Tier:         types.TierWisp, // Inline beads from conditions are wisps

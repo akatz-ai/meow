@@ -433,6 +433,9 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	if v, ok := data["instructions"].(string); ok {
 		step.Instructions = v
 	}
+	if v, ok := data["assignee"].(string); ok {
+		step.Assignee = v
+	}
 
 	// Parse needs (dependencies)
 	if needs, ok := data["needs"].([]any); ok {
