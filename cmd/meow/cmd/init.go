@@ -29,7 +29,7 @@ var (
 )
 
 func init() {
-	initCmd.Flags().BoolVar(&initWithHooks, "hooks", true, "setup Claude Code hooks for automation")
+	initCmd.Flags().BoolVar(&initWithHooks, "hooks", false, "setup Claude Code hooks for automation (use only in agent worktrees)")
 	initCmd.Flags().BoolVar(&initSkipTemplates, "skip-templates", false, "skip copying default templates")
 	rootCmd.AddCommand(initCmd)
 }
@@ -169,19 +169,29 @@ func setupClaudeHooks(dir string) (bool, error) {
 		return false, fmt.Errorf("creating .claude directory: %w", err)
 	}
 
-	// Create settings with hooks
+	// Create settings with hooks (using new matcher-based format)
 	settingsContent := `{
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "meow prime --hook 2>/dev/null || true"
+        "matcher": {},
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow prime --hook 2>/dev/null || true"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "type": "command",
-        "command": "meow prime --format prompt 2>/dev/null || true"
+        "matcher": {},
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow prime --format prompt 2>/dev/null || true"
+          }
+        ]
       }
     ]
   }
