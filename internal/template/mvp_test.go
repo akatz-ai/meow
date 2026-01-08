@@ -1,6 +1,7 @@
 package template
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -613,5 +614,77 @@ type = "task"
 	}
 	if v.Default != "default-id" {
 		t.Errorf("expected default, got %v", v.Default)
+	}
+}
+
+func TestParseModuleString_CircularDependency(t *testing.T) {
+	moduleToml := `
+[main]
+name = "cycle-test"
+
+[[main.steps]]
+id = "a"
+type = "task"
+needs = ["b"]
+
+[[main.steps]]
+id = "b"
+type = "task"
+needs = ["a"]
+`
+	_, err := ParseModuleString(moduleToml, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for circular dependency")
+	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("expected circular dependency error, got: %v", err)
+	}
+}
+
+func TestParseModuleString_SelfReference(t *testing.T) {
+	moduleToml := `
+[main]
+name = "self-ref-test"
+
+[[main.steps]]
+id = "self"
+type = "task"
+needs = ["self"]
+`
+	_, err := ParseModuleString(moduleToml, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for self-reference")
+	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("expected circular dependency error, got: %v", err)
+	}
+}
+
+func TestParseModuleString_LongerCycle(t *testing.T) {
+	moduleToml := `
+[main]
+name = "long-cycle-test"
+
+[[main.steps]]
+id = "a"
+type = "task"
+needs = ["c"]
+
+[[main.steps]]
+id = "b"
+type = "task"
+needs = ["a"]
+
+[[main.steps]]
+id = "c"
+type = "task"
+needs = ["b"]
+`
+	_, err := ParseModuleString(moduleToml, "test.toml")
+	if err == nil {
+		t.Fatal("expected error for longer cycle")
+	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("expected circular dependency error, got: %v", err)
 	}
 }

@@ -2558,3 +2558,74 @@ type failingExpander struct {
 func (e *failingExpander) Expand(ctx context.Context, spec *types.ExpandSpec, parent *types.Bead) error {
 	return e.err
 }
+
+// --- Gate Handler Tests ---
+
+func TestOrchestrator_DispatchGate(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add a gate bead
+	gateBead := &types.Bead{
+		ID:     "bd-gate-001",
+		Type:   types.BeadTypeGate,
+		Title:  "Approval gate",
+		Status: types.BeadStatusOpen,
+	}
+	store.addReady(gateBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Run briefly - gate won't auto-close
+	_ = orch.Run(ctx)
+
+	// Verify gate was marked in_progress but NOT closed (must be closed by human)
+	if store.beads["bd-gate-001"].Status != types.BeadStatusInProgress {
+		t.Errorf("Gate status = %s, want in_progress", store.beads["bd-gate-001"].Status)
+	}
+}
+
+// --- Collaborative Handler Tests ---
+
+func TestOrchestrator_DispatchCollaborative(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add a collaborative bead
+	collabBead := &types.Bead{
+		ID:       "bd-collab-001",
+		Type:     types.BeadTypeCollaborative,
+		Title:    "Collaborative task",
+		Status:   types.BeadStatusOpen,
+		Assignee: "claude-team",
+	}
+	store.addReady(collabBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Run briefly - collaborative beads work like tasks
+	_ = orch.Run(ctx)
+
+	// Verify collaborative was marked in_progress (like a task)
+	if store.beads["bd-collab-001"].Status != types.BeadStatusInProgress {
+		t.Errorf("Collaborative status = %s, want in_progress", store.beads["bd-collab-001"].Status)
+	}
+}
