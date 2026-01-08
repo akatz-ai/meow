@@ -328,7 +328,10 @@ func TestPrimeShowsNoRequiredOutputsWhenEmpty(t *testing.T) {
 		t.Fatal("expected output, got nil")
 	}
 
-	// Check current step has no required outputs
+	// Check current step exists and has no required outputs
+	if output.CurrentStep == nil {
+		t.Fatal("expected current step")
+	}
 	if len(output.CurrentStep.RequiredOutputs) != 0 {
 		t.Errorf("expected 0 required outputs, got %d", len(output.CurrentStep.RequiredOutputs))
 	}
