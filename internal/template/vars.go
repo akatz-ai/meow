@@ -216,7 +216,12 @@ func (c *VarContext) resolveOutput(beadID, field string) (any, error) {
 			var ok bool
 			val, ok = v[part]
 			if !ok {
-				return nil, fmt.Errorf("output %q not found in bead %q", field, beadID)
+				// List available fields to help with debugging
+				available := make([]string, 0, len(v))
+				for k := range v {
+					available = append(available, k)
+				}
+				return nil, fmt.Errorf("output %q not found in bead %q (available: %v)", field, beadID, available)
 			}
 		default:
 			return nil, fmt.Errorf("cannot access field %q on non-map value in bead %q", part, beadID)
