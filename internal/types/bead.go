@@ -161,6 +161,10 @@ type StartSpec struct {
 	Env           map[string]string `json:"env,omitempty" toml:"env,omitempty"`
 	Prompt        string            `json:"prompt,omitempty" toml:"prompt,omitempty"` // Default: "meow prime"
 	ResumeSession string            `json:"resume_session,omitempty" toml:"resume_session,omitempty"`
+	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks.
+	// nil = use config default (typically true), false = explicitly disable.
+	// Hooks enable the Ralph Wiggum loop for autonomous agent operation.
+	SetupHooks *bool `json:"setup_hooks,omitempty" toml:"setup_hooks,omitempty"`
 }
 
 // CodeSpec holds fields specific to code beads.

@@ -82,6 +82,12 @@ ephemeral = "on_complete"
 level = "info"
 format = "json"
 file = ".meow/state/meow.log"
+
+[agent]
+# setup_hooks controls whether spawned agents get .claude/settings.json with MEOW hooks.
+# When true (default), agents run the Ralph Wiggum loop for autonomous operation.
+# Set to false to disable automatic hook injection for all agents.
+setup_hooks = true
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("writing config: %w", err)

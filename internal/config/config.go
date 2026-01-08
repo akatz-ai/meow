@@ -36,6 +36,14 @@ const (
 	LogFormatText LogFormat = "text"
 )
 
+// AgentConfig holds agent-related settings.
+type AgentConfig struct {
+	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks
+	// when spawning agents. Default: true (agents get hooks for Ralph Wiggum loop).
+	// Set to false to disable automatic hook injection.
+	SetupHooks bool `toml:"setup_hooks"`
+}
+
 // PathsConfig holds path configuration.
 type PathsConfig struct {
 	TemplateDir string `toml:"template_dir"`
@@ -70,12 +78,13 @@ type LoggingConfig struct {
 
 // Config is the main configuration struct for MEOW.
 type Config struct {
-	Version      string              `toml:"version"`
-	Paths        PathsConfig         `toml:"paths"`
-	Defaults     DefaultsConfig      `toml:"defaults"`
-	Orchestrator OrchestratorConfig  `toml:"orchestrator"`
-	Cleanup      CleanupConfig       `toml:"cleanup"`
-	Logging      LoggingConfig       `toml:"logging"`
+	Version      string             `toml:"version"`
+	Paths        PathsConfig        `toml:"paths"`
+	Defaults     DefaultsConfig     `toml:"defaults"`
+	Orchestrator OrchestratorConfig `toml:"orchestrator"`
+	Cleanup      CleanupConfig      `toml:"cleanup"`
+	Logging      LoggingConfig      `toml:"logging"`
+	Agent        AgentConfig        `toml:"agent"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -103,6 +112,9 @@ func Default() *Config {
 			Level:  LogLevelInfo,
 			Format: LogFormatJSON,
 			File:   ".meow/state/meow.log",
+		},
+		Agent: AgentConfig{
+			SetupHooks: true, // Enable Ralph Wiggum loop by default for agents
 		},
 	}
 }

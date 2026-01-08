@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -174,8 +175,9 @@ func (m *mockTmuxWrapper) removeSession(name string) {
 // testSpawner wraps the real Spawner with mock dependencies.
 type testSpawner struct {
 	*Spawner
-	mockTmux *mockTmuxWrapper
-	store    *Store
+	mockTmux          *mockTmuxWrapper
+	store             *Store
+	defaultSetupHooks bool
 }
 
 func newTestSpawner(t *testing.T, cfg *SpawnerConfig) *testSpawner {
@@ -190,12 +192,14 @@ func newTestSpawner(t *testing.T, cfg *SpawnerConfig) *testSpawner {
 
 	// Create spawner with mock - we need to use a wrapper that implements the interface
 	spawner := &Spawner{
-		tmux:          nil, // Will be set via reflection or we need interface
-		store:         store,
-		defaultPrompt: "meow prime",
-		startupDelay:  10 * time.Millisecond, // Short for tests
+		tmux:              nil, // Will be set via reflection or we need interface
+		store:             store,
+		defaultPrompt:     "meow prime",
+		startupDelay:      10 * time.Millisecond, // Short for tests
+		defaultSetupHooks: true,                  // Default enabled
 	}
 
+	defaultSetupHooks := true
 	if cfg != nil {
 		if cfg.DefaultPrompt != "" {
 			spawner.defaultPrompt = cfg.DefaultPrompt
@@ -203,12 +207,15 @@ func newTestSpawner(t *testing.T, cfg *SpawnerConfig) *testSpawner {
 		if cfg.StartupDelay > 0 {
 			spawner.startupDelay = cfg.StartupDelay
 		}
+		defaultSetupHooks = cfg.DefaultSetupHooks
+		spawner.defaultSetupHooks = cfg.DefaultSetupHooks
 	}
 
 	return &testSpawner{
-		Spawner:  spawner,
-		mockTmux: mockTmux,
-		store:    store,
+		Spawner:           spawner,
+		mockTmux:          mockTmux,
+		store:             store,
+		defaultSetupHooks: defaultSetupHooks,
 	}
 }
 
@@ -232,6 +239,14 @@ func (ts *testSpawner) Spawn(ctx context.Context, opts SpawnOptions) (*types.Age
 	// Check if tmux session already exists
 	if ts.mockTmux.SessionExists(ctx, sessionName) {
 		return nil, fmt.Errorf("tmux session %s already exists", sessionName)
+	}
+
+	// Setup hooks in the workdir if enabled
+	if opts.SetupHooks && opts.Workdir != "" {
+		if err := SetupAgentHooks(opts.Workdir); err != nil {
+			// Log but don't fail - hooks are nice-to-have
+			_ = err
+		}
 	}
 
 	// Create the tmux session
@@ -295,6 +310,30 @@ func (ts *testSpawner) Spawn(ctx context.Context, opts SpawnOptions) (*types.Age
 	}
 
 	return agent, nil
+}
+
+// SpawnFromSpec overrides the real SpawnFromSpec to use our mock.
+func (ts *testSpawner) SpawnFromSpec(ctx context.Context, spec *types.StartSpec) (*types.Agent, error) {
+	if spec == nil {
+		return nil, fmt.Errorf("start spec is nil")
+	}
+
+	// Determine SetupHooks: spec overrides default if explicitly set
+	setupHooks := ts.defaultSetupHooks
+	if spec.SetupHooks != nil {
+		setupHooks = *spec.SetupHooks
+	}
+
+	opts := SpawnOptions{
+		AgentID:       spec.Agent,
+		Workdir:       spec.Workdir,
+		Env:           spec.Env,
+		Prompt:        spec.Prompt,
+		ResumeSession: spec.ResumeSession,
+		SetupHooks:    setupHooks,
+	}
+
+	return ts.Spawn(ctx, opts)
 }
 
 // Despawn overrides the real Despawn to use our mock.
@@ -975,4 +1014,165 @@ func TestSpawner_SpawnFromSpec_Nil(t *testing.T) {
 	if err == nil {
 		t.Error("SpawnFromSpec(nil) should fail")
 	}
+}
+
+// TestSetupAgentHooks tests the SetupAgentHooks function.
+func TestSetupAgentHooks(t *testing.T) {
+	t.Run("creates hooks in empty directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		err := SetupAgentHooks(tmpDir)
+		if err != nil {
+			t.Fatalf("SetupAgentHooks failed: %v", err)
+		}
+
+		// Check .claude directory was created
+		claudeDir := tmpDir + "/.claude"
+		if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
+			t.Error(".claude directory was not created")
+		}
+
+		// Check settings.json was created
+		settingsPath := claudeDir + "/settings.json"
+		content, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatalf("Failed to read settings.json: %v", err)
+		}
+
+		// Verify content contains expected hooks
+		if !strings.Contains(string(content), "SessionStart") {
+			t.Error("settings.json missing SessionStart hook")
+		}
+		if !strings.Contains(string(content), "Stop") {
+			t.Error("settings.json missing Stop hook")
+		}
+		if !strings.Contains(string(content), "meow prime") {
+			t.Error("settings.json missing 'meow prime' command")
+		}
+		if !strings.Contains(string(content), "matcher") {
+			t.Error("settings.json missing matcher (new format)")
+		}
+	})
+
+	t.Run("does not overwrite existing settings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create existing settings
+		claudeDir := tmpDir + "/.claude"
+		if err := os.MkdirAll(claudeDir, 0755); err != nil {
+			t.Fatalf("Failed to create .claude dir: %v", err)
+		}
+		existingContent := `{"custom": "settings"}`
+		if err := os.WriteFile(claudeDir+"/settings.json", []byte(existingContent), 0644); err != nil {
+			t.Fatalf("Failed to write existing settings: %v", err)
+		}
+
+		// Call SetupAgentHooks
+		err := SetupAgentHooks(tmpDir)
+		if err != nil {
+			t.Fatalf("SetupAgentHooks failed: %v", err)
+		}
+
+		// Verify settings were NOT overwritten
+		content, err := os.ReadFile(claudeDir + "/settings.json")
+		if err != nil {
+			t.Fatalf("Failed to read settings.json: %v", err)
+		}
+		if string(content) != existingContent {
+			t.Errorf("Settings were overwritten. Got %s, want %s", string(content), existingContent)
+		}
+	})
+
+	t.Run("returns error for empty workdir", func(t *testing.T) {
+		err := SetupAgentHooks("")
+		if err == nil {
+			t.Error("SetupAgentHooks('') should fail")
+		}
+	})
+}
+
+// TestSpawnFromSpec_SetupHooks tests that SpawnFromSpec respects SetupHooks settings.
+func TestSpawnFromSpec_SetupHooks(t *testing.T) {
+	t.Run("uses default when SetupHooks is nil", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctx := context.Background()
+
+		// Create test spawner with default hooks enabled
+		ts := newTestSpawner(t, &SpawnerConfig{
+			DefaultSetupHooks: true,
+		})
+
+		spec := &types.StartSpec{
+			Agent:      "test-agent",
+			Workdir:    tmpDir,
+			SetupHooks: nil, // Not set, should use default
+		}
+
+		_, err := ts.SpawnFromSpec(ctx, spec)
+		if err != nil {
+			t.Fatalf("SpawnFromSpec failed: %v", err)
+		}
+
+		// Hooks should have been created (default is true)
+		settingsPath := tmpDir + "/.claude/settings.json"
+		if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+			t.Error("Hooks were not created when default is true and SetupHooks is nil")
+		}
+	})
+
+	t.Run("respects explicit SetupHooks=false", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctx := context.Background()
+
+		// Create test spawner with default hooks enabled
+		ts := newTestSpawner(t, &SpawnerConfig{
+			DefaultSetupHooks: true,
+		})
+
+		falseVal := false
+		spec := &types.StartSpec{
+			Agent:      "test-agent",
+			Workdir:    tmpDir,
+			SetupHooks: &falseVal, // Explicitly disabled
+		}
+
+		_, err := ts.SpawnFromSpec(ctx, spec)
+		if err != nil {
+			t.Fatalf("SpawnFromSpec failed: %v", err)
+		}
+
+		// Hooks should NOT have been created
+		settingsPath := tmpDir + "/.claude/settings.json"
+		if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+			t.Error("Hooks were created despite SetupHooks=false")
+		}
+	})
+
+	t.Run("respects explicit SetupHooks=true even when default is false", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctx := context.Background()
+
+		// Create test spawner with default hooks DISABLED
+		ts := newTestSpawner(t, &SpawnerConfig{
+			DefaultSetupHooks: false,
+		})
+
+		trueVal := true
+		spec := &types.StartSpec{
+			Agent:      "test-agent",
+			Workdir:    tmpDir,
+			SetupHooks: &trueVal, // Explicitly enabled
+		}
+
+		_, err := ts.SpawnFromSpec(ctx, spec)
+		if err != nil {
+			t.Fatalf("SpawnFromSpec failed: %v", err)
+		}
+
+		// Hooks should have been created
+		settingsPath := tmpDir + "/.claude/settings.json"
+		if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+			t.Error("Hooks were not created despite SetupHooks=true")
+		}
+	})
 }

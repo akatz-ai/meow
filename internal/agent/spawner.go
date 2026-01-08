@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,8 +20,9 @@ type Spawner struct {
 	store *Store
 
 	// Default configurations
-	defaultPrompt string
-	startupDelay  time.Duration
+	defaultPrompt     string
+	startupDelay      time.Duration
+	defaultSetupHooks bool
 }
 
 // SpawnerConfig holds configuration for creating a Spawner.
@@ -28,15 +31,20 @@ type SpawnerConfig struct {
 	DefaultPrompt string
 	// StartupDelay is how long to wait after creating the session (default: 500ms)
 	StartupDelay time.Duration
+	// DefaultSetupHooks controls whether to create .claude/settings.json by default.
+	// This enables the Ralph Wiggum loop for autonomous agent operation.
+	// Default: true (agents get hooks)
+	DefaultSetupHooks bool
 }
 
 // NewSpawner creates a new Spawner with the given tmux wrapper and store.
 func NewSpawner(tmux *TmuxWrapper, store *Store, cfg *SpawnerConfig) *Spawner {
 	s := &Spawner{
-		tmux:          tmux,
-		store:         store,
-		defaultPrompt: "meow prime",
-		startupDelay:  500 * time.Millisecond,
+		tmux:              tmux,
+		store:             store,
+		defaultPrompt:     "meow prime",
+		startupDelay:      500 * time.Millisecond,
+		defaultSetupHooks: true, // Enable Ralph Wiggum loop by default
 	}
 
 	if cfg != nil {
@@ -46,6 +54,9 @@ func NewSpawner(tmux *TmuxWrapper, store *Store, cfg *SpawnerConfig) *Spawner {
 		if cfg.StartupDelay > 0 {
 			s.startupDelay = cfg.StartupDelay
 		}
+		// Note: DefaultSetupHooks is intentionally checked even if false,
+		// to allow explicit disabling via config
+		s.defaultSetupHooks = cfg.DefaultSetupHooks
 	}
 
 	return s
@@ -67,6 +78,9 @@ type SpawnOptions struct {
 	Labels map[string]string
 	// CurrentBead the agent is working on
 	CurrentBead string
+	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks.
+	// When true, enables the Ralph Wiggum loop for autonomous agent operation.
+	SetupHooks bool
 }
 
 // Validate checks that the SpawnOptions are valid.
@@ -107,6 +121,15 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOptions) (*types.Agent, e
 	// Check if tmux session already exists
 	if s.tmux.SessionExists(ctx, sessionName) {
 		return nil, fmt.Errorf("tmux session %s already exists", sessionName)
+	}
+
+	// Setup hooks in the workdir if enabled
+	if opts.SetupHooks && opts.Workdir != "" {
+		if err := SetupAgentHooks(opts.Workdir); err != nil {
+			// Log but don't fail - hooks are nice-to-have
+			// In production, this would use proper logging
+			_ = err
+		}
 	}
 
 	// Build the claude command
@@ -186,12 +209,19 @@ func (s *Spawner) SpawnFromSpec(ctx context.Context, spec *types.StartSpec) (*ty
 		return nil, fmt.Errorf("start spec is nil")
 	}
 
+	// Determine SetupHooks: spec overrides default if explicitly set
+	setupHooks := s.defaultSetupHooks
+	if spec.SetupHooks != nil {
+		setupHooks = *spec.SetupHooks
+	}
+
 	opts := SpawnOptions{
 		AgentID:       spec.Agent,
 		Workdir:       spec.Workdir,
 		Env:           spec.Env,
 		Prompt:        spec.Prompt,
 		ResumeSession: spec.ResumeSession,
+		SetupHooks:    setupHooks,
 	}
 
 	return s.Spawn(ctx, opts)
@@ -332,6 +362,65 @@ func (s *Spawner) SyncWithTmux(ctx context.Context) error {
 				return nil
 			})
 		}
+	}
+
+	return nil
+}
+
+// MeowHooksJSON is the Claude Code settings.json content for MEOW hooks.
+// Uses the new matcher-based format required by Claude Code.
+const MeowHooksJSON = `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": {},
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow prime --hook 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": {},
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow prime --format prompt 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+
+// SetupAgentHooks creates .claude/settings.json with MEOW hooks in the given directory.
+// This enables the Ralph Wiggum loop for autonomous agent operation.
+// Returns nil if hooks already exist (does not overwrite).
+func SetupAgentHooks(workdir string) error {
+	if workdir == "" {
+		return fmt.Errorf("workdir is required")
+	}
+
+	claudeDir := filepath.Join(workdir, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	// Don't overwrite existing settings (allows user customization)
+	if _, err := os.Stat(settingsPath); err == nil {
+		return nil
+	}
+
+	// Create .claude directory
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("creating .claude directory: %w", err)
+	}
+
+	// Write settings with hooks
+	if err := os.WriteFile(settingsPath, []byte(MeowHooksJSON), 0644); err != nil {
+		return fmt.Errorf("writing settings.json: %w", err)
 	}
 
 	return nil
