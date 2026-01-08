@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -378,4 +379,476 @@ func (w *Workflow) findCycle() []string {
 	}
 
 	return nil
+}
+
+// ModuleValidationResult holds all validation errors for a module.
+type ModuleValidationResult struct {
+	Errors []ValidationError
+}
+
+// HasErrors returns true if there are any validation errors.
+func (r *ModuleValidationResult) HasErrors() bool {
+	return len(r.Errors) > 0
+}
+
+// Error implements the error interface.
+func (r *ModuleValidationResult) Error() string {
+	if len(r.Errors) == 0 {
+		return ""
+	}
+	var msgs []string
+	for _, e := range r.Errors {
+		msgs = append(msgs, e.Error())
+	}
+	return fmt.Sprintf("module validation failed with %d error(s):\n  - %s",
+		len(r.Errors), strings.Join(msgs, "\n  - "))
+}
+
+// Add adds a validation error.
+func (r *ModuleValidationResult) Add(workflow, stepID, field, message, suggest string) {
+	r.Errors = append(r.Errors, ValidationError{
+		Template: workflow, // Reusing Template field for workflow name
+		StepID:   stepID,
+		Field:    field,
+		Message:  message,
+		Suggest:  suggest,
+	})
+}
+
+// ValidateFullModule performs comprehensive validation on a module.
+// Returns all errors found, not just the first one.
+func ValidateFullModule(m *Module) *ModuleValidationResult {
+	result := &ModuleValidationResult{}
+
+	// Validate each workflow
+	for name, w := range m.Workflows {
+		validateModuleWorkflow(m, name, w, result)
+	}
+
+	// Validate cross-workflow references
+	validateLocalReferences(m, result)
+
+	// Validate hooks_to references
+	validateHooksTo(m, result)
+
+	return result
+}
+
+// validateModuleWorkflow validates a single workflow in the module context.
+func validateModuleWorkflow(m *Module, name string, w *Workflow, result *ModuleValidationResult) {
+	if w.Name == "" {
+		result.Add(name, "", "name", "workflow name is required", "add name = \"workflow-name\"")
+	}
+
+	if len(w.Steps) == 0 {
+		result.Add(name, "", "steps", "workflow must have at least one step", "add [[steps]] section")
+		return
+	}
+
+	// Check for duplicate step IDs
+	stepIDs := make(map[string]int)
+	for i, step := range w.Steps {
+		if step.ID == "" {
+			result.Add(name, fmt.Sprintf("steps[%d]", i), "id", "step id is required", "")
+			continue
+		}
+
+		if prevIdx, exists := stepIDs[step.ID]; exists {
+			result.Add(name, step.ID, "id",
+				fmt.Sprintf("duplicate step id (first at index %d)", prevIdx),
+				"use unique step ids")
+		}
+		stepIDs[step.ID] = i
+
+		// Validate step type
+		validateModuleStepType(name, step, result)
+	}
+
+	// Validate dependencies
+	for _, step := range w.Steps {
+		for _, need := range step.Needs {
+			if _, exists := stepIDs[need]; !exists {
+				suggest := findSimilarInMap(need, stepIDs)
+				result.Add(name, step.ID, "needs",
+					fmt.Sprintf("references unknown step %q", need),
+					suggest)
+			}
+		}
+	}
+
+	// Check for cycles
+	if cycle := w.findCycle(); len(cycle) > 0 {
+		result.Add(name, "", "needs",
+			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
+			"remove one of the dependencies to break the cycle")
+	}
+
+	// Validate variable references
+	validateModuleVariableReferences(m, name, w, result)
+
+	// Validate type-specific rules
+	validateModuleTypeSpecific(name, w, result)
+}
+
+// validateModuleStepType validates the step type is valid.
+func validateModuleStepType(workflowName string, step *Step, result *ModuleValidationResult) {
+	validTypes := map[string]bool{
+		"":              true, // Default to task
+		"task":          true,
+		"collaborative": true,
+		"gate":          true,
+		"condition":     true,
+		"code":          true,
+		"start":         true,
+		"stop":          true,
+		"expand":        true,
+	}
+	if !validTypes[step.Type] {
+		result.Add(workflowName, step.ID, "type",
+			fmt.Sprintf("invalid step type: %q", step.Type),
+			"use task, collaborative, gate, condition, code, start, stop, or expand")
+	}
+}
+
+// validateLocalReferences checks that all local template references (.workflow syntax)
+// exist in the module and respects internal visibility.
+func validateLocalReferences(m *Module, result *ModuleValidationResult) {
+	for workflowName, w := range m.Workflows {
+		for _, step := range w.Steps {
+			// Check template field
+			checkLocalRef(m, workflowName, step.ID, "template", step.Template, result)
+
+			// Check expansion targets
+			if step.OnTrue != nil {
+				checkLocalRef(m, workflowName, step.ID, "on_true.template", step.OnTrue.Template, result)
+			}
+			if step.OnFalse != nil {
+				checkLocalRef(m, workflowName, step.ID, "on_false.template", step.OnFalse.Template, result)
+			}
+			if step.OnTimeout != nil {
+				checkLocalRef(m, workflowName, step.ID, "on_timeout.template", step.OnTimeout.Template, result)
+			}
+		}
+	}
+}
+
+// checkLocalRef validates a single template reference.
+func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *ModuleValidationResult) {
+	if ref == "" {
+		return
+	}
+
+	// Skip if it contains variable references (validated at runtime)
+	if strings.Contains(ref, "{{") {
+		return
+	}
+
+	// Check if it's a local reference (starts with .)
+	if !strings.HasPrefix(ref, ".") {
+		return // External reference - validated elsewhere
+	}
+
+	// Parse local reference: .workflow or .workflow.step
+	localRef := strings.TrimPrefix(ref, ".")
+	parts := strings.SplitN(localRef, ".", 2)
+	targetWorkflow := parts[0]
+
+	// Check workflow exists
+	target, exists := m.Workflows[targetWorkflow]
+	if !exists {
+		// Build suggestion
+		suggest := findSimilarWorkflow(targetWorkflow, m.Workflows)
+		result.Add(workflowName, stepID, field,
+			fmt.Sprintf("references unknown workflow %q", targetWorkflow),
+			suggest)
+		return
+	}
+
+	// Check internal visibility
+	if target.Internal {
+		result.Add(workflowName, stepID, field,
+			fmt.Sprintf("cannot reference internal workflow %q from outside", targetWorkflow),
+			"either remove 'internal = true' or use a non-internal workflow")
+	}
+
+	// If referencing a specific step, validate it exists
+	if len(parts) > 1 {
+		stepRef := parts[1]
+		stepExists := false
+		for _, s := range target.Steps {
+			if s.ID == stepRef {
+				stepExists = true
+				break
+			}
+		}
+		if !stepExists {
+			result.Add(workflowName, stepID, field,
+				fmt.Sprintf("references unknown step %q in workflow %q", stepRef, targetWorkflow),
+				"")
+		}
+	}
+}
+
+// validateHooksTo checks that hooks_to references a defined variable.
+func validateHooksTo(m *Module, result *ModuleValidationResult) {
+	for workflowName, w := range m.Workflows {
+		if w.HooksTo == "" {
+			continue
+		}
+
+		// hooks_to should reference a variable defined in this workflow
+		if w.Variables == nil {
+			result.Add(workflowName, "", "hooks_to",
+				fmt.Sprintf("hooks_to references variable %q but no variables are defined", w.HooksTo),
+				fmt.Sprintf("define [%s.variables.%s]", workflowName, w.HooksTo))
+			continue
+		}
+
+		if _, exists := w.Variables[w.HooksTo]; !exists {
+			var varNames []string
+			for name := range w.Variables {
+				varNames = append(varNames, name)
+			}
+			suggest := ""
+			if len(varNames) > 0 {
+				suggest = fmt.Sprintf("defined variables: %s", strings.Join(varNames, ", "))
+			}
+			result.Add(workflowName, "", "hooks_to",
+				fmt.Sprintf("hooks_to references undefined variable %q", w.HooksTo),
+				suggest)
+		}
+	}
+}
+
+// validateModuleVariableReferences checks that all variable references in a workflow are defined.
+func validateModuleVariableReferences(m *Module, workflowName string, w *Workflow, result *ModuleValidationResult) {
+	// Collect all defined variables
+	defined := make(map[string]bool)
+	for varName := range w.Variables {
+		defined[varName] = true
+	}
+
+	// Add builtins
+	builtins := []string{
+		"timestamp", "date", "time", "agent", "bead_id", "molecule_id",
+		"workflow_id", "step_id",
+	}
+	for _, b := range builtins {
+		defined[b] = true
+	}
+
+	// Check all string fields in steps for variable references
+	for _, step := range w.Steps {
+		checkModuleVarRefs(step.Title, workflowName, step.ID, "title", defined, result)
+		checkModuleVarRefs(step.Description, workflowName, step.ID, "description", defined, result)
+		checkModuleVarRefs(step.Instructions, workflowName, step.ID, "instructions", defined, result)
+		checkModuleVarRefs(step.Condition, workflowName, step.ID, "condition", defined, result)
+		checkModuleVarRefs(step.Code, workflowName, step.ID, "code", defined, result)
+		checkModuleVarRefs(step.Assignee, workflowName, step.ID, "assignee", defined, result)
+
+		for k, v := range step.Variables {
+			checkModuleVarRefs(v, workflowName, step.ID, fmt.Sprintf("variables.%s", k), defined, result)
+		}
+
+		if step.OnTrue != nil {
+			checkModuleExpansionVarRefs(step.OnTrue, workflowName, step.ID, "on_true", defined, result)
+		}
+		if step.OnFalse != nil {
+			checkModuleExpansionVarRefs(step.OnFalse, workflowName, step.ID, "on_false", defined, result)
+		}
+		if step.OnTimeout != nil {
+			checkModuleExpansionVarRefs(step.OnTimeout, workflowName, step.ID, "on_timeout", defined, result)
+		}
+	}
+}
+
+// checkModuleExpansionVarRefs checks variable references in an expansion target.
+func checkModuleExpansionVarRefs(target *ExpansionTarget, workflowName, stepID, field string, defined map[string]bool, result *ModuleValidationResult) {
+	for k, v := range target.Variables {
+		checkModuleVarRefs(v, workflowName, stepID, fmt.Sprintf("%s.variables.%s", field, k), defined, result)
+	}
+}
+
+// varRefPatternModule matches {{variable}} patterns
+var varRefPatternModule = regexp.MustCompile(`\{\{([^{}]+)\}\}`)
+
+// checkModuleVarRefs checks variable references in a string.
+func checkModuleVarRefs(text, workflowName, stepID, field string, defined map[string]bool, result *ModuleValidationResult) {
+	if text == "" {
+		return
+	}
+
+	matches := varRefPatternModule.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		path := strings.TrimSpace(match[1])
+		parts := strings.Split(path, ".")
+		root := parts[0]
+
+		// Skip output references - they're validated at runtime
+		if root == "output" || (len(parts) >= 2 && parts[1] == "outputs") {
+			continue
+		}
+
+		if !defined[root] {
+			suggest := findSimilarInBoolMap(root, defined)
+			result.Add(workflowName, stepID, field,
+				fmt.Sprintf("undefined variable %q", root),
+				suggest)
+		}
+	}
+}
+
+// validateModuleTypeSpecific validates type-specific rules for steps.
+func validateModuleTypeSpecific(workflowName string, w *Workflow, result *ModuleValidationResult) {
+	for _, step := range w.Steps {
+		stepType := step.Type
+		if stepType == "" {
+			stepType = "task"
+		}
+
+		switch stepType {
+		case "condition":
+			// Condition steps need a condition and at least one branch
+			if step.Condition == "" {
+				result.Add(workflowName, step.ID, "condition",
+					"condition step requires a condition expression",
+					"add condition = \"your shell command\"")
+			}
+			if step.OnTrue == nil && step.OnFalse == nil {
+				result.Add(workflowName, step.ID, "condition",
+					"condition without on_true or on_false branch",
+					"add on_true and/or on_false to specify branch actions")
+			}
+
+		case "gate":
+			// Gate steps should have instructions for the human
+			if step.Instructions == "" {
+				result.Add(workflowName, step.ID, "type",
+					"gate without instructions",
+					"add instructions explaining what the human should do")
+			}
+			// Gates should NOT have an assignee
+			if step.Assignee != "" {
+				result.Add(workflowName, step.ID, "assignee",
+					"gate steps must not have an assignee",
+					"remove assignee - gates are for human approval, not agent execution")
+			}
+
+		case "task", "collaborative":
+			// Task and collaborative need an assignee (often a variable)
+			// This is a soft check - might be inherited or set at bake time
+			// So we only warn if it's empty and not in an ephemeral workflow
+			// Actually, don't enforce this - it can be set at bake time
+
+		case "expand":
+			// Expand steps need a template
+			if step.Template == "" {
+				result.Add(workflowName, step.ID, "template",
+					"expand step requires a template reference",
+					"add template = \".workflow\" or template = \"file#workflow\"")
+			}
+
+		case "code":
+			// Code steps need code
+			if step.Code == "" {
+				result.Add(workflowName, step.ID, "code",
+					"code step requires a code block",
+					"add code = \"your shell command\"")
+			}
+
+		case "start", "stop":
+			// Start/stop need an agent/assignee
+			if step.Assignee == "" {
+				result.Add(workflowName, step.ID, "assignee",
+					fmt.Sprintf("%s step requires an assignee (agent to %s)", stepType, stepType),
+					"add assignee = \"{{agent}}\" or specific agent ID")
+			}
+		}
+	}
+}
+
+// findSimilarInMap finds a similar key for "did you mean" suggestions.
+func findSimilarInMap(target string, candidates map[string]int) string {
+	var best string
+	bestScore := 0
+
+	for candidate := range candidates {
+		score := moduleSimilarity(target, candidate)
+		if score > bestScore {
+			bestScore = score
+			best = candidate
+		}
+	}
+
+	if bestScore > len(target)/2 {
+		return fmt.Sprintf("did you mean %q?", best)
+	}
+	return ""
+}
+
+// findSimilarInBoolMap finds a similar key for "did you mean" suggestions.
+func findSimilarInBoolMap(target string, candidates map[string]bool) string {
+	var best string
+	bestScore := 0
+
+	for candidate := range candidates {
+		score := moduleSimilarity(target, candidate)
+		if score > bestScore {
+			bestScore = score
+			best = candidate
+		}
+	}
+
+	if bestScore > len(target)/2 {
+		return fmt.Sprintf("did you mean %q?", best)
+	}
+	return ""
+}
+
+// findSimilarWorkflow finds a similar workflow name for suggestions.
+func findSimilarWorkflow(target string, workflows map[string]*Workflow) string {
+	var best string
+	bestScore := 0
+
+	for name := range workflows {
+		score := moduleSimilarity(target, name)
+		if score > bestScore {
+			bestScore = score
+			best = name
+		}
+	}
+
+	if bestScore > len(target)/2 {
+		return fmt.Sprintf("did you mean %q?", best)
+	}
+	return ""
+}
+
+// moduleSimilarity returns a simple score based on common prefix and suffix.
+func moduleSimilarity(a, b string) int {
+	score := 0
+
+	// Common prefix
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] == b[i] {
+			score++
+		} else {
+			break
+		}
+	}
+
+	// Common suffix
+	for i := 0; i < minLen-score; i++ {
+		if a[len(a)-1-i] == b[len(b)-1-i] {
+			score++
+		} else {
+			break
+		}
+	}
+
+	return score
 }
