@@ -122,28 +122,111 @@ func TestLoad_InvalidTOML(t *testing.T) {
 	}
 }
 
-func TestLoadFromDir(t *testing.T) {
-	// Create temp directory with .meow/config.toml
+func TestLoad_ReadError(t *testing.T) {
+	// Try to read a directory - this will fail with a read error, not "not found"
 	dir := t.TempDir()
-	meowDir := filepath.Join(dir, ".meow")
-	if err := os.MkdirAll(meowDir, 0755); err != nil {
-		t.Fatalf("Failed to create .meow dir: %v", err)
+	_, err := Load(dir)
+	if err == nil {
+		t.Error("Load should fail when trying to read a directory")
 	}
+}
 
-	configPath := filepath.Join(meowDir, "config.toml")
-	content := `version = "project-local"`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
-	}
+func TestLoadFromDir(t *testing.T) {
+	t.Run("project-local config", func(t *testing.T) {
+		// Create temp directory with .meow/config.toml
+		dir := t.TempDir()
+		meowDir := filepath.Join(dir, ".meow")
+		if err := os.MkdirAll(meowDir, 0755); err != nil {
+			t.Fatalf("Failed to create .meow dir: %v", err)
+		}
 
-	cfg, err := LoadFromDir(dir)
-	if err != nil {
-		t.Fatalf("LoadFromDir failed: %v", err)
-	}
+		configPath := filepath.Join(meowDir, "config.toml")
+		content := `version = "project-local"`
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write config: %v", err)
+		}
 
-	if cfg.Version != "project-local" {
-		t.Errorf("Version = %s, want project-local", cfg.Version)
-	}
+		cfg, err := LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("LoadFromDir failed: %v", err)
+		}
+
+		if cfg.Version != "project-local" {
+			t.Errorf("Version = %s, want project-local", cfg.Version)
+		}
+	})
+
+	t.Run("no config file - uses defaults", func(t *testing.T) {
+		dir := t.TempDir()
+
+		cfg, err := LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("LoadFromDir failed: %v", err)
+		}
+
+		// Should return defaults
+		if cfg.Version != "1" {
+			t.Errorf("Version = %s, want 1 (default)", cfg.Version)
+		}
+	})
+
+	t.Run("invalid project config", func(t *testing.T) {
+		dir := t.TempDir()
+		meowDir := filepath.Join(dir, ".meow")
+		if err := os.MkdirAll(meowDir, 0755); err != nil {
+			t.Fatalf("Failed to create .meow dir: %v", err)
+		}
+
+		configPath := filepath.Join(meowDir, "config.toml")
+		content := `invalid = [toml`
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write config: %v", err)
+		}
+
+		_, err := LoadFromDir(dir)
+		if err == nil {
+			t.Error("LoadFromDir should fail with invalid TOML")
+		}
+	})
+
+	t.Run("user global config", func(t *testing.T) {
+		// Get home dir and create user global config temporarily
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("Cannot get user home directory")
+		}
+
+		userConfigDir := filepath.Join(home, ".config", "meow")
+		userConfigPath := filepath.Join(userConfigDir, "config.toml")
+
+		// Check if config already exists (don't overwrite)
+		if _, err := os.Stat(userConfigPath); err == nil {
+			t.Skip("User global config already exists, skipping to avoid modification")
+		}
+
+		// Create the config dir
+		if err := os.MkdirAll(userConfigDir, 0755); err != nil {
+			t.Fatalf("Failed to create user config dir: %v", err)
+		}
+		defer os.RemoveAll(userConfigDir)
+
+		// Write a test config
+		content := `version = "user-global"`
+		if err := os.WriteFile(userConfigPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write user config: %v", err)
+		}
+
+		// Use a temp dir that has no project config
+		dir := t.TempDir()
+		cfg, err := LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("LoadFromDir failed: %v", err)
+		}
+
+		if cfg.Version != "user-global" {
+			t.Errorf("Version = %s, want user-global", cfg.Version)
+		}
+	})
 }
 
 func TestConfig_Validate(t *testing.T) {
@@ -208,6 +291,7 @@ func TestConfig_PathHelpers(t *testing.T) {
 	cfg := Default()
 	baseDir := "/project"
 
+	// Test relative paths
 	if got := cfg.TemplateDir(baseDir); got != "/project/.meow/templates" {
 		t.Errorf("TemplateDir = %s, want /project/.meow/templates", got)
 	}
@@ -221,9 +305,24 @@ func TestConfig_PathHelpers(t *testing.T) {
 		t.Errorf("LogFile = %s, want /project/.meow/state/meow.log", got)
 	}
 
-	// Test with absolute paths
+	// Test with absolute paths for all helpers
 	cfg.Paths.TemplateDir = "/absolute/templates"
 	if got := cfg.TemplateDir(baseDir); got != "/absolute/templates" {
 		t.Errorf("TemplateDir (abs) = %s, want /absolute/templates", got)
+	}
+
+	cfg.Paths.BeadsDir = "/absolute/beads"
+	if got := cfg.BeadsDir(baseDir); got != "/absolute/beads" {
+		t.Errorf("BeadsDir (abs) = %s, want /absolute/beads", got)
+	}
+
+	cfg.Paths.StateDir = "/absolute/state"
+	if got := cfg.StateDir(baseDir); got != "/absolute/state" {
+		t.Errorf("StateDir (abs) = %s, want /absolute/state", got)
+	}
+
+	cfg.Logging.File = "/absolute/meow.log"
+	if got := cfg.LogFile(baseDir); got != "/absolute/meow.log" {
+		t.Errorf("LogFile (abs) = %s, want /absolute/meow.log", got)
 	}
 }
