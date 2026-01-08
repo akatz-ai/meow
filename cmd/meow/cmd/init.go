@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/meow-stack/meow-machine/internal/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -175,35 +176,8 @@ func setupClaudeHooks(dir string) (bool, error) {
 		return false, fmt.Errorf("creating .claude directory: %w", err)
 	}
 
-	// Create settings with hooks (using new matcher-based format)
-	settingsContent := `{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": {},
-        "hooks": [
-          {
-            "type": "command",
-            "command": "meow prime --hook 2>/dev/null || true"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": {},
-        "hooks": [
-          {
-            "type": "command",
-            "command": "meow prime --format prompt 2>/dev/null || true"
-          }
-        ]
-      }
-    ]
-  }
-}
-`
-	if err := os.WriteFile(settingsPath, []byte(settingsContent), 0644); err != nil {
+	// Create settings with hooks (using shared constant from agent package)
+	if err := os.WriteFile(settingsPath, []byte(agent.MeowHooksJSON), 0644); err != nil {
 		return false, fmt.Errorf("writing settings: %w", err)
 	}
 
