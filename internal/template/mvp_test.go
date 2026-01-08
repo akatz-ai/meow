@@ -688,3 +688,231 @@ needs = ["b"]
 		t.Errorf("expected circular dependency error, got: %v", err)
 	}
 }
+
+func TestParseModuleString_ConditionBranchTargets(t *testing.T) {
+	moduleToml := `
+[main]
+name = "condition-test"
+
+[[main.steps]]
+id = "check"
+type = "condition"
+condition = "test -f /tmp/ready"
+timeout = "30s"
+
+[main.steps.on_true]
+template = "do-work"
+variables = { x = "42" }
+
+[main.steps.on_false]
+template = "wait-more"
+
+[main.steps.on_timeout]
+template = "handle-timeout"
+variables = { reason = "timed out" }
+
+[[main.steps]]
+id = "end"
+type = "task"
+needs = ["check"]
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	step := main.Steps[0]
+
+	if step.OnTrue == nil {
+		t.Fatal("expected on_true to be parsed")
+	}
+	if step.OnTrue.Template != "do-work" {
+		t.Errorf("expected on_true.template 'do-work', got %q", step.OnTrue.Template)
+	}
+	if step.OnTrue.Variables["x"] != "42" {
+		t.Errorf("expected on_true.variables[x] '42', got %q", step.OnTrue.Variables["x"])
+	}
+
+	if step.OnFalse == nil {
+		t.Fatal("expected on_false to be parsed")
+	}
+	if step.OnFalse.Template != "wait-more" {
+		t.Errorf("expected on_false.template 'wait-more', got %q", step.OnFalse.Template)
+	}
+
+	if step.OnTimeout == nil {
+		t.Fatal("expected on_timeout to be parsed")
+	}
+	if step.OnTimeout.Template != "handle-timeout" {
+		t.Errorf("expected on_timeout.template 'handle-timeout', got %q", step.OnTimeout.Template)
+	}
+	if step.OnTimeout.Variables["reason"] != "timed out" {
+		t.Errorf("expected on_timeout.variables[reason] 'timed out', got %q", step.OnTimeout.Variables["reason"])
+	}
+}
+
+func TestParseModuleString_ConditionWithInlineSteps(t *testing.T) {
+	moduleToml := `
+[main]
+name = "inline-test"
+
+[[main.steps]]
+id = "check"
+type = "condition"
+condition = "test -f /tmp/ready"
+
+[[main.steps.on_true.inline]]
+id = "action-1"
+type = "task"
+description = "First action"
+
+[[main.steps.on_true.inline]]
+id = "action-2"
+type = "task"
+description = "Second action"
+needs = ["action-1"]
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	step := main.Steps[0]
+
+	if step.OnTrue == nil {
+		t.Fatal("expected on_true to be parsed")
+	}
+	if len(step.OnTrue.Inline) != 2 {
+		t.Fatalf("expected 2 inline steps, got %d", len(step.OnTrue.Inline))
+	}
+	if step.OnTrue.Inline[0].ID != "action-1" {
+		t.Errorf("expected first inline id 'action-1', got %q", step.OnTrue.Inline[0].ID)
+	}
+	if step.OnTrue.Inline[1].ID != "action-2" {
+		t.Errorf("expected second inline id 'action-2', got %q", step.OnTrue.Inline[1].ID)
+	}
+	if len(step.OnTrue.Inline[1].Needs) != 1 || step.OnTrue.Inline[1].Needs[0] != "action-1" {
+		t.Errorf("expected second inline step to need action-1, got %v", step.OnTrue.Inline[1].Needs)
+	}
+}
+
+func TestParseModuleString_TaskOutputSpec(t *testing.T) {
+	moduleToml := `
+[main]
+name = "output-test"
+
+[[main.steps]]
+id = "select-work"
+type = "task"
+title = "Select next work bead"
+instructions = "Pick a task to work on"
+
+[[main.steps.outputs.required]]
+name = "work_bead"
+type = "bead_id"
+description = "The bead to implement"
+
+[[main.steps.outputs.required]]
+name = "reason"
+type = "string"
+description = "Why this bead was selected"
+
+[[main.steps.outputs.optional]]
+name = "notes"
+type = "string"
+description = "Additional notes"
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	step := main.Steps[0]
+
+	if step.Outputs == nil {
+		t.Fatal("expected outputs to be parsed")
+	}
+	if len(step.Outputs.Required) != 2 {
+		t.Fatalf("expected 2 required outputs, got %d", len(step.Outputs.Required))
+	}
+	if step.Outputs.Required[0].Name != "work_bead" {
+		t.Errorf("expected first required output name 'work_bead', got %q", step.Outputs.Required[0].Name)
+	}
+	if step.Outputs.Required[0].Type != "bead_id" {
+		t.Errorf("expected first required output type 'bead_id', got %q", step.Outputs.Required[0].Type)
+	}
+	if step.Outputs.Required[0].Description != "The bead to implement" {
+		t.Errorf("expected first required output description, got %q", step.Outputs.Required[0].Description)
+	}
+	if step.Outputs.Required[1].Name != "reason" {
+		t.Errorf("expected second required output name 'reason', got %q", step.Outputs.Required[1].Name)
+	}
+	if len(step.Outputs.Optional) != 1 {
+		t.Fatalf("expected 1 optional output, got %d", len(step.Outputs.Optional))
+	}
+	if step.Outputs.Optional[0].Name != "notes" {
+		t.Errorf("expected optional output name 'notes', got %q", step.Outputs.Optional[0].Name)
+	}
+}
+
+func TestBaker_TaskWithOutputSpec(t *testing.T) {
+	moduleToml := `
+[main]
+name = "output-bake-test"
+
+[[main.steps]]
+id = "select-work"
+type = "task"
+title = "Select next work bead"
+instructions = "Pick a task to work on"
+
+[[main.steps.outputs.required]]
+name = "work_bead"
+type = "bead_id"
+description = "The bead to implement"
+
+[[main.steps.outputs.optional]]
+name = "notes"
+type = "string"
+`
+	module, err := ParseModuleString(moduleToml, "test.toml")
+	if err != nil {
+		t.Fatalf("ParseModuleString failed: %v", err)
+	}
+
+	main := module.GetWorkflow("main")
+	baker := NewBaker("meow-output-test")
+	baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	result, err := baker.BakeWorkflow(main, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(result.Beads))
+	}
+
+	bead := result.Beads[0]
+	if bead.TaskOutputs == nil {
+		t.Fatal("expected TaskOutputs to be set on baked bead")
+	}
+	if len(bead.TaskOutputs.Required) != 1 {
+		t.Fatalf("expected 1 required output, got %d", len(bead.TaskOutputs.Required))
+	}
+	if bead.TaskOutputs.Required[0].Name != "work_bead" {
+		t.Errorf("expected required output name 'work_bead', got %q", bead.TaskOutputs.Required[0].Name)
+	}
+	if bead.TaskOutputs.Required[0].Type != types.TaskOutputTypeBeadID {
+		t.Errorf("expected required output type 'bead_id', got %q", bead.TaskOutputs.Required[0].Type)
+	}
+	if len(bead.TaskOutputs.Optional) != 1 {
+		t.Fatalf("expected 1 optional output, got %d", len(bead.TaskOutputs.Optional))
+	}
+	if bead.TaskOutputs.Optional[0].Name != "notes" {
+		t.Errorf("expected optional output name 'notes', got %q", bead.TaskOutputs.Optional[0].Name)
+	}
+}

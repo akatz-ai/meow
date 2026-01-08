@@ -410,7 +410,10 @@ func (b *Baker) determineBeadType(step *Step) types.BeadType {
 func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]string) error {
 	switch bead.Type {
 	case types.BeadTypeTask:
-		// Task beads don't need a spec, they use Instructions
+		// Set task output specifications if defined
+		if step.Outputs != nil {
+			bead.TaskOutputs = taskOutputSpecToTypes(step.Outputs)
+		}
 		return nil
 
 	case types.BeadTypeCollaborative:
@@ -517,6 +520,33 @@ func (b *Baker) expansionTargetToTypes(et *ExpansionTarget) (*types.ExpansionTar
 	}
 
 	return result, nil
+}
+
+// taskOutputSpecToTypes converts template TaskOutputSpec to types.TaskOutputSpec.
+func taskOutputSpecToTypes(spec *TaskOutputSpec) *types.TaskOutputSpec {
+	if spec == nil {
+		return nil
+	}
+
+	result := &types.TaskOutputSpec{}
+
+	for _, def := range spec.Required {
+		result.Required = append(result.Required, types.TaskOutputDef{
+			Name:        def.Name,
+			Type:        types.TaskOutputType(def.Type),
+			Description: def.Description,
+		})
+	}
+
+	for _, def := range spec.Optional {
+		result.Optional = append(result.Optional, types.TaskOutputDef{
+			Name:        def.Name,
+			Type:        types.TaskOutputType(def.Type),
+			Description: def.Description,
+		})
+	}
+
+	return result
 }
 
 // BakeInline converts inline steps into beads.

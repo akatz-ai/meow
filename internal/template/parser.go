@@ -70,6 +70,20 @@ type Step struct {
 	OnFalse      *ExpansionTarget  `toml:"on_false,omitempty"`     // Condition branch
 	OnTimeout    *ExpansionTarget  `toml:"on_timeout,omitempty"`   // Condition timeout branch
 	Timeout      string            `toml:"timeout,omitempty"`      // Timeout duration
+	Outputs      *TaskOutputSpec   `toml:"outputs,omitempty"`      // Task output specifications
+}
+
+// TaskOutputSpec defines the expected outputs from a task step.
+type TaskOutputSpec struct {
+	Required []TaskOutputDef `toml:"required,omitempty"`
+	Optional []TaskOutputDef `toml:"optional,omitempty"`
+}
+
+// TaskOutputDef defines a required or optional output from a task step.
+type TaskOutputDef struct {
+	Name        string `toml:"name"`
+	Type        string `toml:"type"`
+	Description string `toml:"description,omitempty"`
 }
 
 // ExpansionTarget specifies what to expand for condition branches.

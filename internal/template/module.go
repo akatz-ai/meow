@@ -259,7 +259,191 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		}
 	}
 
+	// Parse condition branch targets
+	if v, ok := data["on_true"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_true: %w", err)
+		}
+		s.OnTrue = target
+	}
+	if v, ok := data["on_false"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_false: %w", err)
+		}
+		s.OnFalse = target
+	}
+	if v, ok := data["on_timeout"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_timeout: %w", err)
+		}
+		s.OnTimeout = target
+	}
+
+	// Parse task output specifications
+	if v, ok := data["outputs"].(map[string]any); ok {
+		outputs, err := parseTaskOutputSpec(v)
+		if err != nil {
+			return nil, fmt.Errorf("outputs: %w", err)
+		}
+		s.Outputs = outputs
+	}
+
 	return s, nil
+}
+
+// parseTaskOutputSpec parses a task output specification from a map.
+func parseTaskOutputSpec(data map[string]any) (*TaskOutputSpec, error) {
+	spec := &TaskOutputSpec{}
+
+	// Parse required outputs
+	if required, ok := data["required"].([]any); ok {
+		for i, item := range required {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("required[%d] is not a table", i)
+			}
+			def, err := parseTaskOutputDef(itemMap)
+			if err != nil {
+				return nil, fmt.Errorf("required[%d]: %w", i, err)
+			}
+			spec.Required = append(spec.Required, *def)
+		}
+	} else if required, ok := data["required"].([]map[string]any); ok {
+		for i, itemMap := range required {
+			def, err := parseTaskOutputDef(itemMap)
+			if err != nil {
+				return nil, fmt.Errorf("required[%d]: %w", i, err)
+			}
+			spec.Required = append(spec.Required, *def)
+		}
+	}
+
+	// Parse optional outputs
+	if optional, ok := data["optional"].([]any); ok {
+		for i, item := range optional {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("optional[%d] is not a table", i)
+			}
+			def, err := parseTaskOutputDef(itemMap)
+			if err != nil {
+				return nil, fmt.Errorf("optional[%d]: %w", i, err)
+			}
+			spec.Optional = append(spec.Optional, *def)
+		}
+	} else if optional, ok := data["optional"].([]map[string]any); ok {
+		for i, itemMap := range optional {
+			def, err := parseTaskOutputDef(itemMap)
+			if err != nil {
+				return nil, fmt.Errorf("optional[%d]: %w", i, err)
+			}
+			spec.Optional = append(spec.Optional, *def)
+		}
+	}
+
+	return spec, nil
+}
+
+// parseTaskOutputDef parses a single output definition from a map.
+func parseTaskOutputDef(data map[string]any) (*TaskOutputDef, error) {
+	def := &TaskOutputDef{}
+
+	if name, ok := data["name"].(string); ok {
+		def.Name = name
+	} else {
+		return nil, fmt.Errorf("output missing name")
+	}
+
+	if typ, ok := data["type"].(string); ok {
+		def.Type = typ
+	} else {
+		return nil, fmt.Errorf("output missing type")
+	}
+
+	if desc, ok := data["description"].(string); ok {
+		def.Description = desc
+	}
+
+	return def, nil
+}
+
+// parseExpansionTarget parses an expansion target from a map.
+func parseExpansionTarget(data map[string]any) (*ExpansionTarget, error) {
+	target := &ExpansionTarget{}
+
+	if v, ok := data["template"].(string); ok {
+		target.Template = v
+	}
+
+	// Parse variables
+	if vars, ok := data["variables"].(map[string]any); ok {
+		target.Variables = make(map[string]string)
+		for k, v := range vars {
+			if vs, ok := v.(string); ok {
+				target.Variables[k] = vs
+			}
+		}
+	}
+
+	// Parse inline steps
+	if inline, ok := data["inline"].([]any); ok {
+		for i, stepData := range inline {
+			stepMap, ok := stepData.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("inline[%d] is not a table", i)
+			}
+			inlineStep, err := parseInlineStep(stepMap)
+			if err != nil {
+				return nil, fmt.Errorf("inline[%d]: %w", i, err)
+			}
+			target.Inline = append(target.Inline, *inlineStep)
+		}
+	} else if inline, ok := data["inline"].([]map[string]any); ok {
+		for i, stepMap := range inline {
+			inlineStep, err := parseInlineStep(stepMap)
+			if err != nil {
+				return nil, fmt.Errorf("inline[%d]: %w", i, err)
+			}
+			target.Inline = append(target.Inline, *inlineStep)
+		}
+	}
+
+	return target, nil
+}
+
+// parseInlineStep parses an inline step from a map.
+func parseInlineStep(data map[string]any) (*InlineStep, error) {
+	step := &InlineStep{}
+
+	if id, ok := data["id"].(string); ok {
+		step.ID = id
+	} else {
+		return nil, fmt.Errorf("inline step missing id")
+	}
+
+	if v, ok := data["type"].(string); ok {
+		step.Type = v
+	}
+	if v, ok := data["description"].(string); ok {
+		step.Description = v
+	}
+	if v, ok := data["instructions"].(string); ok {
+		step.Instructions = v
+	}
+
+	// Parse needs (dependencies)
+	if needs, ok := data["needs"].([]any); ok {
+		for _, n := range needs {
+			if ns, ok := n.(string); ok {
+				step.Needs = append(step.Needs, ns)
+			}
+		}
+	}
+
+	return step, nil
 }
 
 // Validate checks that the module is well-formed.
