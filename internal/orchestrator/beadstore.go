@@ -123,27 +123,55 @@ func (s *FileBeadStore) isReadyLocked(bead *types.Bead) bool {
 }
 
 // beadPriority returns a priority value (lower = higher priority).
+// Priority is determined by tier first, then by type within tier.
 func (s *FileBeadStore) beadPriority(bead *types.Bead) int {
-	// Orchestrator beads first, then human-facing beads, then agent tasks
-	switch bead.Type {
+	// Tier priority: orchestrator (0-99), wisp (100-199), work (200-299)
+	tierBase := s.tierPriority(bead.Tier)
+
+	// Type priority within tier
+	typePrio := s.typePriority(bead.Type)
+
+	return tierBase + typePrio
+}
+
+// tierPriority returns the base priority for a tier.
+// Orchestrator beads are processed first (machinery), then wisps (agent workflow steps),
+// then work beads (permanent deliverables - though orchestrator typically doesn't return these).
+func (s *FileBeadStore) tierPriority(tier types.BeadTier) int {
+	switch tier {
+	case types.TierOrchestrator:
+		return 0
+	case types.TierWisp:
+		return 100
+	case types.TierWork:
+		return 200
+	default:
+		// Empty tier defaults to work tier behavior
+		return 200
+	}
+}
+
+// typePriority returns priority by bead type within a tier (0-99 range).
+func (s *FileBeadStore) typePriority(beadType types.BeadType) int {
+	switch beadType {
 	case types.BeadTypeCondition:
 		return 0
 	case types.BeadTypeCode:
-		return 1
+		return 10
 	case types.BeadTypeExpand:
-		return 2
+		return 20
 	case types.BeadTypeStart:
-		return 3
+		return 30
 	case types.BeadTypeStop:
-		return 4
+		return 40
 	case types.BeadTypeGate:
-		return 5 // Gates are human-facing but orchestrator-tier
+		return 50
 	case types.BeadTypeTask:
-		return 10 // Tasks last
+		return 60
 	case types.BeadTypeCollaborative:
-		return 10 // Collaborative is like task but with human interaction
+		return 70
 	default:
-		return 5
+		return 50
 	}
 }
 
@@ -211,6 +239,7 @@ type BeadFilter struct {
 	Tier       types.BeadTier   // Filter by tier (empty = all)
 	Assignee   string           // Filter by assignee (empty = all)
 	WorkflowID string           // Filter by workflow ID (empty = all)
+	HookBead   string           // Filter by linked work bead (empty = all)
 }
 
 // List returns all beads matching the given filter.
@@ -246,7 +275,31 @@ func (s *FileBeadStore) matchesFilter(bead *types.Bead, filter BeadFilter) bool 
 	if filter.WorkflowID != "" && bead.WorkflowID != filter.WorkflowID {
 		return false
 	}
+	if filter.HookBead != "" && bead.HookBead != filter.HookBead {
+		return false
+	}
 	return true
+}
+
+// ListByTier returns all beads with the specified tier.
+func (s *FileBeadStore) ListByTier(ctx context.Context, tier types.BeadTier) ([]*types.Bead, error) {
+	return s.ListFiltered(ctx, BeadFilter{Tier: tier})
+}
+
+// ListWispsForAgent returns all wisp-tier beads assigned to the given agent.
+func (s *FileBeadStore) ListWispsForAgent(ctx context.Context, agentID string) ([]*types.Bead, error) {
+	return s.ListFiltered(ctx, BeadFilter{
+		Tier:     types.TierWisp,
+		Assignee: agentID,
+	})
+}
+
+// ListOrchestrator returns all orchestrator-tier beads for a workflow.
+func (s *FileBeadStore) ListOrchestrator(ctx context.Context, workflowID string) ([]*types.Bead, error) {
+	return s.ListFiltered(ctx, BeadFilter{
+		Tier:       types.TierOrchestrator,
+		WorkflowID: workflowID,
+	})
 }
 
 // writeLocked writes all beads to the issues file (caller must hold lock).

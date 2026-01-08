@@ -369,3 +369,257 @@ func TestFileBeadStore_DependencyChain(t *testing.T) {
 		t.Errorf("GetNextReady() = %v, want bd-c", ready)
 	}
 }
+
+func TestFileBeadStore_TierPriority(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create beads of different tiers - all ready (same type to isolate tier priority)
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-work","type":"task","title":"Work Task","status":"open","tier":"work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp","type":"task","title":"Wisp Task","status":"open","tier":"wisp","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-orch","type":"task","title":"Orch Task","status":"open","tier":"orchestrator","created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Orchestrator tier should come first
+	ready, err := store.GetNextReady(ctx)
+	if err != nil {
+		t.Fatalf("GetNextReady() error = %v", err)
+	}
+	if ready == nil || ready.ID != "bd-orch" {
+		t.Errorf("GetNextReady() = %v, want bd-orch (orchestrator tier has priority)", ready)
+	}
+
+	// Close orchestrator bead
+	ready.Status = types.BeadStatusClosed
+	if err := store.Update(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now wisp tier should be next
+	ready, err = store.GetNextReady(ctx)
+	if err != nil {
+		t.Fatalf("GetNextReady() error = %v", err)
+	}
+	if ready == nil || ready.ID != "bd-wisp" {
+		t.Errorf("GetNextReady() = %v, want bd-wisp (wisp tier has priority over work)", ready)
+	}
+
+	// Close wisp bead
+	ready.Status = types.BeadStatusClosed
+	if err := store.Update(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+
+	// Finally work tier
+	ready, err = store.GetNextReady(ctx)
+	if err != nil {
+		t.Fatalf("GetNextReady() error = %v", err)
+	}
+	if ready == nil || ready.ID != "bd-work" {
+		t.Errorf("GetNextReady() = %v, want bd-work", ready)
+	}
+}
+
+func TestFileBeadStore_ListByTier(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-work1","type":"task","title":"Work 1","status":"open","tier":"work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-work2","type":"task","title":"Work 2","status":"open","tier":"work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp1","type":"task","title":"Wisp 1","status":"open","tier":"wisp","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-orch1","type":"task","title":"Orch 1","status":"open","tier":"orchestrator","created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// List work tier
+	workBeads, err := store.ListByTier(ctx, types.TierWork)
+	if err != nil {
+		t.Fatalf("ListByTier(work) error = %v", err)
+	}
+	if len(workBeads) != 2 {
+		t.Errorf("ListByTier(work) count = %d, want 2", len(workBeads))
+	}
+
+	// List wisp tier
+	wispBeads, err := store.ListByTier(ctx, types.TierWisp)
+	if err != nil {
+		t.Fatalf("ListByTier(wisp) error = %v", err)
+	}
+	if len(wispBeads) != 1 {
+		t.Errorf("ListByTier(wisp) count = %d, want 1", len(wispBeads))
+	}
+
+	// List orchestrator tier
+	orchBeads, err := store.ListByTier(ctx, types.TierOrchestrator)
+	if err != nil {
+		t.Fatalf("ListByTier(orchestrator) error = %v", err)
+	}
+	if len(orchBeads) != 1 {
+		t.Errorf("ListByTier(orchestrator) count = %d, want 1", len(orchBeads))
+	}
+}
+
+func TestFileBeadStore_ListWispsForAgent(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-wisp1","type":"task","title":"Wisp 1","status":"open","tier":"wisp","assignee":"agent-a","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp2","type":"task","title":"Wisp 2","status":"open","tier":"wisp","assignee":"agent-a","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp3","type":"task","title":"Wisp 3","status":"open","tier":"wisp","assignee":"agent-b","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-work1","type":"task","title":"Work 1","status":"open","tier":"work","assignee":"agent-a","created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// List wisps for agent-a
+	wispsA, err := store.ListWispsForAgent(ctx, "agent-a")
+	if err != nil {
+		t.Fatalf("ListWispsForAgent(agent-a) error = %v", err)
+	}
+	if len(wispsA) != 2 {
+		t.Errorf("ListWispsForAgent(agent-a) count = %d, want 2", len(wispsA))
+	}
+
+	// List wisps for agent-b
+	wispsB, err := store.ListWispsForAgent(ctx, "agent-b")
+	if err != nil {
+		t.Fatalf("ListWispsForAgent(agent-b) error = %v", err)
+	}
+	if len(wispsB) != 1 {
+		t.Errorf("ListWispsForAgent(agent-b) count = %d, want 1", len(wispsB))
+	}
+
+	// List wisps for unknown agent
+	wispsC, err := store.ListWispsForAgent(ctx, "agent-c")
+	if err != nil {
+		t.Fatalf("ListWispsForAgent(agent-c) error = %v", err)
+	}
+	if len(wispsC) != 0 {
+		t.Errorf("ListWispsForAgent(agent-c) count = %d, want 0", len(wispsC))
+	}
+}
+
+func TestFileBeadStore_ListOrchestrator(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-orch1","type":"condition","title":"Orch 1","status":"open","tier":"orchestrator","workflow_id":"wf-001","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-orch2","type":"code","title":"Orch 2","status":"open","tier":"orchestrator","workflow_id":"wf-001","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-orch3","type":"expand","title":"Orch 3","status":"open","tier":"orchestrator","workflow_id":"wf-002","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp1","type":"task","title":"Wisp 1","status":"open","tier":"wisp","workflow_id":"wf-001","created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// List orchestrator beads for wf-001
+	orch1, err := store.ListOrchestrator(ctx, "wf-001")
+	if err != nil {
+		t.Fatalf("ListOrchestrator(wf-001) error = %v", err)
+	}
+	if len(orch1) != 2 {
+		t.Errorf("ListOrchestrator(wf-001) count = %d, want 2", len(orch1))
+	}
+
+	// List orchestrator beads for wf-002
+	orch2, err := store.ListOrchestrator(ctx, "wf-002")
+	if err != nil {
+		t.Fatalf("ListOrchestrator(wf-002) error = %v", err)
+	}
+	if len(orch2) != 1 {
+		t.Errorf("ListOrchestrator(wf-002) count = %d, want 1", len(orch2))
+	}
+}
+
+func TestFileBeadStore_FilterByHookBead(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-work","type":"task","title":"Work Bead","status":"open","tier":"work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp1","type":"task","title":"Wisp 1","status":"open","tier":"wisp","hook_bead":"bd-work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp2","type":"task","title":"Wisp 2","status":"open","tier":"wisp","hook_bead":"bd-work","created_at":"2026-01-01T00:00:00Z"}
+{"id":"bd-wisp3","type":"task","title":"Wisp 3","status":"open","tier":"wisp","hook_bead":"bd-other","created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// List wisps hooked to bd-work
+	wisps, err := store.ListFiltered(ctx, BeadFilter{HookBead: "bd-work"})
+	if err != nil {
+		t.Fatalf("ListFiltered(hook_bead=bd-work) error = %v", err)
+	}
+	if len(wisps) != 2 {
+		t.Errorf("ListFiltered(hook_bead=bd-work) count = %d, want 2", len(wisps))
+	}
+
+	// List wisps hooked to bd-other
+	wisps2, err := store.ListFiltered(ctx, BeadFilter{HookBead: "bd-other"})
+	if err != nil {
+		t.Fatalf("ListFiltered(hook_bead=bd-other) error = %v", err)
+	}
+	if len(wisps2) != 1 {
+		t.Errorf("ListFiltered(hook_bead=bd-other) count = %d, want 1", len(wisps2))
+	}
+}
