@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -981,4 +982,1579 @@ func TestOrchestrator_ConditionTimeout(t *testing.T) {
 	if len(expander.expanded) != 1 || expander.expanded[0] != "on-timeout-template" {
 		t.Errorf("Expected on-timeout-template to be expanded, got %v", expander.expanded)
 	}
+}
+
+// =============================================================================
+// PRIMITIVE HANDLER UNIT TESTS
+// =============================================================================
+
+// --- Task Handler Tests ---
+
+func TestHandler_Task_WaitsForAgentClose(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Mark agent as running
+	agents.running["claude-1"] = true
+
+	// Add a task bead with assignee
+	taskBead := &types.Bead{
+		ID:       "bd-task-wait",
+		Type:     types.BeadTypeTask,
+		Title:    "Wait for agent",
+		Status:   types.BeadStatusOpen,
+		Assignee: "claude-1",
+	}
+	store.addReady(taskBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Run briefly - task won't auto-close
+	_ = orch.Run(ctx)
+
+	// Verify task is in_progress but NOT closed (must be closed by agent)
+	if store.beads["bd-task-wait"].Status != types.BeadStatusInProgress {
+		t.Errorf("Task status = %s, want in_progress", store.beads["bd-task-wait"].Status)
+	}
+}
+
+func TestHandler_Task_WarnsOnNonRunningAgent(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Agent is NOT running
+	// agents.running["claude-dead"] is not set
+
+	// Add a task bead with non-running agent
+	taskBead := &types.Bead{
+		ID:       "bd-task-dead-agent",
+		Type:     types.BeadTypeTask,
+		Title:    "Task with dead agent",
+		Status:   types.BeadStatusOpen,
+		Assignee: "claude-dead",
+	}
+	store.addReady(taskBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Should not error - just warns
+	_ = orch.Run(ctx)
+
+	// Task should still be marked in_progress
+	if store.beads["bd-task-dead-agent"].Status != types.BeadStatusInProgress {
+		t.Errorf("Task status = %s, want in_progress", store.beads["bd-task-dead-agent"].Status)
+	}
+}
+
+func TestHandler_Task_NoAssigneeMarksInProgress(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Task with no assignee
+	taskBead := &types.Bead{
+		ID:     "bd-task-unassigned",
+		Type:   types.BeadTypeTask,
+		Title:  "Unassigned task",
+		Status: types.BeadStatusOpen,
+		// No assignee
+	}
+	store.addReady(taskBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Task should be marked in_progress
+	if store.beads["bd-task-unassigned"].Status != types.BeadStatusInProgress {
+		t.Errorf("Task status = %s, want in_progress", store.beads["bd-task-unassigned"].Status)
+	}
+}
+
+// --- Condition Handler Tests ---
+
+func TestHandler_Condition_FalseExpandsOnFalse(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor to return false (exit non-0)
+	executor.results["test -f missing.txt"] = map[string]any{"exit_code": 1}
+
+	// Add a condition bead
+	condBead := &types.Bead{
+		ID:     "bd-cond-false",
+		Type:   types.BeadTypeCondition,
+		Title:  "Check missing file",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "test -f missing.txt",
+			OnTrue: &types.ExpansionTarget{
+				Template: "on-true-template",
+			},
+			OnFalse: &types.ExpansionTarget{
+				Template: "on-false-template",
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Wait for goroutine
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify on_false template was expanded
+	if len(expander.expanded) != 1 || expander.expanded[0] != "on-false-template" {
+		t.Errorf("Expected on-false-template to be expanded, got %v", expander.expanded)
+	}
+}
+
+func TestHandler_Condition_ErrorExpandsOnFalse(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor to return error
+	executor.errors["command-that-errors"] = fmt.Errorf("execution failed")
+
+	condBead := &types.Bead{
+		ID:     "bd-cond-error",
+		Type:   types.BeadTypeCondition,
+		Title:  "Error condition",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "command-that-errors",
+			OnTrue: &types.ExpansionTarget{
+				Template: "on-true-template",
+			},
+			OnFalse: &types.ExpansionTarget{
+				Template: "on-false-template",
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Wait for goroutine
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify on_false template was expanded (error = false)
+	if len(expander.expanded) != 1 || expander.expanded[0] != "on-false-template" {
+		t.Errorf("Expected on-false-template on error, got %v", expander.expanded)
+	}
+}
+
+func TestHandler_Condition_TimeoutFallsBackToOnFalse(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := &blockingCodeExecutor{} // Blocks forever
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Condition with timeout but NO on_timeout (should fall back to on_false)
+	condBead := &types.Bead{
+		ID:     "bd-cond-timeout-fallback",
+		Type:   types.BeadTypeCondition,
+		Title:  "Timeout fallback",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "sleep 10",
+			Timeout:   "50ms",
+			OnTrue: &types.ExpansionTarget{
+				Template: "on-true-template",
+			},
+			OnFalse: &types.ExpansionTarget{
+				Template: "on-false-fallback",
+			},
+			// No OnTimeout - should fall back to OnFalse
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Wait for goroutine
+	time.Sleep(150 * time.Millisecond)
+
+	// Verify on_false was used as fallback
+	if len(expander.expanded) != 1 || expander.expanded[0] != "on-false-fallback" {
+		t.Errorf("Expected on-false-fallback on timeout without on_timeout, got %v", expander.expanded)
+	}
+}
+
+func TestHandler_Condition_RunsInGoroutine(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor (will execute in goroutine)
+	executor.results["echo test"] = map[string]any{"exit_code": 0}
+
+	condBead := &types.Bead{
+		ID:     "bd-cond-goroutine",
+		Type:   types.BeadTypeCondition,
+		Title:  "Goroutine test",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "echo test",
+			OnTrue: &types.ExpansionTarget{
+				Template: "success",
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx := context.Background()
+
+	// Call dispatch directly - should NOT block
+	err := orch.dispatch(ctx, condBead)
+	if err != nil {
+		t.Errorf("dispatch() error = %v", err)
+	}
+
+	// Bead should be in_progress immediately (goroutine spawned)
+	if store.beads["bd-cond-goroutine"].Status != types.BeadStatusInProgress {
+		t.Errorf("Condition bead should be in_progress immediately, got %s", store.beads["bd-cond-goroutine"].Status)
+	}
+
+	// Wait for goroutine to complete
+	time.Sleep(50 * time.Millisecond)
+	orch.waitForConditions()
+
+	// Now it should be closed
+	if store.beads["bd-cond-goroutine"].Status != types.BeadStatusClosed {
+		t.Errorf("Condition bead should be closed after goroutine completes, got %s", store.beads["bd-cond-goroutine"].Status)
+	}
+}
+
+func TestHandler_Condition_CancellationStopsGoroutine(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := &blockingCodeExecutor{} // Blocks until cancelled
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	condBead := &types.Bead{
+		ID:     "bd-cond-cancel",
+		Type:   types.BeadTypeCondition,
+		Title:  "Cancellable condition",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "sleep 3600", // Would block for an hour
+			OnTrue: &types.ExpansionTarget{
+				Template: "never-reached",
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start the orchestrator
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.Run(ctx)
+	}()
+
+	// Give it time to start the condition goroutine
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context
+	cancel()
+
+	// Should complete quickly
+	select {
+	case <-done:
+		// Good - completed
+	case <-time.After(200 * time.Millisecond):
+		t.Error("Orchestrator did not stop after cancellation")
+	}
+
+	// Template should NOT have been expanded
+	if len(expander.expanded) > 0 {
+		t.Errorf("No template should be expanded on cancellation, got %v", expander.expanded)
+	}
+}
+
+func TestHandler_Condition_MissingSpecReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Condition bead WITHOUT spec
+	condBead := &types.Bead{
+		ID:     "bd-cond-no-spec",
+		Type:   types.BeadTypeCondition,
+		Title:  "No spec",
+		Status: types.BeadStatusOpen,
+		// ConditionSpec is nil
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, condBead)
+	if err == nil {
+		t.Error("dispatch() should error with missing spec")
+	}
+}
+
+// --- Code Handler Tests ---
+
+func TestHandler_Code_CapturesStdout(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor result with stdout
+	executor.results["echo hello"] = map[string]any{
+		"stdout":    "hello\n",
+		"stderr":    "",
+		"exit_code": 0,
+	}
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-stdout",
+		Type:   types.BeadTypeCode,
+		Title:  "Capture stdout",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code: "echo hello",
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Errorf("Run() error = %v", err)
+	}
+
+	// Verify stdout was captured in outputs
+	bead := store.beads["bd-code-stdout"]
+	if bead.Outputs["stdout"] != "hello\n" {
+		t.Errorf("stdout = %v, want 'hello\\n'", bead.Outputs["stdout"])
+	}
+	if bead.Status != types.BeadStatusClosed {
+		t.Errorf("Status = %s, want closed", bead.Status)
+	}
+}
+
+func TestHandler_Code_CapturesStderr(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	executor.results["echo error >&2"] = map[string]any{
+		"stdout":    "",
+		"stderr":    "error\n",
+		"exit_code": 0,
+	}
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-stderr",
+		Type:   types.BeadTypeCode,
+		Title:  "Capture stderr",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code: "echo error >&2",
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	bead := store.beads["bd-code-stderr"]
+	if bead.Outputs["stderr"] != "error\n" {
+		t.Errorf("stderr = %v, want 'error\\n'", bead.Outputs["stderr"])
+	}
+}
+
+func TestHandler_Code_OnErrorContinue(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor to fail
+	executor.errors["failing-command"] = fmt.Errorf("command failed")
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-continue",
+		Type:   types.BeadTypeCode,
+		Title:  "Continue on error",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code:    "failing-command",
+			OnError: types.OnErrorContinue,
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Errorf("Run() should not error with on_error=continue, got %v", err)
+	}
+
+	// Bead should still be closed (continue means proceed despite error)
+	bead := store.beads["bd-code-continue"]
+	if bead.Status != types.BeadStatusClosed {
+		t.Errorf("Bead status = %s, want closed", bead.Status)
+	}
+}
+
+func TestHandler_Code_OnErrorAbort(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	executor.errors["abort-command"] = fmt.Errorf("critical failure")
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-abort",
+		Type:   types.BeadTypeCode,
+		Title:  "Abort on error",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code:    "abort-command",
+			OnError: types.OnErrorAbort,
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx := context.Background()
+
+	// Dispatch directly to see the error
+	err := orch.dispatch(ctx, codeBead)
+	if err == nil {
+		t.Error("dispatch() should return error with on_error=abort")
+	}
+
+	// Bead should NOT be closed (aborted)
+	bead := store.beads["bd-code-abort"]
+	if bead.Status == types.BeadStatusClosed {
+		t.Error("Bead should not be closed on abort")
+	}
+}
+
+func TestHandler_Code_RetryExhausted(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := &retryingCodeExecutor{failUntil: 10} // Fail more than max retries
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-retry-exhausted",
+		Type:   types.BeadTypeCode,
+		Title:  "Retry exhausted",
+		Status: types.BeadStatusOpen,
+		CodeSpec: &types.CodeSpec{
+			Code:       "always-fails",
+			OnError:    types.OnErrorRetry,
+			MaxRetries: 3,
+		},
+	}
+	store.addReady(codeBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Should have been called exactly MaxRetries times
+	if executor.callCount != 3 {
+		t.Errorf("Execute called %d times, want 3", executor.callCount)
+	}
+
+	// Bead should be closed (retries exhausted, but continues)
+	bead := store.beads["bd-code-retry-exhausted"]
+	if bead.Status != types.BeadStatusClosed {
+		t.Errorf("Bead status = %s, want closed", bead.Status)
+	}
+}
+
+func TestHandler_Code_MissingSpecReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	codeBead := &types.Bead{
+		ID:     "bd-code-no-spec",
+		Type:   types.BeadTypeCode,
+		Title:  "No spec",
+		Status: types.BeadStatusOpen,
+		// CodeSpec is nil
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, codeBead)
+	if err == nil {
+		t.Error("dispatch() should error with missing CodeSpec")
+	}
+}
+
+// --- Expand Handler Tests ---
+
+func TestHandler_Expand_ExpandsTemplate(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	expandBead := &types.Bead{
+		ID:     "bd-expand-test",
+		Type:   types.BeadTypeExpand,
+		Title:  "Expand template",
+		Status: types.BeadStatusOpen,
+		ExpandSpec: &types.ExpandSpec{
+			Template: "tdd-workflow",
+		},
+	}
+	store.addReady(expandBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify template was expanded
+	if len(expander.expanded) != 1 || expander.expanded[0] != "tdd-workflow" {
+		t.Errorf("Expected tdd-workflow to be expanded, got %v", expander.expanded)
+	}
+
+	// Verify bead was closed
+	if store.beads["bd-expand-test"].Status != types.BeadStatusClosed {
+		t.Errorf("Status = %s, want closed", store.beads["bd-expand-test"].Status)
+	}
+}
+
+func TestHandler_Expand_PassesVariables(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Custom expander that records variables
+	var capturedVars map[string]string
+	expander := &variableCapturingExpander{
+		onExpand: func(spec *types.ExpandSpec) {
+			capturedVars = spec.Variables
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	expandBead := &types.Bead{
+		ID:     "bd-expand-vars",
+		Type:   types.BeadTypeExpand,
+		Title:  "Expand with vars",
+		Status: types.BeadStatusOpen,
+		ExpandSpec: &types.ExpandSpec{
+			Template: "parameterized",
+			Variables: map[string]string{
+				"task_id":     "bd-123",
+				"agent_name":  "claude-1",
+				"custom_flag": "true",
+			},
+		},
+	}
+	store.addReady(expandBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify variables were passed
+	if capturedVars["task_id"] != "bd-123" {
+		t.Errorf("task_id = %s, want bd-123", capturedVars["task_id"])
+	}
+	if capturedVars["agent_name"] != "claude-1" {
+		t.Errorf("agent_name = %s, want claude-1", capturedVars["agent_name"])
+	}
+}
+
+func TestHandler_Expand_MissingSpecReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	expandBead := &types.Bead{
+		ID:     "bd-expand-no-spec",
+		Type:   types.BeadTypeExpand,
+		Title:  "No spec",
+		Status: types.BeadStatusOpen,
+		// ExpandSpec is nil
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, expandBead)
+	if err == nil {
+		t.Error("dispatch() should error with missing ExpandSpec")
+	}
+}
+
+func TestHandler_Expand_PassesParentBead(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Custom expander that captures parent
+	var capturedParent *types.Bead
+	expander := &parentCapturingExpander{
+		onExpand: func(parent *types.Bead) {
+			capturedParent = parent
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	expandBead := &types.Bead{
+		ID:     "bd-expand-parent",
+		Type:   types.BeadTypeExpand,
+		Title:  "Parent test",
+		Status: types.BeadStatusOpen,
+		ExpandSpec: &types.ExpandSpec{
+			Template: "child-template",
+		},
+	}
+	store.addReady(expandBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify parent was passed
+	if capturedParent == nil {
+		t.Error("Parent bead should be passed to expander")
+	}
+	if capturedParent.ID != "bd-expand-parent" {
+		t.Errorf("Parent ID = %s, want bd-expand-parent", capturedParent.ID)
+	}
+}
+
+// --- Start Handler Tests ---
+
+func TestHandler_Start_CreatesSession(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-session",
+		Type:   types.BeadTypeStart,
+		Title:  "Start agent",
+		Status: types.BeadStatusOpen,
+		StartSpec: &types.StartSpec{
+			Agent:   "claude-test",
+			Workdir: "/tmp/test",
+		},
+	}
+	store.addReady(startBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify agent was started
+	if len(agents.started) != 1 || agents.started[0] != "claude-test" {
+		t.Errorf("Expected claude-test to be started, got %v", agents.started)
+	}
+
+	// Verify agent is now running
+	if !agents.running["claude-test"] {
+		t.Error("Agent should be marked as running")
+	}
+
+	// Verify bead was closed
+	if store.beads["bd-start-session"].Status != types.BeadStatusClosed {
+		t.Errorf("Status = %s, want closed", store.beads["bd-start-session"].Status)
+	}
+}
+
+func TestHandler_Start_SetsWorkdir(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Custom agent manager to capture spec
+	var capturedSpec *types.StartSpec
+	agents := &specCapturingAgentManager{
+		onStart: func(spec *types.StartSpec) {
+			capturedSpec = spec
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-workdir",
+		Type:   types.BeadTypeStart,
+		Title:  "Start with workdir",
+		Status: types.BeadStatusOpen,
+		StartSpec: &types.StartSpec{
+			Agent:   "claude-workdir",
+			Workdir: "/data/projects/test",
+		},
+	}
+	store.addReady(startBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify workdir was passed
+	if capturedSpec.Workdir != "/data/projects/test" {
+		t.Errorf("Workdir = %s, want /data/projects/test", capturedSpec.Workdir)
+	}
+}
+
+func TestHandler_Start_ResumeSession(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	var capturedSpec *types.StartSpec
+	agents := &specCapturingAgentManager{
+		onStart: func(spec *types.StartSpec) {
+			capturedSpec = spec
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-resume",
+		Type:   types.BeadTypeStart,
+		Title:  "Resume session",
+		Status: types.BeadStatusOpen,
+		StartSpec: &types.StartSpec{
+			Agent:         "claude-resume",
+			ResumeSession: "session-abc-123",
+		},
+	}
+	store.addReady(startBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify resume session was passed
+	if capturedSpec.ResumeSession != "session-abc-123" {
+		t.Errorf("ResumeSession = %s, want session-abc-123", capturedSpec.ResumeSession)
+	}
+}
+
+func TestHandler_Start_CustomPrompt(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	var capturedSpec *types.StartSpec
+	agents := &specCapturingAgentManager{
+		onStart: func(spec *types.StartSpec) {
+			capturedSpec = spec
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-prompt",
+		Type:   types.BeadTypeStart,
+		Title:  "Custom prompt",
+		Status: types.BeadStatusOpen,
+		StartSpec: &types.StartSpec{
+			Agent:  "claude-prompt",
+			Prompt: "/start bd-task-123",
+		},
+	}
+	store.addReady(startBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify custom prompt was passed
+	if capturedSpec.Prompt != "/start bd-task-123" {
+		t.Errorf("Prompt = %s, want /start bd-task-123", capturedSpec.Prompt)
+	}
+}
+
+func TestHandler_Start_MissingSpecReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-no-spec",
+		Type:   types.BeadTypeStart,
+		Title:  "No spec",
+		Status: types.BeadStatusOpen,
+		// StartSpec is nil
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, startBead)
+	if err == nil {
+		t.Error("dispatch() should error with missing StartSpec")
+	}
+}
+
+// --- Stop Handler Tests ---
+
+func TestHandler_Stop_StopsSession(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Start the agent first
+	agents.running["claude-stop"] = true
+
+	stopBead := &types.Bead{
+		ID:     "bd-stop-session",
+		Type:   types.BeadTypeStop,
+		Title:  "Stop agent",
+		Status: types.BeadStatusOpen,
+		StopSpec: &types.StopSpec{
+			Agent:    "claude-stop",
+			Graceful: true,
+		},
+	}
+	store.addReady(stopBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify agent was stopped
+	if len(agents.stopped) != 1 || agents.stopped[0] != "claude-stop" {
+		t.Errorf("Expected claude-stop to be stopped, got %v", agents.stopped)
+	}
+
+	// Verify agent is no longer running
+	if agents.running["claude-stop"] {
+		t.Error("Agent should not be running after stop")
+	}
+
+	// Verify bead was closed
+	if store.beads["bd-stop-session"].Status != types.BeadStatusClosed {
+		t.Errorf("Status = %s, want closed", store.beads["bd-stop-session"].Status)
+	}
+}
+
+func TestHandler_Stop_GracefulFlag(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	var capturedSpec *types.StopSpec
+	agents := &stopSpecCapturingAgentManager{
+		onStop: func(spec *types.StopSpec) {
+			capturedSpec = spec
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	stopBead := &types.Bead{
+		ID:     "bd-stop-graceful",
+		Type:   types.BeadTypeStop,
+		Title:  "Graceful stop",
+		Status: types.BeadStatusOpen,
+		StopSpec: &types.StopSpec{
+			Agent:    "claude-graceful",
+			Graceful: true,
+			Timeout:  30,
+		},
+	}
+	store.addReady(stopBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify graceful and timeout were passed
+	if !capturedSpec.Graceful {
+		t.Error("Graceful should be true")
+	}
+	if capturedSpec.Timeout != 30 {
+		t.Errorf("Timeout = %d, want 30", capturedSpec.Timeout)
+	}
+}
+
+func TestHandler_Stop_ForceKill(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	var capturedSpec *types.StopSpec
+	agents := &stopSpecCapturingAgentManager{
+		onStop: func(spec *types.StopSpec) {
+			capturedSpec = spec
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	stopBead := &types.Bead{
+		ID:     "bd-stop-force",
+		Type:   types.BeadTypeStop,
+		Title:  "Force stop",
+		Status: types.BeadStatusOpen,
+		StopSpec: &types.StopSpec{
+			Agent:    "claude-force",
+			Graceful: false, // Force kill
+		},
+	}
+	store.addReady(stopBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Verify force kill (not graceful)
+	if capturedSpec.Graceful {
+		t.Error("Graceful should be false for force kill")
+	}
+}
+
+func TestHandler_Stop_MissingSpecReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	stopBead := &types.Bead{
+		ID:     "bd-stop-no-spec",
+		Type:   types.BeadTypeStop,
+		Title:  "No spec",
+		Status: types.BeadStatusOpen,
+		// StopSpec is nil
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, stopBead)
+	if err == nil {
+		t.Error("dispatch() should error with missing StopSpec")
+	}
+}
+
+// --- Dispatch Unknown Type Test ---
+
+func TestHandler_UnknownTypeReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	unknownBead := &types.Bead{
+		ID:     "bd-unknown",
+		Type:   types.BeadType("invalid"),
+		Title:  "Unknown type",
+		Status: types.BeadStatusOpen,
+	}
+
+	ctx := context.Background()
+
+	err := orch.dispatch(ctx, unknownBead)
+	if err == nil {
+		t.Error("dispatch() should error with unknown bead type")
+	}
+}
+
+// =============================================================================
+// HELPER TYPES FOR TESTS
+// =============================================================================
+
+// variableCapturingExpander captures variables passed to Expand.
+type variableCapturingExpander struct {
+	onExpand func(spec *types.ExpandSpec)
+}
+
+func (e *variableCapturingExpander) Expand(ctx context.Context, spec *types.ExpandSpec, parent *types.Bead) error {
+	if e.onExpand != nil {
+		e.onExpand(spec)
+	}
+	return nil
+}
+
+// parentCapturingExpander captures the parent bead passed to Expand.
+type parentCapturingExpander struct {
+	onExpand func(parent *types.Bead)
+}
+
+func (e *parentCapturingExpander) Expand(ctx context.Context, spec *types.ExpandSpec, parent *types.Bead) error {
+	if e.onExpand != nil {
+		e.onExpand(parent)
+	}
+	return nil
+}
+
+// specCapturingAgentManager captures StartSpec.
+type specCapturingAgentManager struct {
+	onStart func(spec *types.StartSpec)
+	running map[string]bool
+}
+
+func (m *specCapturingAgentManager) Start(ctx context.Context, spec *types.StartSpec) error {
+	if m.onStart != nil {
+		m.onStart(spec)
+	}
+	if m.running == nil {
+		m.running = make(map[string]bool)
+	}
+	m.running[spec.Agent] = true
+	return nil
+}
+
+func (m *specCapturingAgentManager) Stop(ctx context.Context, spec *types.StopSpec) error {
+	if m.running != nil {
+		m.running[spec.Agent] = false
+	}
+	return nil
+}
+
+func (m *specCapturingAgentManager) IsRunning(ctx context.Context, agentID string) (bool, error) {
+	if m.running == nil {
+		return false, nil
+	}
+	return m.running[agentID], nil
+}
+
+// stopSpecCapturingAgentManager captures StopSpec.
+type stopSpecCapturingAgentManager struct {
+	onStop  func(spec *types.StopSpec)
+	running map[string]bool
+}
+
+func (m *stopSpecCapturingAgentManager) Start(ctx context.Context, spec *types.StartSpec) error {
+	if m.running == nil {
+		m.running = make(map[string]bool)
+	}
+	m.running[spec.Agent] = true
+	return nil
+}
+
+func (m *stopSpecCapturingAgentManager) Stop(ctx context.Context, spec *types.StopSpec) error {
+	if m.onStop != nil {
+		m.onStop(spec)
+	}
+	if m.running != nil {
+		m.running[spec.Agent] = false
+	}
+	return nil
+}
+
+func (m *stopSpecCapturingAgentManager) IsRunning(ctx context.Context, agentID string) (bool, error) {
+	if m.running == nil {
+		return false, nil
+	}
+	return m.running[agentID], nil
+}
+
+// =============================================================================
+// INLINE STEPS AND EPHEMERAL CLEANUP TESTS
+// =============================================================================
+
+// mockBeadStoreWithCreateAndDelete extends mockBeadStore with Create and Delete support.
+type mockBeadStoreWithCreateAndDelete struct {
+	*mockBeadStore
+	created []*types.Bead
+}
+
+func newMockBeadStoreWithCreateAndDelete() *mockBeadStoreWithCreateAndDelete {
+	return &mockBeadStoreWithCreateAndDelete{
+		mockBeadStore: newMockBeadStore(),
+		created:       make([]*types.Bead, 0),
+	}
+}
+
+func (m *mockBeadStoreWithCreateAndDelete) Create(ctx context.Context, bead *types.Bead) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.beads[bead.ID] = bead
+	m.created = append(m.created, bead)
+	return nil
+}
+
+func (m *mockBeadStoreWithCreateAndDelete) Delete(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.beads, id)
+	return nil
+}
+
+func (m *mockBeadStoreWithCreateAndDelete) List(ctx context.Context, status types.BeadStatus) ([]*types.Bead, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []*types.Bead
+	for _, bead := range m.beads {
+		if status == "" || bead.Status == status {
+			result = append(result, bead)
+		}
+	}
+	return result, nil
+}
+
+func TestHandler_Condition_ExpandsInlineSteps(t *testing.T) {
+	store := newMockBeadStoreWithCreateAndDelete()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Set up executor to return true (exit 0)
+	executor.results["check-something"] = map[string]any{"exit_code": 0}
+
+	// Add a condition bead with inline steps
+	condBead := &types.Bead{
+		ID:     "bd-cond-inline",
+		Type:   types.BeadTypeCondition,
+		Title:  "Inline steps",
+		Status: types.BeadStatusOpen,
+		ConditionSpec: &types.ConditionSpec{
+			Condition: "check-something",
+			OnTrue: &types.ExpansionTarget{
+				Inline: []json.RawMessage{
+					json.RawMessage(`{"id": "step-1", "type": "task", "description": "First step"}`),
+					json.RawMessage(`{"id": "step-2", "type": "task", "description": "Second step", "needs": ["step-1"]}`),
+				},
+			},
+		},
+	}
+	store.addReady(condBead)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = orch.Run(ctx)
+
+	// Wait for goroutine
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify inline beads were created
+	if len(store.created) < 2 {
+		t.Errorf("Expected at least 2 inline beads created, got %d", len(store.created))
+	}
+
+	// Check the first step
+	step1 := store.beads["bd-cond-inline.inline.step-1"]
+	if step1 == nil {
+		t.Error("step-1 bead should be created")
+	} else {
+		if step1.Type != types.BeadTypeTask {
+			t.Errorf("step-1 type = %s, want task", step1.Type)
+		}
+		if step1.Title != "First step" {
+			t.Errorf("step-1 title = %s, want 'First step'", step1.Title)
+		}
+		if step1.Parent != "bd-cond-inline" {
+			t.Errorf("step-1 parent = %s, want bd-cond-inline", step1.Parent)
+		}
+	}
+
+	// Check the second step with dependency
+	step2 := store.beads["bd-cond-inline.inline.step-2"]
+	if step2 == nil {
+		t.Error("step-2 bead should be created")
+	} else {
+		// step-2 should depend on step-1
+		hasStep1Dep := false
+		for _, need := range step2.Needs {
+			if need == "bd-cond-inline.inline.step-1" {
+				hasStep1Dep = true
+				break
+			}
+		}
+		if !hasStep1Dep {
+			t.Errorf("step-2 should depend on step-1, needs = %v", step2.Needs)
+		}
+	}
+}
+
+func TestOrchestrator_CleanupEphemeralBeads(t *testing.T) {
+	store := newMockBeadStoreWithCreateAndDelete()
+	agents := newMockAgentManager()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := config.Default()
+	cfg.Orchestrator.PollInterval = 10 * time.Millisecond
+
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	// Add a non-ephemeral bead (normal work bead)
+	workBead := &types.Bead{
+		ID:     "bd-work-001",
+		Type:   types.BeadTypeTask,
+		Title:  "Normal work bead",
+		Status: types.BeadStatusClosed,
+	}
+	store.beads[workBead.ID] = workBead
+
+	// Add an ephemeral bead (machinery)
+	ephemeralBead := &types.Bead{
+		ID:     "bd-eph-001",
+		Type:   types.BeadTypeCode,
+		Title:  "Ephemeral machinery",
+		Status: types.BeadStatusClosed,
+		Labels: []string{"meow:ephemeral"},
+	}
+	store.beads[ephemeralBead.ID] = ephemeralBead
+
+	// No ready beads - should complete immediately and cleanup ephemerals
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Errorf("Run() error = %v", err)
+	}
+
+	// Work bead should still exist
+	if store.beads["bd-work-001"] == nil {
+		t.Error("Work bead should NOT be deleted")
+	}
+
+	// Ephemeral bead should be deleted
+	if store.beads["bd-eph-001"] != nil {
+		t.Error("Ephemeral bead should be deleted")
+	}
+}
+
+func TestHandler_Start_FailureReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Agent manager that fails to start
+	agents := &failingAgentManager{
+		failStart: true,
+		err:       fmt.Errorf("tmux session creation failed"),
+	}
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	startBead := &types.Bead{
+		ID:     "bd-start-fail",
+		Type:   types.BeadTypeStart,
+		Title:  "Failing start",
+		Status: types.BeadStatusOpen,
+		StartSpec: &types.StartSpec{
+			Agent: "claude-fail",
+		},
+	}
+	store.beads[startBead.ID] = startBead
+
+	ctx := context.Background()
+	err := orch.dispatch(ctx, startBead)
+
+	if err == nil {
+		t.Error("dispatch() should error when Start fails")
+	}
+}
+
+func TestHandler_Stop_FailureReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	expander := &mockTemplateExpander{}
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Agent manager that fails to stop
+	agents := &failingAgentManager{
+		failStop: true,
+		err:      fmt.Errorf("tmux kill-session failed"),
+	}
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	stopBead := &types.Bead{
+		ID:     "bd-stop-fail",
+		Type:   types.BeadTypeStop,
+		Title:  "Failing stop",
+		Status: types.BeadStatusOpen,
+		StopSpec: &types.StopSpec{
+			Agent: "claude-fail",
+		},
+	}
+	store.beads[stopBead.ID] = stopBead
+
+	ctx := context.Background()
+	err := orch.dispatch(ctx, stopBead)
+
+	if err == nil {
+		t.Error("dispatch() should error when Stop fails")
+	}
+}
+
+func TestHandler_Expand_FailureReturnsError(t *testing.T) {
+	store := newMockBeadStore()
+	agents := newMockAgentManager()
+	executor := newMockCodeExecutor()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Expander that fails
+	expander := &failingExpander{
+		err: fmt.Errorf("template not found"),
+	}
+
+	cfg := config.Default()
+	orch := New(cfg, store, agents, expander, executor, logger)
+
+	expandBead := &types.Bead{
+		ID:     "bd-expand-fail",
+		Type:   types.BeadTypeExpand,
+		Title:  "Failing expand",
+		Status: types.BeadStatusOpen,
+		ExpandSpec: &types.ExpandSpec{
+			Template: "nonexistent-template",
+		},
+	}
+	store.beads[expandBead.ID] = expandBead
+
+	ctx := context.Background()
+	err := orch.dispatch(ctx, expandBead)
+
+	if err == nil {
+		t.Error("dispatch() should error when Expand fails")
+	}
+}
+
+// failingAgentManager is an agent manager that fails operations.
+type failingAgentManager struct {
+	failStart bool
+	failStop  bool
+	err       error
+}
+
+func (m *failingAgentManager) Start(ctx context.Context, spec *types.StartSpec) error {
+	if m.failStart {
+		return m.err
+	}
+	return nil
+}
+
+func (m *failingAgentManager) Stop(ctx context.Context, spec *types.StopSpec) error {
+	if m.failStop {
+		return m.err
+	}
+	return nil
+}
+
+func (m *failingAgentManager) IsRunning(ctx context.Context, agentID string) (bool, error) {
+	return false, nil
+}
+
+// failingExpander is an expander that always fails.
+type failingExpander struct {
+	err error
+}
+
+func (e *failingExpander) Expand(ctx context.Context, spec *types.ExpandSpec, parent *types.Bead) error {
+	return e.err
 }
