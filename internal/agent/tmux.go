@@ -2,7 +2,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -102,6 +101,9 @@ func parseTmuxVersion(output string) float64 {
 type TmuxManager struct {
 	mu sync.RWMutex
 
+	// tmux is the low-level tmux wrapper
+	tmux *TmuxWrapper
+
 	// agents tracks known agents
 	agents map[string]*types.Agent
 
@@ -113,6 +115,7 @@ type TmuxManager struct {
 // NewTmuxManager creates a new tmux-based agent manager.
 func NewTmuxManager() *TmuxManager {
 	return &TmuxManager{
+		tmux:          NewTmuxWrapper(),
 		agents:        make(map[string]*types.Agent),
 		defaultPrompt: "meow prime",
 		gracePeriod:   3 * time.Second,
@@ -130,45 +133,22 @@ func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 
 	sessionName := "meow-" + spec.Agent
 
-	// Check if session already exists
-	if m.sessionExists(sessionName) {
-		return fmt.Errorf("session %s already exists", sessionName)
-	}
-
 	// Build the claude command
 	claudeArgs := []string{"--dangerously-skip-permissions"}
 	if spec.ResumeSession != "" {
 		claudeArgs = append(claudeArgs, "--resume", spec.ResumeSession)
 	}
-
 	claudeCmd := "claude " + strings.Join(claudeArgs, " ")
 
-	// Build the tmux new-session command
-	args := []string{
-		"new-session",
-		"-d",                       // Detached
-		"-s", sessionName,          // Session name
-		"-x", "200", "-y", "50",    // Size
-	}
-
-	// Set working directory
-	workdir := spec.Workdir
-	if workdir != "" {
-		args = append(args, "-c", workdir)
-	}
-
-	// Set environment variables
-	for k, v := range spec.Env {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
-	}
-
-	// The command to run in the session
-	args = append(args, claudeCmd)
-
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.CombinedOutput()
+	// Create the session using the wrapper
+	err := m.tmux.NewSession(ctx, SessionOptions{
+		Name:    sessionName,
+		Workdir: spec.Workdir,
+		Env:     spec.Env,
+		Command: claudeCmd,
+	})
 	if err != nil {
-		return fmt.Errorf("creating tmux session: %w: %s", err, output)
+		return err
 	}
 
 	// Wait a moment for the session to initialize
@@ -179,7 +159,7 @@ func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 	if prompt == "" {
 		prompt = m.defaultPrompt
 	}
-	if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
+	if err := m.tmux.SendKeys(ctx, sessionName, prompt); err != nil {
 		return fmt.Errorf("sending initial prompt: %w", err)
 	}
 
@@ -190,7 +170,7 @@ func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 		Name:        spec.Agent,
 		Status:      types.AgentStatusActive,
 		TmuxSession: sessionName,
-		Workdir:     workdir,
+		Workdir:     spec.Workdir,
 		Env:         spec.Env,
 	}
 	now := time.Now()
@@ -217,7 +197,7 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 	sessionName := "meow-" + spec.Agent
 
 	// Check if session exists
-	if !m.sessionExists(sessionName) {
+	if !m.tmux.SessionExists(ctx, sessionName) {
 		// Session doesn't exist - that's fine, consider it stopped
 		m.updateAgentState(spec.Agent, types.AgentStatusStopped)
 		return nil
@@ -225,7 +205,7 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 
 	if spec.Graceful {
 		// Try graceful shutdown first: send Ctrl-C (without Enter)
-		_ = m.sendKeysRaw(ctx, sessionName, "C-c", false)
+		_ = m.tmux.SendKeysLiteral(ctx, sessionName, "C-c")
 
 		// Wait for graceful shutdown
 		timeout := spec.Timeout
@@ -235,7 +215,7 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 
 		deadline := time.Now().Add(time.Duration(timeout) * time.Second)
 		for time.Now().Before(deadline) {
-			if !m.sessionExists(sessionName) {
+			if !m.tmux.SessionExists(ctx, sessionName) {
 				m.updateAgentState(spec.Agent, types.AgentStatusStopped)
 				return nil
 			}
@@ -244,13 +224,8 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 	}
 
 	// Force kill the session
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Ignore errors if session doesn't exist
-		if !strings.Contains(string(output), "session not found") {
-			return fmt.Errorf("killing tmux session: %w: %s", err, output)
-		}
+	if err := m.tmux.KillSession(ctx, sessionName); err != nil {
+		return err
 	}
 
 	m.updateAgentState(spec.Agent, types.AgentStatusStopped)
@@ -260,16 +235,22 @@ func (m *TmuxManager) Stop(ctx context.Context, spec *types.StopSpec) error {
 // IsRunning checks if an agent's tmux session is alive.
 func (m *TmuxManager) IsRunning(ctx context.Context, agentID string) (bool, error) {
 	sessionName := "meow-" + agentID
-	return m.sessionExists(sessionName), nil
+	return m.tmux.SessionExists(ctx, sessionName), nil
 }
 
 // SendCommand sends a command to an agent's session.
 func (m *TmuxManager) SendCommand(ctx context.Context, agentID, command string) error {
 	sessionName := "meow-" + agentID
-	if !m.sessionExists(sessionName) {
+	if !m.tmux.SessionExists(ctx, sessionName) {
 		return fmt.Errorf("session %s not found", sessionName)
 	}
-	return m.sendKeys(ctx, sessionName, command)
+	return m.tmux.SendKeys(ctx, sessionName, command)
+}
+
+// CaptureOutput captures the current pane output from an agent's session.
+func (m *TmuxManager) CaptureOutput(ctx context.Context, agentID string) (string, error) {
+	sessionName := "meow-" + agentID
+	return m.tmux.CapturePane(ctx, sessionName)
 }
 
 // GetSessionID retrieves the Claude session ID from an agent.
@@ -330,8 +311,10 @@ func (m *TmuxManager) UpdateHeartbeat(agentID string) error {
 // SyncWithTmux updates agent states based on actual tmux sessions.
 // This is called during crash recovery.
 func (m *TmuxManager) SyncWithTmux() error {
-	// List all meow-* sessions
-	sessions, err := m.listMeowSessions()
+	ctx := context.Background()
+
+	// List all meow-* sessions using the wrapper
+	sessions, err := m.tmux.ListSessions(ctx, "meow-")
 	if err != nil {
 		return err
 	}
@@ -356,86 +339,20 @@ func (m *TmuxManager) SyncWithTmux() error {
 
 	// Create agent entries for unknown sessions
 	for session := range sessionSet {
-		if strings.HasPrefix(session, "meow-") {
-			agentID := strings.TrimPrefix(session, "meow-")
-			if _, exists := m.agents[agentID]; !exists {
-				now := time.Now()
-				m.agents[agentID] = &types.Agent{
-					ID:          agentID,
-					Name:        agentID,
-					Status:      types.AgentStatusActive,
-					TmuxSession: session,
-					CreatedAt:   &now,
-				}
+		agentID := strings.TrimPrefix(session, "meow-")
+		if _, exists := m.agents[agentID]; !exists {
+			now := time.Now()
+			m.agents[agentID] = &types.Agent{
+				ID:          agentID,
+				Name:        agentID,
+				Status:      types.AgentStatusActive,
+				TmuxSession: session,
+				CreatedAt:   &now,
 			}
 		}
 	}
 
 	return nil
-}
-
-// sessionExists checks if a tmux session exists.
-func (m *TmuxManager) sessionExists(sessionName string) bool {
-	// Use a short timeout to avoid hanging if tmux is unresponsive
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", sessionName)
-	return cmd.Run() == nil
-}
-
-// sendKeys sends keystrokes to a tmux session, followed by Enter.
-func (m *TmuxManager) sendKeys(ctx context.Context, sessionName, keys string) error {
-	return m.sendKeysRaw(ctx, sessionName, keys, true)
-}
-
-// sendKeysRaw sends keystrokes to a tmux session.
-// If pressEnter is true, "Enter" is sent after the keys.
-func (m *TmuxManager) sendKeysRaw(ctx context.Context, sessionName, keys string, pressEnter bool) error {
-	args := []string{"send-keys", "-t", sessionName, keys}
-	if pressEnter {
-		args = append(args, "Enter")
-	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("send-keys: %w: %s", err, output)
-	}
-	return nil
-}
-
-// listMeowSessions returns all tmux sessions with the meow- prefix.
-func (m *TmuxManager) listMeowSessions() ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Check stderr for "no server running" - this is normal when tmux isn't started
-		stderrStr := stderr.String()
-		if strings.Contains(stderrStr, "no server running") ||
-			strings.Contains(stderrStr, "no current session") {
-			return nil, nil
-		}
-		// Also handle case where tmux command simply fails with exit code
-		// (e.g., no sessions exist but server is running)
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing tmux sessions: %w: %s", err, stderrStr)
-	}
-
-	var sessions []string
-	for _, line := range strings.Split(stdout.String(), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "meow-") {
-			sessions = append(sessions, line)
-		}
-	}
-	return sessions, nil
 }
 
 // updateAgentState updates an agent's status.
