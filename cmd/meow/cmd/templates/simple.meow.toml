@@ -1,0 +1,45 @@
+# Simple MEOW Workflow Template
+# A minimal example showing the module format.
+#
+# Usage:
+#   meow run .meow/templates/simple.meow.toml --var task_name="My Task"
+#
+# The workflow creates two steps:
+#   1. do-work - The main task
+#   2. verify  - Verification step (depends on do-work)
+
+[main]
+name = "simple-workflow"
+description = "A simple two-step workflow"
+ephemeral = true  # Beads are cleaned up after completion
+
+[main.variables]
+task_name = { default = "Example Task", description = "Name of the task to perform" }
+
+[[main.steps]]
+id = "do-work"
+type = "task"
+title = "{{task_name}}"
+instructions = """
+Complete the task: {{task_name}}
+
+When done, close this step:
+  meow close <bead-id>
+"""
+
+[[main.steps]]
+id = "verify"
+type = "task"
+title = "Verify {{task_name}}"
+needs = ["do-work"]
+instructions = """
+Verify that {{task_name}} was completed correctly.
+
+Check:
+- [ ] Work is complete
+- [ ] No errors or issues
+- [ ] Ready for next steps
+
+When verified, close this step:
+  meow close <bead-id>
+"""
