@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -47,6 +48,141 @@ type ValidatedOutputs struct {
 // BeadChecker is used to validate bead_id outputs.
 type BeadChecker interface {
 	BeadExists(id string) bool
+	// ListAllIDs returns all known bead IDs for suggestion generation.
+	// Returns nil if not available.
+	ListAllIDs() []string
+}
+
+// BeadNotFoundError is returned when a bead_id references a non-existent bead.
+type BeadNotFoundError struct {
+	ID          string   // The ID that was not found
+	Suggestions []string // Similar bead IDs (may be empty)
+}
+
+func (e *BeadNotFoundError) Error() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("bead not found: %s", e.ID))
+	if len(e.Suggestions) > 0 {
+		sb.WriteString("\n\nDid you mean one of these?\n")
+		for _, s := range e.Suggestions {
+			sb.WriteString(fmt.Sprintf("  • %s\n", s))
+		}
+	}
+	sb.WriteString("\nHint: Run 'bd list --status=open' to see available beads")
+	return sb.String()
+}
+
+// findSimilarBeads finds bead IDs similar to the given ID using Levenshtein distance.
+// Returns up to maxSuggestions sorted by similarity.
+func findSimilarBeads(id string, checker BeadChecker, maxSuggestions int) []string {
+	allIDs := checker.ListAllIDs()
+	if len(allIDs) == 0 {
+		return nil
+	}
+
+	type scored struct {
+		id    string
+		score int
+	}
+
+	var candidates []scored
+	for _, candidate := range allIDs {
+		dist := levenshteinDistance(id, candidate)
+		// Only consider candidates with distance <= 5 (reasonable typo range)
+		if dist <= 5 {
+			candidates = append(candidates, scored{candidate, dist})
+		}
+	}
+
+	// Sort by distance (lower is better)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score < candidates[j].score
+	})
+
+	// Return top suggestions
+	result := make([]string, 0, maxSuggestions)
+	for i := 0; i < len(candidates) && i < maxSuggestions; i++ {
+		result = append(result, candidates[i].id)
+	}
+	return result
+}
+
+// levenshteinDistance computes the edit distance between two strings.
+func levenshteinDistance(s1, s2 string) int {
+	if len(s1) == 0 {
+		return len(s2)
+	}
+	if len(s2) == 0 {
+		return len(s1)
+	}
+
+	// Create matrix
+	d := make([][]int, len(s1)+1)
+	for i := range d {
+		d[i] = make([]int, len(s2)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+
+	for i := 1; i <= len(s1); i++ {
+		for j := 1; j <= len(s2); j++ {
+			cost := 1
+			if s1[i-1] == s2[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(
+				d[i-1][j]+1,      // deletion
+				d[i][j-1]+1,      // insertion
+				d[i-1][j-1]+cost, // substitution
+			)
+		}
+	}
+
+	return d[len(s1)][len(s2)]
+}
+
+// validateBeadID validates a single bead ID value.
+// Checks format and existence, returning helpful errors with suggestions.
+func validateBeadID(value string, beadChecker BeadChecker) error {
+	// Check format - must have a recognizable prefix
+	if !isValidBeadIDFormat(value) {
+		return fmt.Errorf("invalid bead ID format: '%s' (expected format like 'bd-xxx', 'meow-xxx', 'task-xxx')", value)
+	}
+
+	if beadChecker == nil {
+		// No checker provided - skip existence validation
+		return nil
+	}
+
+	if !beadChecker.BeadExists(value) {
+		suggestions := findSimilarBeads(value, beadChecker, 3)
+		return &BeadNotFoundError{
+			ID:          value,
+			Suggestions: suggestions,
+		}
+	}
+
+	return nil
+}
+
+// isValidBeadIDFormat checks if a string looks like a valid bead ID.
+// Valid formats include: bd-xxx, meow-xxx, task-xxx, code-xxx, etc.
+func isValidBeadIDFormat(id string) bool {
+	// Must contain a hyphen and have content before and after
+	idx := strings.Index(id, "-")
+	if idx <= 0 || idx >= len(id)-1 {
+		return false
+	}
+	// Prefix should be alphanumeric
+	prefix := id[:idx]
+	for _, c := range prefix {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateOutputs validates the provided outputs against the task's output spec.
@@ -168,12 +304,8 @@ func validateAndConvert(name, value string, outputType types.TaskOutputType, bea
 		return obj, nil
 
 	case types.TaskOutputTypeBeadID:
-		if beadChecker == nil {
-			// No checker provided - skip validation but accept the value
-			return value, nil
-		}
-		if !beadChecker.BeadExists(value) {
-			return nil, fmt.Errorf("bead not found: %s", value)
+		if err := validateBeadID(value, beadChecker); err != nil {
+			return nil, err
 		}
 		return value, nil
 
@@ -190,11 +322,9 @@ func validateAndConvert(name, value string, outputType types.TaskOutputType, bea
 			ids[i] = strings.TrimSpace(ids[i])
 		}
 		// Validate each bead ID if checker is available
-		if beadChecker != nil {
-			for _, id := range ids {
-				if !beadChecker.BeadExists(id) {
-					return nil, fmt.Errorf("bead not found: %s", id)
-				}
+		for _, id := range ids {
+			if err := validateBeadID(id, beadChecker); err != nil {
+				return nil, err
 			}
 		}
 		return ids, nil

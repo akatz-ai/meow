@@ -18,6 +18,14 @@ func (m *mockBeadChecker) BeadExists(id string) bool {
 	return m.beads[id]
 }
 
+func (m *mockBeadChecker) ListAllIDs() []string {
+	ids := make([]string, 0, len(m.beads))
+	for id := range m.beads {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func TestValidateOutputs_NoSpec(t *testing.T) {
 	provided := map[string]string{"foo": "bar", "baz": "qux"}
 	result, err := ValidateOutputs("bd-test", nil, provided, nil)
@@ -407,5 +415,238 @@ func TestOutputValidationError_Error(t *testing.T) {
 	}
 	if !containsSubstring(msg, "field3") {
 		t.Error("Error message should list invalid field3")
+	}
+}
+
+func TestBeadNotFoundError_Error(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         *BeadNotFoundError
+		wantID      bool
+		wantSuggest bool
+		wantHint    bool
+	}{
+		{
+			name:        "with suggestions",
+			err:         &BeadNotFoundError{ID: "bd-typo", Suggestions: []string{"bd-task-001", "bd-task-002"}},
+			wantID:      true,
+			wantSuggest: true,
+			wantHint:    true,
+		},
+		{
+			name:        "without suggestions",
+			err:         &BeadNotFoundError{ID: "bd-unknown", Suggestions: nil},
+			wantID:      true,
+			wantSuggest: false,
+			wantHint:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := tt.err.Error()
+
+			if tt.wantID && !containsSubstring(msg, tt.err.ID) {
+				t.Errorf("Error message should contain bead ID %s", tt.err.ID)
+			}
+			if tt.wantSuggest && !containsSubstring(msg, "Did you mean") {
+				t.Error("Error message should contain 'Did you mean'")
+			}
+			if tt.wantSuggest {
+				for _, s := range tt.err.Suggestions {
+					if !containsSubstring(msg, s) {
+						t.Errorf("Error message should contain suggestion %s", s)
+					}
+				}
+			}
+			if tt.wantHint && !containsSubstring(msg, "bd list") {
+				t.Error("Error message should contain hint about 'bd list'")
+			}
+		})
+	}
+}
+
+func TestValidateBeadID_Format(t *testing.T) {
+	spec := &types.TaskOutputSpec{
+		Required: []types.TaskOutputDef{
+			{Name: "selected", Type: types.TaskOutputTypeBeadID},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+		errMsg  string
+	}{
+		{"valid bd-xxx", "bd-task-001", false, ""},
+		{"valid meow-xxx", "meow-e7.4", false, ""},
+		{"valid task-xxx", "task-123", false, ""},
+		{"invalid no hyphen", "bdtask001", true, "invalid bead ID format"},
+		{"invalid starts with hyphen", "-bd-001", true, "invalid bead ID format"},
+		{"invalid ends with hyphen", "bd-", true, "invalid bead ID format"},
+		{"invalid special chars", "bd$task-001", true, "invalid bead ID format"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provided := map[string]string{"selected": tt.value}
+			_, err := ValidateOutputs("bd-test", spec, provided, nil)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				} else if tt.errMsg != "" && !containsSubstring(err.Error(), tt.errMsg) {
+					t.Errorf("Error should contain '%s', got: %s", tt.errMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateBeadID_Suggestions(t *testing.T) {
+	spec := &types.TaskOutputSpec{
+		Required: []types.TaskOutputDef{
+			{Name: "selected", Type: types.TaskOutputTypeBeadID},
+		},
+	}
+
+	checker := &mockBeadChecker{
+		beads: map[string]bool{
+			"bd-task-001": true,
+			"bd-task-002": true,
+			"bd-task-003": true,
+			"bd-feature-x": true,
+		},
+	}
+
+	// Typo in bead ID
+	provided := map[string]string{"selected": "bd-task-001x"}
+	_, err := ValidateOutputs("bd-test", spec, provided, checker)
+
+	if err == nil {
+		t.Fatal("Expected error for non-existent bead")
+	}
+
+	beadErr, ok := err.(*OutputValidationError)
+	if !ok {
+		t.Fatalf("Expected OutputValidationError, got %T: %v", err, err)
+	}
+
+	// The invalid map should contain the error
+	errMsg, exists := beadErr.Invalid["selected"]
+	if !exists {
+		t.Fatal("Expected 'selected' in Invalid map")
+	}
+
+	// Error should mention the typo
+	if !containsSubstring(errMsg, "bd-task-001x") {
+		t.Errorf("Error should mention the invalid ID, got: %s", errMsg)
+	}
+
+	// Error should suggest similar beads
+	if !containsSubstring(errMsg, "bd-task-001") {
+		t.Errorf("Error should suggest bd-task-001, got: %s", errMsg)
+	}
+}
+
+func TestValidateBeadIDArr_Validation(t *testing.T) {
+	spec := &types.TaskOutputSpec{
+		Required: []types.TaskOutputDef{
+			{Name: "selected", Type: types.TaskOutputTypeBeadIDArr},
+		},
+	}
+
+	checker := &mockBeadChecker{
+		beads: map[string]bool{
+			"bd-001": true,
+			"bd-002": true,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"valid json array", `["bd-001","bd-002"]`, false},
+		{"valid comma separated", "bd-001,bd-002", false},
+		{"one invalid in array", `["bd-001","bd-999"]`, true},
+		{"all valid", "bd-001, bd-002", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provided := map[string]string{"selected": tt.value}
+			_, err := ValidateOutputs("bd-test", spec, provided, checker)
+
+			if tt.wantErr && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLevenshteinDistance(t *testing.T) {
+	tests := []struct {
+		s1, s2 string
+		want   int
+	}{
+		{"", "", 0},
+		{"abc", "", 3},
+		{"", "abc", 3},
+		{"abc", "abc", 0},
+		{"abc", "abd", 1},
+		{"abc", "abcd", 1},
+		{"abc", "ab", 1},
+		{"bd-task-001", "bd-task-002", 1},
+		{"bd-task-001", "bd-task-001x", 1},
+		{"kitten", "sitting", 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.s1+"_"+tt.s2, func(t *testing.T) {
+			got := levenshteinDistance(tt.s1, tt.s2)
+			if got != tt.want {
+				t.Errorf("levenshteinDistance(%q, %q) = %d, want %d", tt.s1, tt.s2, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsValidBeadIDFormat(t *testing.T) {
+	tests := []struct {
+		id   string
+		want bool
+	}{
+		{"bd-001", true},
+		{"meow-e7.4", true},
+		{"task-abc", true},
+		{"CODE-123", true},
+		{"bd2-test", true},
+		{"", false},
+		{"bd", false},
+		{"bd-", false},
+		{"-bd", false},
+		{"bd--001", true}, // This is valid: prefix "bd" and suffix "-001"
+		{"123-abc", true},
+		{"bd$-001", false},
+		{"bd -001", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			got := isValidBeadIDFormat(tt.id)
+			if got != tt.want {
+				t.Errorf("isValidBeadIDFormat(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
 	}
 }

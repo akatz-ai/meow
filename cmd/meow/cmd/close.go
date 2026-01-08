@@ -61,6 +61,20 @@ func (c *beadChecker) BeadExists(id string) bool {
 	return err == nil && bead != nil
 }
 
+func (c *beadChecker) ListAllIDs() []string {
+	ctx := context.Background()
+	// List all beads (no status filter = empty string)
+	beads, err := c.store.List(ctx, "")
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, len(beads))
+	for i, b := range beads {
+		ids[i] = b.ID
+	}
+	return ids
+}
+
 func runClose(cmd *cobra.Command, args []string) error {
 	if err := checkBeadsDir(); err != nil {
 		return err
