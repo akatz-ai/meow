@@ -185,7 +185,12 @@ func getPrimeOutput(ctx context.Context, store *orchestrator.FileBeadStore, agen
 		return nil, nil // No work
 	}
 
-	// Get the first ready step (could be smarter about ordering)
+	// Sort by creation time for deterministic behavior
+	sort.Slice(readySteps, func(i, j int) bool {
+		return readySteps[i].CreatedAt.Before(readySteps[j].CreatedAt)
+	})
+
+	// Get the first ready step
 	current := readySteps[0]
 
 	// Get all steps in this workflow for progress display

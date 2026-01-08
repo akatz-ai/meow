@@ -460,6 +460,30 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 		bead.ExpandSpec = spec
 		return nil
 
+	case types.BeadTypeCode:
+		// Code beads need a CodeSpec
+		spec := &types.CodeSpec{
+			Code: step.Code,
+		}
+		bead.CodeSpec = spec
+		return nil
+
+	case types.BeadTypeStart:
+		// Start beads need a StartSpec - agent comes from assignee
+		spec := &types.StartSpec{
+			Agent: step.Assignee,
+		}
+		bead.StartSpec = spec
+		return nil
+
+	case types.BeadTypeStop:
+		// Stop beads need a StopSpec - agent comes from assignee
+		spec := &types.StopSpec{
+			Agent: step.Assignee,
+		}
+		bead.StopSpec = spec
+		return nil
+
 	default:
 		return fmt.Errorf("unsupported bead type: %s", bead.Type)
 	}

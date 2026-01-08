@@ -226,6 +226,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	if v, ok := data["condition"].(string); ok {
 		s.Condition = v
 	}
+	if v, ok := data["code"].(string); ok {
+		s.Code = v
+	}
 	if v, ok := data["timeout"].(string); ok {
 		s.Timeout = v
 	}

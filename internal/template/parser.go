@@ -56,9 +56,10 @@ type Step struct {
 	Title        string            `toml:"title,omitempty"`        // Human-readable title (module format)
 	Description  string            `toml:"description,omitempty"`
 	Type         string            `toml:"type,omitempty"`         // task, collaborative, gate, condition, etc.
-	Assignee     string            `toml:"assignee,omitempty"`     // Agent ID for task/collaborative
+	Assignee     string            `toml:"assignee,omitempty"`     // Agent ID for task/collaborative/start/stop
 	Needs        []string          `toml:"needs,omitempty"`        // Dependencies
-	Condition    string            `toml:"condition,omitempty"`    // Shell condition or variable
+	Condition    string            `toml:"condition,omitempty"`    // Shell condition for condition beads
+	Code         string            `toml:"code,omitempty"`         // Shell code for code beads
 	Instructions string            `toml:"instructions,omitempty"` // For task beads
 	Action       string            `toml:"action,omitempty"`       // notify, etc.
 	Validation   string            `toml:"validation,omitempty"`   // Post-step validation
