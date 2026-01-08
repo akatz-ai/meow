@@ -248,8 +248,15 @@ func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workf
 		bead.Labels = append(bead.Labels, "meow:ephemeral")
 	}
 
-	// Set type-specific specs
-	if err := b.setTypeSpec(bead, step, stepToID); err != nil {
+	// Substitute variables in the step (for Code, Condition, etc.)
+	// This ensures fields used by setTypeSpec are properly substituted
+	subbed, err := b.VarContext.SubstituteStep(step)
+	if err != nil {
+		return nil, fmt.Errorf("substitute step: %w", err)
+	}
+
+	// Set type-specific specs using the substituted step
+	if err := b.setTypeSpec(bead, subbed, stepToID); err != nil {
 		return nil, err
 	}
 
@@ -549,6 +556,31 @@ func taskOutputSpecToTypes(spec *TaskOutputSpec) *types.TaskOutputSpec {
 	return result
 }
 
+// inlineStepToStep converts an InlineStep to a Step for reusing SubstituteStep and setTypeSpec.
+func inlineStepToStep(inline InlineStep) *Step {
+	return &Step{
+		ID:           inline.ID,
+		Title:        inline.Title,
+		Description:  inline.Description,
+		Type:         inline.Type,
+		Assignee:     inline.Assignee,
+		Needs:        inline.Needs,
+		Condition:    inline.Condition,
+		Code:         inline.Code,
+		Instructions: inline.Instructions,
+		Template:     inline.Template,
+		Variables:    inline.Variables,
+		Ephemeral:    inline.Ephemeral,
+		OnTrue:       inline.OnTrue,
+		OnFalse:      inline.OnFalse,
+		OnTimeout:    inline.OnTimeout,
+		Timeout:      inline.Timeout,
+		Outputs:      inline.Outputs,
+		Action:       inline.Action,
+		Validation:   inline.Validation,
+	}
+}
+
 // BakeInline converts inline steps into beads.
 // Used when a condition branch has inline steps instead of a template reference.
 func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Bead, error) {
@@ -565,35 +597,24 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 	}
 
 	// Second pass: create beads
-	for _, step := range steps {
-		beadID := stepToID[step.ID]
+	for _, inlineStep := range steps {
+		beadID := stepToID[inlineStep.ID]
 
 		// Set step-specific builtins for substitution
-		b.VarContext.SetBuiltin("step_id", step.ID)
+		b.VarContext.SetBuiltin("step_id", inlineStep.ID)
 		b.VarContext.SetBuiltin("bead_id", beadID)
 
-		// Substitute variables in description and instructions
-		description := step.Description
-		instructions := step.Instructions
-		if description != "" {
-			var err error
-			description, err = b.VarContext.Substitute(description)
-			if err != nil {
-				return nil, fmt.Errorf("substitute description in inline step %q: %w", step.ID, err)
-			}
-		}
-		if instructions != "" {
-			var err error
-			instructions, err = b.VarContext.Substitute(instructions)
-			if err != nil {
-				return nil, fmt.Errorf("substitute instructions in inline step %q: %w", step.ID, err)
-			}
+		// Convert to Step and substitute all fields
+		step := inlineStepToStep(inlineStep)
+		subbed, err := b.VarContext.SubstituteStep(step)
+		if err != nil {
+			return nil, fmt.Errorf("substitute inline step %q: %w", inlineStep.ID, err)
 		}
 
 		// Translate dependencies
 		var needs []string
 		hasInternalDep := false
-		for _, need := range step.Needs {
+		for _, need := range inlineStep.Needs {
 			if beadNeed, ok := stepToID[need]; ok {
 				needs = append(needs, beadNeed)
 				hasInternalDep = true
@@ -609,13 +630,16 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 			needs = append([]string{parentBeadID}, needs...)
 		}
 
-		beadType := types.BeadType(step.Type)
-		if !beadType.Valid() {
-			beadType = types.BeadTypeTask
+		beadType := b.determineBeadType(subbed)
+
+		// Use Title if available, fallback to Description
+		title := subbed.Title
+		if title == "" {
+			title = subbed.Description
 		}
 
 		// Use step's assignee if specified, otherwise fall back to baker's default
-		assignee := step.Assignee
+		assignee := subbed.Assignee
 		if assignee == "" {
 			assignee = b.Assignee
 		}
@@ -623,15 +647,25 @@ func (b *Baker) BakeInline(steps []InlineStep, parentBeadID string) ([]*types.Be
 		bead := &types.Bead{
 			ID:           beadID,
 			Type:         beadType,
-			Title:        description,
-			Description:  instructions,
+			Title:        title,
+			Description:  subbed.Instructions,
 			Status:       types.BeadStatusOpen,
 			Assignee:     assignee,
 			Needs:        needs,
 			Parent:       parentBeadID,
 			Tier:         types.TierWisp, // Inline beads from conditions are wisps
-			Instructions: instructions,
+			Instructions: subbed.Instructions,
 			CreatedAt:    b.Now(),
+		}
+
+		// Add ephemeral label if step is ephemeral
+		if subbed.Ephemeral {
+			bead.Labels = append(bead.Labels, "meow:ephemeral")
+		}
+
+		// Set type-specific specs (CodeSpec, ConditionSpec, etc.)
+		if err := b.setTypeSpec(bead, subbed, stepToID); err != nil {
+			return nil, fmt.Errorf("set type spec for inline step %q: %w", inlineStep.ID, err)
 		}
 
 		beads = append(beads, bead)

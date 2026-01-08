@@ -94,13 +94,27 @@ type ExpansionTarget struct {
 }
 
 // InlineStep represents an inline step definition within an expansion target.
+// It mirrors the Step struct to ensure all fields are preserved when parsing inline steps.
 type InlineStep struct {
-	ID           string   `toml:"id"`
-	Type         string   `toml:"type"`
-	Description  string   `toml:"description,omitempty"`
-	Instructions string   `toml:"instructions,omitempty"`
-	Assignee     string   `toml:"assignee,omitempty"`
-	Needs        []string `toml:"needs,omitempty"`
+	ID           string            `toml:"id"`
+	Title        string            `toml:"title,omitempty"`        // Human-readable title
+	Type         string            `toml:"type,omitempty"`         // task, collaborative, gate, condition, code, etc.
+	Description  string            `toml:"description,omitempty"`
+	Instructions string            `toml:"instructions,omitempty"`
+	Assignee     string            `toml:"assignee,omitempty"`
+	Needs        []string          `toml:"needs,omitempty"`
+	Condition    string            `toml:"condition,omitempty"`    // Shell condition for condition beads
+	Code         string            `toml:"code,omitempty"`         // Shell code for code beads
+	Template     string            `toml:"template,omitempty"`     // Child template reference
+	Variables    map[string]string `toml:"variables,omitempty"`    // Variables for child template
+	Ephemeral    bool              `toml:"ephemeral,omitempty"`    // Auto-cleanup after workflow
+	OnTrue       *ExpansionTarget  `toml:"on_true,omitempty"`      // Condition branch
+	OnFalse      *ExpansionTarget  `toml:"on_false,omitempty"`     // Condition branch
+	OnTimeout    *ExpansionTarget  `toml:"on_timeout,omitempty"`   // Condition timeout branch
+	Timeout      string            `toml:"timeout,omitempty"`      // Timeout duration
+	Outputs      *TaskOutputSpec   `toml:"outputs,omitempty"`      // Task output specifications
+	Action       string            `toml:"action,omitempty"`       // notify, etc.
+	Validation   string            `toml:"validation,omitempty"`   // Post-step validation
 }
 
 // ParseFile parses a TOML template file from the given path.

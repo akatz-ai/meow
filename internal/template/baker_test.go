@@ -1037,3 +1037,171 @@ func TestBaker_BakeInline_TierAndInstructions(t *testing.T) {
 		t.Errorf("expected instructions 'Do this second', got %q", beads[1].Instructions)
 	}
 }
+
+// Test for meow-zva: Code field should be substituted in BakeWorkflow
+func TestBaker_BakeWorkflow_CodeWithVariable(t *testing.T) {
+	workflow := &Workflow{
+		Name: "code-var-test",
+		Variables: map[string]*Var{
+			"test_name": {Required: true},
+		},
+		Steps: []*Step{
+			{
+				ID:   "run-code",
+				Type: "code",
+				Code: "echo 'Running test: {{test_name}}'",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-code-var-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, map[string]string{
+		"test_name": "auth-unit-tests",
+	})
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.Type != types.BeadTypeCode {
+		t.Errorf("expected code type, got %s", bead.Type)
+	}
+	if bead.CodeSpec == nil {
+		t.Fatal("expected CodeSpec")
+	}
+	// Code should be substituted, not contain raw variable reference
+	if bead.CodeSpec.Code != "echo 'Running test: auth-unit-tests'" {
+		t.Errorf("expected substituted code, got %q", bead.CodeSpec.Code)
+	}
+}
+
+// Test for meow-zva: Condition field should be substituted in BakeWorkflow
+func TestBaker_BakeWorkflow_ConditionWithVariable(t *testing.T) {
+	workflow := &Workflow{
+		Name: "cond-var-test",
+		Variables: map[string]*Var{
+			"file_path": {Required: true},
+		},
+		Steps: []*Step{
+			{
+				ID:        "check",
+				Type:      "condition",
+				Condition: "test -f {{file_path}}",
+				OnTrue:    &ExpansionTarget{Template: "proceed"},
+				OnFalse:   &ExpansionTarget{Template: "wait"},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-cond-var-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, map[string]string{
+		"file_path": "/tmp/ready.flag",
+	})
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	bead := result.Beads[0]
+	if bead.ConditionSpec == nil {
+		t.Fatal("expected ConditionSpec")
+	}
+	// Condition should be substituted, not contain raw variable reference
+	if bead.ConditionSpec.Condition != "test -f /tmp/ready.flag" {
+		t.Errorf("expected substituted condition, got %q", bead.ConditionSpec.Condition)
+	}
+}
+
+// Test for meow-eej: Inline steps should preserve Title and Code fields
+func TestBaker_BakeInline_WithTitleAndCode(t *testing.T) {
+	steps := []InlineStep{
+		{
+			ID:          "code-step",
+			Type:        "code",
+			Title:       "Run verification script",
+			Description: "Run the verification",
+			Code:        "echo 'verifying {{item}}'",
+		},
+	}
+
+	baker := NewBaker("wf-inline-001")
+	baker.Now = fixedTime
+	baker.VarContext.SetVariable("item", "authentication")
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+
+	bead := beads[0]
+
+	// Title should be preserved (not defaulting to Description)
+	if bead.Title != "Run verification script" {
+		t.Errorf("expected title 'Run verification script', got %q", bead.Title)
+	}
+
+	// Type should be code
+	if bead.Type != types.BeadTypeCode {
+		t.Errorf("expected code type, got %s", bead.Type)
+	}
+
+	// CodeSpec should be set with substituted value
+	if bead.CodeSpec == nil {
+		t.Fatal("expected CodeSpec")
+	}
+	if bead.CodeSpec.Code != "echo 'verifying authentication'" {
+		t.Errorf("expected substituted code, got %q", bead.CodeSpec.Code)
+	}
+}
+
+// Test for meow-eej: Inline steps should handle condition type
+func TestBaker_BakeInline_WithCondition(t *testing.T) {
+	steps := []InlineStep{
+		{
+			ID:        "check-ready",
+			Type:      "condition",
+			Title:     "Check if ready",
+			Condition: "test -f {{ready_file}}",
+			OnTrue:    &ExpansionTarget{Template: "proceed"},
+			OnFalse:   &ExpansionTarget{Template: "wait"},
+		},
+	}
+
+	baker := NewBaker("wf-inline-cond-001")
+	baker.Now = fixedTime
+	baker.VarContext.SetVariable("ready_file", "/tmp/ready.flag")
+
+	beads, err := baker.BakeInline(steps, "parent-123")
+	if err != nil {
+		t.Fatalf("BakeInline failed: %v", err)
+	}
+
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+
+	bead := beads[0]
+
+	// Type should be condition
+	if bead.Type != types.BeadTypeCondition {
+		t.Errorf("expected condition type, got %s", bead.Type)
+	}
+
+	// ConditionSpec should be set with substituted value
+	if bead.ConditionSpec == nil {
+		t.Fatal("expected ConditionSpec")
+	}
+	if bead.ConditionSpec.Condition != "test -f /tmp/ready.flag" {
+		t.Errorf("expected substituted condition, got %q", bead.ConditionSpec.Condition)
+	}
+	if bead.ConditionSpec.OnTrue == nil || bead.ConditionSpec.OnTrue.Template != "proceed" {
+		t.Errorf("expected on_true template 'proceed'")
+	}
+}
