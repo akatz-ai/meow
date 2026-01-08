@@ -165,14 +165,19 @@ func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string
 		return fmt.Errorf("session name is required")
 	}
 
-	args := []string{"send-keys", "-t", session, keys}
-	if pressEnter {
-		args = append(args, "Enter")
-	}
-
+	// Use -l flag to send keys literally (prevents interpretation of special chars)
+	args := []string{"send-keys", "-t", session, "-l", keys}
 	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("send-keys: %w: %s", err, output)
+	}
+
+	// Send Enter separately if requested
+	if pressEnter {
+		output, err = w.runCmd(ctx, "send-keys", "-t", session, "Enter")
+		if err != nil {
+			return fmt.Errorf("send-keys Enter: %w: %s", err, output)
+		}
 	}
 
 	return nil

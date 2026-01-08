@@ -104,6 +104,12 @@ func (s *FileBeadStore) GetNextReady(ctx context.Context) (*types.Bead, error) {
 
 // isReadyLocked checks if a bead is ready (caller must hold lock).
 func (s *FileBeadStore) isReadyLocked(bead *types.Bead) bool {
+	// Must have a valid bead type - issue tracker beads don't have types
+	// and should not be processed by the orchestrator
+	if bead.Type == "" {
+		return false
+	}
+
 	// Must be open
 	if bead.Status != types.BeadStatusOpen {
 		return false
@@ -216,6 +222,10 @@ func (s *FileBeadStore) AllDone(ctx context.Context) (bool, error) {
 	}
 
 	for _, bead := range s.beads {
+		// Skip issue tracker beads (no Type) - only check workflow beads
+		if bead.Type == "" {
+			continue
+		}
 		if bead.Status == types.BeadStatusOpen || bead.Status == types.BeadStatusInProgress {
 			return false, nil
 		}

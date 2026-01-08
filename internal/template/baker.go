@@ -486,6 +486,9 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 		// Start beads need a StartSpec - agent comes from bead's assignee (already substituted)
 		spec := &types.StartSpec{
 			Agent: bead.Assignee,
+			Env: map[string]string{
+				"MEOW_AGENT": bead.Assignee, // So meow prime knows which agent is asking
+			},
 		}
 		bead.StartSpec = spec
 		return nil

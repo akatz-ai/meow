@@ -123,6 +123,7 @@ func NewTmuxManager() *TmuxManager {
 }
 
 // Start spawns an agent in a tmux session.
+// This is idempotent - if the session already exists, it's treated as success.
 func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 	if spec == nil {
 		return fmt.Errorf("start spec is nil")
@@ -132,6 +133,28 @@ func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 	}
 
 	sessionName := "meow-" + spec.Agent
+
+	// Check if session already exists - if so, treat as success (idempotent)
+	if m.tmux.SessionExists(ctx, sessionName) {
+		// Session exists - track the agent and return success
+		m.mu.Lock()
+		if _, exists := m.agents[spec.Agent]; !exists {
+			agent := &types.Agent{
+				ID:          spec.Agent,
+				Name:        spec.Agent,
+				Status:      types.AgentStatusActive,
+				TmuxSession: sessionName,
+				Workdir:     spec.Workdir,
+				Env:         spec.Env,
+			}
+			now := time.Now()
+			agent.CreatedAt = &now
+			agent.LastHeartbeat = &now
+			m.agents[spec.Agent] = agent
+		}
+		m.mu.Unlock()
+		return nil
+	}
 
 	// Build the claude command
 	claudeArgs := []string{"--dangerously-skip-permissions"}
@@ -151,8 +174,9 @@ func (m *TmuxManager) Start(ctx context.Context, spec *types.StartSpec) error {
 		return err
 	}
 
-	// Wait a moment for the session to initialize
-	time.Sleep(500 * time.Millisecond)
+	// Wait for Claude to fully initialize before sending prompt
+	// Claude startup takes ~4-5 seconds to fully initialize its UI
+	time.Sleep(5 * time.Second)
 
 	// Send the initial prompt
 	prompt := spec.Prompt
