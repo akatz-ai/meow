@@ -31,6 +31,8 @@ const (
 	CodeAgentNotFound      = "AGENT_002" // Session not found
 	CodeAgentTimeout       = "AGENT_003" // Agent operation timeout
 	CodeAgentAlreadyExists = "AGENT_004" // Agent session already exists
+	CodeAgentTmuxNotFound  = "AGENT_005" // tmux not found in PATH
+	CodeAgentTmuxTooOld    = "AGENT_006" // tmux version too old
 
 	// Output errors
 	CodeOutputMissing       = "OUTPUT_001" // Missing required output
@@ -235,6 +237,20 @@ func AgentTimeout(agentName string, operation string) *MeowError {
 func AgentAlreadyExists(agentName string) *MeowError {
 	return Newf(CodeAgentAlreadyExists, "agent already exists: %s", agentName).
 		WithDetail("agent", agentName)
+}
+
+// AgentTmuxNotFound creates an error when tmux is not installed.
+func AgentTmuxNotFound() *MeowError {
+	return New(CodeAgentTmuxNotFound, "tmux not found in PATH").
+		WithDetail("hint", "Install tmux: apt install tmux / brew install tmux")
+}
+
+// AgentTmuxTooOld creates an error when tmux version is too old.
+func AgentTmuxTooOld(current, required float64) *MeowError {
+	return Newf(CodeAgentTmuxTooOld, "tmux version %.1f too old (need >= %.1f)", current, required).
+		WithDetail("current", current).
+		WithDetail("required", required).
+		WithDetail("hint", "Upgrade tmux to 3.0 or later")
 }
 
 // --- Output Errors ---

@@ -2,12 +2,167 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/errors"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
+
+// mockCommandRunner is a mock implementation of CommandRunner for testing.
+type mockCommandRunner struct {
+	lookPathResult string
+	lookPathError  error
+	outputResult   []byte
+	outputError    error
+}
+
+func (m *mockCommandRunner) LookPath(file string) (string, error) {
+	return m.lookPathResult, m.lookPathError
+}
+
+func (m *mockCommandRunner) Output(name string, args ...string) ([]byte, error) {
+	return m.outputResult, m.outputError
+}
+
+func TestValidateTmux_NotFound(t *testing.T) {
+	runner := &mockCommandRunner{
+		lookPathError: fmt.Errorf("executable file not found in $PATH"),
+	}
+
+	err := ValidateTmuxWithRunner(runner)
+	if err == nil {
+		t.Fatal("ValidateTmux should fail when tmux not found")
+	}
+
+	if !errors.HasCode(err, errors.CodeAgentTmuxNotFound) {
+		t.Errorf("Expected error code %s, got %s", errors.CodeAgentTmuxNotFound, errors.Code(err))
+	}
+
+	// Check hint is in details
+	meowErr, ok := err.(*errors.MeowError)
+	if !ok {
+		t.Fatal("Expected *errors.MeowError")
+	}
+	hint, ok := meowErr.Details["hint"].(string)
+	if !ok || hint == "" {
+		t.Error("Expected hint in error details")
+	}
+}
+
+func TestValidateTmux_VersionTooOld(t *testing.T) {
+	runner := &mockCommandRunner{
+		lookPathResult: "/usr/bin/tmux",
+		outputResult:   []byte("tmux 2.9\n"),
+	}
+
+	err := ValidateTmuxWithRunner(runner)
+	if err == nil {
+		t.Fatal("ValidateTmux should fail for old tmux version")
+	}
+
+	if !errors.HasCode(err, errors.CodeAgentTmuxTooOld) {
+		t.Errorf("Expected error code %s, got %s", errors.CodeAgentTmuxTooOld, errors.Code(err))
+	}
+
+	// Check details
+	meowErr, ok := err.(*errors.MeowError)
+	if !ok {
+		t.Fatal("Expected *errors.MeowError")
+	}
+	if meowErr.Details["current"] != 2.9 {
+		t.Errorf("Expected current version 2.9, got %v", meowErr.Details["current"])
+	}
+	if meowErr.Details["required"] != 3.0 {
+		t.Errorf("Expected required version 3.0, got %v", meowErr.Details["required"])
+	}
+}
+
+func TestValidateTmux_VersionOK(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{"tmux 3.0", "tmux 3.0\n", false},
+		{"tmux 3.3a", "tmux 3.3a\n", false},
+		{"tmux 3.4", "tmux 3.4\n", false},
+		{"tmux next-3.4", "tmux next-3.4\n", false},
+		{"tmux 4.0", "tmux 4.0\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &mockCommandRunner{
+				lookPathResult: "/usr/bin/tmux",
+				outputResult:   []byte(tt.output),
+			}
+
+			err := ValidateTmuxWithRunner(runner)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateTmux() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateTmux_VersionCommandFails(t *testing.T) {
+	runner := &mockCommandRunner{
+		lookPathResult: "/usr/bin/tmux",
+		outputError:    fmt.Errorf("command failed"),
+	}
+
+	err := ValidateTmuxWithRunner(runner)
+	if err == nil {
+		t.Fatal("ValidateTmux should fail when version command fails")
+	}
+
+	// Should return TmuxNotFound with the cause
+	if !errors.HasCode(err, errors.CodeAgentTmuxNotFound) {
+		t.Errorf("Expected error code %s, got %s", errors.CodeAgentTmuxNotFound, errors.Code(err))
+	}
+}
+
+func TestParseTmuxVersion(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    float64
+	}{
+		{"tmux 3.3a", 3.3},
+		{"tmux 3.0", 3.0},
+		{"tmux 2.9", 2.9},
+		{"tmux next-3.4", 3.4},
+		{"tmux 4.0", 4.0},
+		{"tmux 10.2", 10.2},
+		{"invalid", 0},
+		{"", 0},
+		{"tmux", 0},
+		{"3.3a", 3.3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := parseTmuxVersion(tt.input)
+			if got != tt.want {
+				t.Errorf("parseTmuxVersion(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTmux_Integration(t *testing.T) {
+	if !tmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	// Test with real tmux
+	err := ValidateTmux()
+	if err != nil {
+		t.Errorf("ValidateTmux() should pass with real tmux: %v", err)
+	}
+}
 
 // tmuxAvailable checks if tmux is available for tests.
 func tmuxAvailable() bool {

@@ -6,12 +6,88 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/errors"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
+
+// MinTmuxVersion is the minimum required tmux version.
+const MinTmuxVersion = 3.0
+
+// CommandRunner is an interface for running external commands.
+// This allows mocking in tests.
+type CommandRunner interface {
+	LookPath(file string) (string, error)
+	Output(name string, args ...string) ([]byte, error)
+}
+
+// DefaultCommandRunner uses the real os/exec package.
+type DefaultCommandRunner struct{}
+
+// LookPath finds the path to an executable.
+func (d *DefaultCommandRunner) LookPath(file string) (string, error) {
+	return exec.LookPath(file)
+}
+
+// Output runs a command and returns its output.
+func (d *DefaultCommandRunner) Output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+// defaultRunner is the default command runner.
+var defaultRunner CommandRunner = &DefaultCommandRunner{}
+
+// ValidateTmux checks that tmux is installed and meets version requirements.
+// Returns nil if tmux is valid, or a MeowError with actionable hints if not.
+func ValidateTmux() error {
+	return ValidateTmuxWithRunner(defaultRunner)
+}
+
+// ValidateTmuxWithRunner validates tmux using a custom command runner.
+// This is primarily for testing.
+func ValidateTmuxWithRunner(runner CommandRunner) error {
+	// Check tmux exists in PATH
+	_, err := runner.LookPath("tmux")
+	if err != nil {
+		return errors.AgentTmuxNotFound()
+	}
+
+	// Check version
+	output, err := runner.Output("tmux", "-V")
+	if err != nil {
+		return errors.AgentTmuxNotFound().WithCause(err)
+	}
+
+	version := parseTmuxVersion(string(output))
+	if version < MinTmuxVersion {
+		return errors.AgentTmuxTooOld(version, MinTmuxVersion)
+	}
+
+	return nil
+}
+
+// parseTmuxVersion extracts the version number from tmux -V output.
+// Examples: "tmux 3.3a" -> 3.3, "tmux 2.9" -> 2.9, "tmux next-3.4" -> 3.4
+func parseTmuxVersion(output string) float64 {
+	output = strings.TrimSpace(output)
+
+	// Match version patterns like "3.3a", "2.9", "next-3.4"
+	re := regexp.MustCompile(`(\d+)\.(\d+)`)
+	match := re.FindStringSubmatch(output)
+	if len(match) < 3 {
+		return 0
+	}
+
+	major, _ := strconv.Atoi(match[1])
+	minor, _ := strconv.Atoi(match[2])
+
+	return float64(major) + float64(minor)/10.0
+}
 
 // TmuxManager manages Claude agents via tmux sessions.
 type TmuxManager struct {

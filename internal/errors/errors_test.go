@@ -210,6 +210,8 @@ func TestFactoryFunctions(t *testing.T) {
 		{"AgentNotFound", AgentNotFound("agent"), CodeAgentNotFound},
 		{"AgentTimeout", AgentTimeout("agent", "spawn"), CodeAgentTimeout},
 		{"AgentAlreadyExists", AgentAlreadyExists("agent"), CodeAgentAlreadyExists},
+		{"AgentTmuxNotFound", AgentTmuxNotFound(), CodeAgentTmuxNotFound},
+		{"AgentTmuxTooOld", AgentTmuxTooOld(2.9, 3.0), CodeAgentTmuxTooOld},
 		{"OutputMissing", OutputMissing("bd-1", "out"), CodeOutputMissing},
 		{"OutputTypeMismatch", OutputTypeMismatch("bd-1", "out", "string", "int"), CodeOutputTypeMismatch},
 		{"OutputBeadNotFound", OutputBeadNotFound("bd-1", "out"), CodeOutputBeadNotFound},
