@@ -424,3 +424,138 @@ func TestStore_SaveExplicit(t *testing.T) {
 		t.Error("Agent should be persisted after explicit Save()")
 	}
 }
+
+func TestStore_GetReturnsCopy(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := NewStore(tmpDir)
+	ctx := context.Background()
+
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	agent := &types.Agent{
+		ID:     "test-agent",
+		Name:   "Original Name",
+		Status: types.AgentStatusActive,
+	}
+	if err := s.Set(ctx, agent); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	// Get the agent and modify it
+	got, _ := s.Get(ctx, "test-agent")
+	got.Name = "Modified Name"
+	got.SessionID = "modified-session"
+
+	// Get again - should have original values (not modified)
+	got2, _ := s.Get(ctx, "test-agent")
+	if got2.Name != "Original Name" {
+		t.Errorf("Internal state was modified: Name = %s, want 'Original Name'", got2.Name)
+	}
+	if got2.SessionID != "" {
+		t.Errorf("Internal state was modified: SessionID = %s, want empty", got2.SessionID)
+	}
+}
+
+func TestStore_SetStoresCopy(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := NewStore(tmpDir)
+	ctx := context.Background()
+
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	agent := &types.Agent{
+		ID:     "test-agent",
+		Name:   "Original Name",
+		Status: types.AgentStatusActive,
+	}
+	if err := s.Set(ctx, agent); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	// Modify the original agent after Set
+	agent.Name = "Modified After Set"
+
+	// Get should return the original value
+	got, _ := s.Get(ctx, "test-agent")
+	if got.Name != "Original Name" {
+		t.Errorf("Set did not store a copy: Name = %s, want 'Original Name'", got.Name)
+	}
+}
+
+func TestStore_ListReturnsCopies(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := NewStore(tmpDir)
+	ctx := context.Background()
+
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	agent := &types.Agent{
+		ID:     "test-agent",
+		Name:   "Original Name",
+		Status: types.AgentStatusActive,
+	}
+	if err := s.Set(ctx, agent); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	// Get list and modify
+	list, _ := s.List(ctx)
+	list[0].Name = "Modified Via List"
+
+	// Get should return original
+	got, _ := s.Get(ctx, "test-agent")
+	if got.Name != "Original Name" {
+		t.Errorf("List returned reference to internal state: Name = %s, want 'Original Name'", got.Name)
+	}
+}
+
+func TestCopyAgent(t *testing.T) {
+	now := time.Now()
+	original := &types.Agent{
+		ID:            "test",
+		Name:          "Test",
+		Status:        types.AgentStatusActive,
+		SessionID:     "session-1",
+		LastHeartbeat: &now,
+		CreatedAt:     &now,
+		Env:           map[string]string{"KEY": "value"},
+		Labels:        map[string]string{"label": "value"},
+	}
+
+	cp := copyAgent(original)
+
+	// Verify values match
+	if cp.ID != original.ID || cp.Name != original.Name {
+		t.Error("Basic fields not copied correctly")
+	}
+
+	// Modify copy - original should be unchanged
+	cp.Name = "Modified"
+	if original.Name != "Test" {
+		t.Error("Modifying copy affected original")
+	}
+
+	// Modify copy's time pointer
+	newTime := now.Add(time.Hour)
+	cp.LastHeartbeat = &newTime
+	if !original.LastHeartbeat.Equal(now) {
+		t.Error("Modifying copy's time pointer affected original")
+	}
+
+	// Modify copy's map
+	cp.Env["KEY"] = "modified"
+	if original.Env["KEY"] != "value" {
+		t.Error("Modifying copy's Env map affected original")
+	}
+
+	// Test nil input
+	if copyAgent(nil) != nil {
+		t.Error("copyAgent(nil) should return nil")
+	}
+}

@@ -105,6 +105,7 @@ func (s *Store) saveLocked() error {
 }
 
 // Get retrieves an agent by ID.
+// Returns a copy of the agent to prevent callers from modifying internal state.
 func (s *Store) Get(ctx context.Context, id string) (*types.Agent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -117,10 +118,11 @@ func (s *Store) Get(ctx context.Context, id string) (*types.Agent, error) {
 	if !ok {
 		return nil, nil
 	}
-	return agent, nil
+	return copyAgent(agent), nil
 }
 
 // Set creates or updates an agent.
+// Stores a copy of the agent to prevent callers from modifying internal state.
 func (s *Store) Set(ctx context.Context, agent *types.Agent) error {
 	if err := agent.Validate(); err != nil {
 		return fmt.Errorf("invalid agent: %w", err)
@@ -133,7 +135,7 @@ func (s *Store) Set(ctx context.Context, agent *types.Agent) error {
 		return fmt.Errorf("agent store not loaded")
 	}
 
-	s.agents[agent.ID] = agent
+	s.agents[agent.ID] = copyAgent(agent)
 	return s.saveLocked()
 }
 
@@ -176,6 +178,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // List returns all agents.
+// Returns copies of agents to prevent callers from modifying internal state.
 func (s *Store) List(ctx context.Context) ([]*types.Agent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -186,12 +189,13 @@ func (s *Store) List(ctx context.Context) ([]*types.Agent, error) {
 
 	agents := make([]*types.Agent, 0, len(s.agents))
 	for _, agent := range s.agents {
-		agents = append(agents, agent)
+		agents = append(agents, copyAgent(agent))
 	}
 	return agents, nil
 }
 
 // ListByStatus returns agents matching the given status.
+// Returns copies of agents to prevent callers from modifying internal state.
 func (s *Store) ListByStatus(ctx context.Context, status types.AgentStatus) ([]*types.Agent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -203,8 +207,46 @@ func (s *Store) ListByStatus(ctx context.Context, status types.AgentStatus) ([]*
 	var agents []*types.Agent
 	for _, agent := range s.agents {
 		if agent.Status == status {
-			agents = append(agents, agent)
+			agents = append(agents, copyAgent(agent))
 		}
 	}
 	return agents, nil
+}
+
+// copyAgent creates a deep copy of an agent to prevent external mutation.
+func copyAgent(a *types.Agent) *types.Agent {
+	if a == nil {
+		return nil
+	}
+	cp := *a // Shallow copy
+
+	// Deep copy pointer fields
+	if a.LastHeartbeat != nil {
+		t := *a.LastHeartbeat
+		cp.LastHeartbeat = &t
+	}
+	if a.CreatedAt != nil {
+		t := *a.CreatedAt
+		cp.CreatedAt = &t
+	}
+	if a.StoppedAt != nil {
+		t := *a.StoppedAt
+		cp.StoppedAt = &t
+	}
+
+	// Deep copy maps
+	if a.Env != nil {
+		cp.Env = make(map[string]string, len(a.Env))
+		for k, v := range a.Env {
+			cp.Env[k] = v
+		}
+	}
+	if a.Labels != nil {
+		cp.Labels = make(map[string]string, len(a.Labels))
+		for k, v := range a.Labels {
+			cp.Labels[k] = v
+		}
+	}
+
+	return &cp
 }
