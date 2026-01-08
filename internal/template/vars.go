@@ -316,6 +316,13 @@ func (c *VarContext) SubstituteStep(step *Step) (*Step, error) {
 		}
 	}
 
+	if result.Code != "" {
+		result.Code, err = c.Substitute(result.Code)
+		if err != nil {
+			return nil, fmt.Errorf("substitute code: %w", err)
+		}
+	}
+
 	if result.Condition != "" {
 		result.Condition, err = c.Substitute(result.Condition)
 		if err != nil {

@@ -176,6 +176,7 @@ func (s *FileBeadStore) typePriority(beadType types.BeadType) int {
 }
 
 // Get retrieves a bead by ID.
+// Returns a copy to prevent callers from mutating internal state.
 func (s *FileBeadStore) Get(ctx context.Context, id string) (*types.Bead, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -188,7 +189,7 @@ func (s *FileBeadStore) Get(ctx context.Context, id string) (*types.Bead, error)
 	if !ok {
 		return nil, nil
 	}
-	return bead, nil
+	return copyBead(bead), nil
 }
 
 // Update saves changes to a bead.
@@ -375,4 +376,65 @@ func (s *FileBeadStore) Delete(ctx context.Context, id string) error {
 
 	delete(s.beads, id)
 	return s.writeLocked()
+}
+
+// copyBead creates a deep copy of a bead to prevent external mutation.
+func copyBead(b *types.Bead) *types.Bead {
+	if b == nil {
+		return nil
+	}
+	cp := *b // Shallow copy
+
+	// Deep copy slices
+	if b.Needs != nil {
+		cp.Needs = make([]string, len(b.Needs))
+		copy(cp.Needs, b.Needs)
+	}
+	if b.Labels != nil {
+		cp.Labels = make([]string, len(b.Labels))
+		copy(cp.Labels, b.Labels)
+	}
+
+	// Deep copy pointer fields
+	if b.ClosedAt != nil {
+		t := *b.ClosedAt
+		cp.ClosedAt = &t
+	}
+
+	// Deep copy maps
+	if b.Outputs != nil {
+		cp.Outputs = make(map[string]any, len(b.Outputs))
+		for k, v := range b.Outputs {
+			cp.Outputs[k] = v
+		}
+	}
+
+	// Deep copy specs (shallow copy of the struct is sufficient for most uses,
+	// as specs are typically read-only after creation)
+	if b.TaskOutputs != nil {
+		spec := *b.TaskOutputs
+		cp.TaskOutputs = &spec
+	}
+	if b.ConditionSpec != nil {
+		spec := *b.ConditionSpec
+		cp.ConditionSpec = &spec
+	}
+	if b.StopSpec != nil {
+		spec := *b.StopSpec
+		cp.StopSpec = &spec
+	}
+	if b.StartSpec != nil {
+		spec := *b.StartSpec
+		cp.StartSpec = &spec
+	}
+	if b.CodeSpec != nil {
+		spec := *b.CodeSpec
+		cp.CodeSpec = &spec
+	}
+	if b.ExpandSpec != nil {
+		spec := *b.ExpandSpec
+		cp.ExpandSpec = &spec
+	}
+
+	return &cp
 }

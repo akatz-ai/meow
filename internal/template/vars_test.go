@@ -289,6 +289,46 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 	}
 }
 
+func TestVarContext_SubstituteStep_Code(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("agent", "claude-1")
+	ctx.SetVariable("worktree", "/tmp/wt-123")
+
+	step := &Step{
+		ID:   "setup",
+		Type: "code",
+		Code: "echo {{agent}} > /tmp/agent.txt && cd {{worktree}}",
+	}
+
+	result, err := ctx.SubstituteStep(step)
+	if err != nil {
+		t.Fatalf("SubstituteStep failed: %v", err)
+	}
+
+	expected := "echo claude-1 > /tmp/agent.txt && cd /tmp/wt-123"
+	if result.Code != expected {
+		t.Errorf("expected code substitution %q, got %q", expected, result.Code)
+	}
+}
+
+func TestVarContext_SubstituteStep_ErrorInCode(t *testing.T) {
+	ctx := NewVarContext()
+
+	step := &Step{
+		ID:   "test-step",
+		Type: "code",
+		Code: "echo {{undefined}}",
+	}
+
+	_, err := ctx.SubstituteStep(step)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "code") {
+		t.Errorf("expected error about code, got: %v", err)
+	}
+}
+
 func TestVarContext_SubstituteStep_ExpansionTargets(t *testing.T) {
 	ctx := NewVarContext()
 	ctx.SetVariable("tmpl", "my-template")

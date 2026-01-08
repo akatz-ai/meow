@@ -581,6 +581,66 @@ func TestFileBeadStore_ListOrchestrator(t *testing.T) {
 	}
 }
 
+func TestFileBeadStore_Get_ReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	beadsDir := filepath.Join(dir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	content := `{"id":"bd-001","type":"task","title":"Task 1","status":"open","needs":["bd-dep"],"labels":["label1"],"created_at":"2026-01-01T00:00:00Z"}
+`
+	if err := os.WriteFile(issuesPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileBeadStore(beadsDir)
+	ctx := context.Background()
+
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the bead twice
+	bead1, err := store.Get(ctx, "bd-001")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	bead2, err := store.Get(ctx, "bd-001")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	// Modify bead1
+	bead1.Title = "Modified"
+	bead1.Needs = append(bead1.Needs, "bd-new")
+	bead1.Labels = append(bead1.Labels, "label2")
+
+	// bead2 should be unchanged (separate copy)
+	if bead2.Title == "Modified" {
+		t.Error("Get() returned pointer to internal state - title was mutated")
+	}
+	if len(bead2.Needs) != 1 {
+		t.Error("Get() returned pointer to internal state - needs slice was mutated")
+	}
+	if len(bead2.Labels) != 1 {
+		t.Error("Get() returned pointer to internal state - labels slice was mutated")
+	}
+
+	// Verify internal state is also unchanged
+	bead3, err := store.Get(ctx, "bd-001")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if bead3.Title == "Modified" {
+		t.Error("Internal state was mutated via returned pointer - title changed")
+	}
+	if len(bead3.Needs) != 1 {
+		t.Error("Internal state was mutated via returned pointer - needs slice changed")
+	}
+}
+
 func TestFileBeadStore_FilterByHookBead(t *testing.T) {
 	dir := t.TempDir()
 	beadsDir := filepath.Join(dir, ".beads")
