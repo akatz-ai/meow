@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/spf13/cobra"
@@ -25,13 +24,12 @@ and outcomes. Useful for debugging workflow issues.`,
 var (
 	traceLimit  int
 	traceFormat string
-	traceFollow bool
 )
 
 func init() {
 	traceCmd.Flags().IntVar(&traceLimit, "limit", 50, "maximum entries to show")
 	traceCmd.Flags().StringVar(&traceFormat, "format", "text", "output format: text, json")
-	traceCmd.Flags().BoolVarP(&traceFollow, "follow", "f", false, "follow trace output (like tail -f)")
+	// TODO: implement --follow flag for real-time trace output
 	rootCmd.AddCommand(traceCmd)
 }
 
@@ -247,13 +245,3 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// formatDuration formats a duration in a human-readable way.
-func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	}
-	return fmt.Sprintf("%.1fm", d.Minutes())
-}
