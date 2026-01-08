@@ -252,6 +252,10 @@ func (s *FileBeadStore) ListFiltered(ctx context.Context, filter BeadFilter) ([]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if !s.loaded {
+		return nil, fmt.Errorf("bead store not loaded")
+	}
+
 	var result []*types.Bead
 	for _, bead := range s.beads {
 		if s.matchesFilter(bead, filter) {
