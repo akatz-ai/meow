@@ -144,7 +144,7 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 		hookBead = b.VarContext.Get(workflow.HooksTo)
 	}
 
-	// Process steps in order (topological sort for complex deps)
+	// Process steps (order doesn't matter for baking - Needs field handles runtime ordering)
 	var beads []*types.Bead
 	for _, step := range workflow.Steps {
 		bead, err := b.workflowStepToBead(step, stepToID, workflow, hookBead)
