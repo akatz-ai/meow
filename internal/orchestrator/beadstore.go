@@ -124,7 +124,7 @@ func (s *FileBeadStore) isReadyLocked(bead *types.Bead) bool {
 
 // beadPriority returns a priority value (lower = higher priority).
 func (s *FileBeadStore) beadPriority(bead *types.Bead) int {
-	// Orchestrator beads first
+	// Orchestrator beads first, then human-facing beads, then agent tasks
 	switch bead.Type {
 	case types.BeadTypeCondition:
 		return 0
@@ -136,8 +136,12 @@ func (s *FileBeadStore) beadPriority(bead *types.Bead) int {
 		return 3
 	case types.BeadTypeStop:
 		return 4
+	case types.BeadTypeGate:
+		return 5 // Gates are human-facing but orchestrator-tier
 	case types.BeadTypeTask:
 		return 10 // Tasks last
+	case types.BeadTypeCollaborative:
+		return 10 // Collaborative is like task but with human interaction
 	default:
 		return 5
 	}

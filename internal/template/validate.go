@@ -148,12 +148,22 @@ func validateSteps(t *Template, name string, result *ValidationResult) {
 		// Validate step type if set
 		if step.Type != "" {
 			valid := map[string]bool{
-				"blocking-gate": true, "restart": true,
+				"":              true, // Default to task
+				"task":          true,
+				"collaborative": true,
+				"gate":          true,
+				"condition":     true,
+				"code":          true,
+				"start":         true,
+				"stop":          true,
+				"expand":        true,
+				"blocking-gate": true, // Legacy type (becomes condition)
+				"restart":       true, // Legacy type (becomes condition)
 			}
 			if !valid[step.Type] {
 				result.Add(name, step.ID, "type",
 					fmt.Sprintf("invalid step type: %q", step.Type),
-					"use blocking-gate or restart")
+					"use task, collaborative, gate, condition, code, start, stop, or expand")
 			}
 		}
 	}
