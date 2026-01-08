@@ -156,7 +156,10 @@ func TestShowDisplaysOutputs(t *testing.T) {
 
 	// Capture stdout
 	old := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
 	os.Stdout = w
 
 	err = runShow(showCmd, []string{"bd-code-001"})
@@ -189,8 +192,12 @@ func TestShowDisplaysOutputs(t *testing.T) {
 	}
 
 	// exit_code is float64 when unmarshaled from JSON
-	if outputs["exit_code"].(float64) != 0 {
-		t.Errorf("expected exit_code 0, got %v", outputs["exit_code"])
+	exitCode, ok := outputs["exit_code"].(float64)
+	if !ok {
+		t.Fatalf("exit_code not found or wrong type: %v", outputs["exit_code"])
+	}
+	if exitCode != 0 {
+		t.Errorf("expected exit_code 0, got %v", exitCode)
 	}
 }
 
@@ -206,14 +213,10 @@ func TestShowBeadNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create empty store
-	store := orchestrator.NewFileBeadStore(beadsDir)
-	ctx := context.Background()
-	if err := store.Load(ctx); err != nil {
+	// Create empty JSONL file so store can load
+	if err := os.WriteFile(filepath.Join(beadsDir, "issues.jsonl"), []byte{}, 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Write empty JSONL file so store can load
-	os.WriteFile(filepath.Join(beadsDir, "issues.jsonl"), []byte{}, 0644)
 
 	// Save and restore workDir
 	oldWorkDir := workDir
