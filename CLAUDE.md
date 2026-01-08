@@ -16,6 +16,21 @@ This document explains the 6 primitives, component relationships, data flow, and
 
 MEOW Stack (Molecular Expression Of Work) is a recursive, composable workflow system for durable AI agent orchestration. You are executing within this system.
 
+## Project Status: Pre-Customer MVP
+
+**This is a greenfield MVP with zero customers.** There is no legacy code, no deployed users, and no backwards compatibility requirements.
+
+**Critical rule:** Do NOT add any of the following:
+- "Legacy" format support or compatibility shims
+- Backwards compatibility code for old versions
+- Migration paths from previous formats
+- Deprecation warnings or fallback behaviors
+- Feature flags for "old" vs "new" behavior
+
+If you encounter a task that mentions "legacy compatibility" or "maintain old format", **push back** — we should simply use the new/correct approach. The only format is the current format. Delete old code rather than maintaining parallel paths.
+
+This constraint enables moving fast and keeping the codebase clean.
+
 ## Core Concepts
 
 ### You Are in a Molecule
@@ -115,18 +130,18 @@ Most steps are atomic — execute them directly following the instructions.
 
 ### Gate Steps
 
-When you reach a step with `type: blocking-gate`:
+When you reach a step with `type: gate`:
 1. Complete any preparation steps (summary, notification)
-2. The loop will PAUSE
+2. The workflow will PAUSE
 3. Wait for human to run `meow approve` or `meow reject`
 4. Continue when the gate is closed
 
-### Restart Steps
+### Condition Steps
 
-When you reach a step with `type: restart`:
-1. Check the condition (usually `not all_epics_closed()`)
-2. If true: molecule resets, loop continues
-3. If false: molecule completes, stack pops
+When you reach a step with `type: condition`:
+1. The orchestrator evaluates the shell condition
+2. Based on exit code (0 = true, non-zero = false), expands `on_true` or `on_false` branch
+3. This is how loops are implemented — a condition that expands itself on_true
 
 ## Task Selection
 
