@@ -261,7 +261,9 @@ func TestValidateFullModule_LocalReferenceSuggestion(t *testing.T) {
 	}
 }
 
-func TestValidateFullModule_InternalWorkflowCannotBeReferenced(t *testing.T) {
+func TestValidateFullModule_InternalWorkflowCanBeReferencedLocally(t *testing.T) {
+	// Internal workflows CAN be referenced from within the same module file.
+	// The "internal" flag only prevents external file#workflow references.
 	module := &Module{
 		Path: "test.meow.toml",
 		Workflows: map[string]*Workflow{
@@ -273,15 +275,16 @@ func TestValidateFullModule_InternalWorkflowCannotBeReferenced(t *testing.T) {
 			},
 			"internal-helper": {
 				Name:     "internal-helper",
-				Internal: true, // Marked as internal
+				Internal: true, // Marked as internal - but local refs are OK
 				Steps:    []*Step{{ID: "h1"}},
 			},
 		},
 	}
 
 	result := ValidateFullModule(module)
-	if !containsModuleError(result, "cannot reference internal workflow") {
-		t.Errorf("expected internal visibility error, got: %v", result.Error())
+	// Should NOT error - local references to internal workflows are allowed
+	if containsModuleError(result, "internal") {
+		t.Errorf("local references to internal workflows should be allowed, got: %v", result.Error())
 	}
 }
 

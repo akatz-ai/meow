@@ -564,12 +564,10 @@ func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *M
 		return
 	}
 
-	// Check internal visibility
-	if target.Internal {
-		result.Add(workflowName, stepID, field,
-			fmt.Sprintf("cannot reference internal workflow %q from outside", targetWorkflow),
-			"either remove 'internal = true' or use a non-internal workflow")
-	}
+	// Note: We do NOT check internal visibility here because local references
+	// (.workflow syntax) are by definition within the same module file.
+	// The "internal" flag only prevents external references (file#workflow)
+	// from other files, which is validated at runtime by the loader.
 
 	// If referencing a specific step, validate it exists
 	if len(parts) > 1 {
