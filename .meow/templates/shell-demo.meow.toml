@@ -1,0 +1,33 @@
+# Shell-Only Demo Template
+# A simple workflow that demonstrates shell executor without agents.
+#
+# Usage:
+#   meow run .meow/templates/shell-demo.meow.toml
+#   meow run .meow/templates/shell-demo.meow.toml --var name="World"
+
+[main]
+name = "shell-demo"
+description = "A simple shell-only workflow demo"
+
+[main.variables]
+name = { default = "MEOW", description = "Name to greet" }
+
+[[main.steps]]
+id = "hello"
+executor = "shell"
+description = "Say hello"
+command = "echo 'Hello, {{name}}!'"
+
+[[main.steps]]
+id = "date"
+executor = "shell"
+description = "Get current date"
+needs = ["hello"]
+command = "date '+%Y-%m-%d %H:%M:%S'"
+
+[[main.steps]]
+id = "summary"
+executor = "shell"
+description = "Print summary"
+needs = ["date"]
+command = "echo 'Workflow completed successfully!'"

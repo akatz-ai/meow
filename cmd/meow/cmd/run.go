@@ -3,11 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/template"
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -148,10 +152,77 @@ func runRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// TODO: Run the orchestrator once it's refactored to use WorkflowStore and Steps
-	// For now, just display information about the workflow
-	fmt.Printf("\nWorkflow saved to: %s\n", filepath.Join(workflowsDir, workflowID+".yaml"))
-	fmt.Println("Note: Orchestrator execution is pending orchestrator refactor to workflow-centric model.")
+	// Start the workflow
+	wf.Start()
+	if err := store.Save(ctx, wf); err != nil {
+		return fmt.Errorf("starting workflow: %w", err)
+	}
+
+	// Create config with defaults
+	cfg := config.Default()
+
+	// Create logger
+	logLevel := slog.LevelInfo
+	if verbose {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
+	// Create shell runner
+	shellRunner := orchestrator.NewDefaultShellRunner()
+
+	// Create orchestrator (agents and expander are nil for shell-only demo)
+	orch := orchestrator.New(cfg, store, nil, shellRunner, nil, logger)
+	orch.SetWorkflowID(workflowID)
+
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\nReceived shutdown signal, stopping...")
+		cancel()
+	}()
+
+	fmt.Printf("\nRunning workflow...\n")
+
+	// Run the orchestrator
+	if err := orch.Run(ctx); err != nil {
+		if err == context.Canceled {
+			fmt.Println("Workflow cancelled.")
+			return nil
+		}
+		return fmt.Errorf("running workflow: %w", err)
+	}
+
+	// Reload workflow to get final state
+	wf, err = store.Get(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("getting final workflow state: %w", err)
+	}
+
+	// Print final status
+	fmt.Printf("\nWorkflow %s: %s\n", workflowID, wf.Status)
+	if verbose || wf.Status == types.WorkflowStatusFailed {
+		fmt.Println("\nStep results:")
+		for _, step := range wf.Steps {
+			status := string(step.Status)
+			if step.Error != nil {
+				status = fmt.Sprintf("%s (error: %s)", status, step.Error.Message)
+			}
+			fmt.Printf("  %s: %s\n", step.ID, status)
+			if verbose && len(step.Outputs) > 0 {
+				for k, v := range step.Outputs {
+					fmt.Printf("    %s: %v\n", k, v)
+				}
+			}
+		}
+	}
 
 	return nil
 }

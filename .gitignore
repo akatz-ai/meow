@@ -29,4 +29,5 @@ vendor/
 
 # MEOW state (generated at runtime)
 .meow/state/
+.meow/workflows/
 .meow/worktrees/
