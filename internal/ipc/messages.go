@@ -83,10 +83,13 @@ type GetSessionIDMessage struct {
 
 // ApprovalMessage signals human approval or rejection of a gate.
 // Sent by: meow approve / meow reject
+//
+// Note: GateID is the step ID of the branch step implementing the gate pattern.
+// Gates are not a separate executor - they're implemented as branch + await-approval.
 type ApprovalMessage struct {
 	Type     MessageType `json:"type"` // Always "approval"
 	Workflow string      `json:"workflow"`
-	GateID   string      `json:"gate_id"`
+	GateID   string      `json:"gate_id"` // Step ID of the branch implementing the gate
 	Approved bool        `json:"approved"`
 	Notes    string      `json:"notes,omitempty"`
 	Reason   string      `json:"reason,omitempty"` // For rejections
@@ -134,10 +137,6 @@ func ParseMessage(data []byte) (any, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	if !raw.Type.Valid() {
-		return nil, fmt.Errorf("unknown message type: %q", raw.Type)
-	}
-
 	var msg any
 	switch raw.Type {
 	case MsgStepDone:
@@ -157,7 +156,7 @@ func ParseMessage(data []byte) (any, error) {
 	case MsgSessionID:
 		msg = &SessionIDMessage{}
 	default:
-		return nil, fmt.Errorf("unhandled message type: %q", raw.Type)
+		return nil, fmt.Errorf("unknown message type: %q", raw.Type)
 	}
 
 	if err := json.Unmarshal(data, msg); err != nil {
