@@ -157,6 +157,20 @@ func (o *Orchestrator) tick(ctx context.Context) error {
 			}
 		}
 		workflows = filtered
+
+		// If workflow not in running list, check its actual status
+		if len(workflows) == 0 {
+			wf, err := o.store.Get(ctx, o.workflowID)
+			if err != nil {
+				return fmt.Errorf("getting workflow %s: %w", o.workflowID, err)
+			}
+			// Workflow completed (done or failed)
+			if wf.Status.IsTerminal() {
+				return ErrAllDone
+			}
+			// Workflow is pending - wait for it to start
+			return nil
+		}
 	}
 
 	if len(workflows) == 0 {
@@ -446,7 +460,9 @@ func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step
 		return fmt.Errorf("shell step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	if o.shell == nil {
 		return fmt.Errorf("shell executor not implemented: %w", ErrNotImplemented)
@@ -456,13 +472,17 @@ func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step
 	if err != nil {
 		if step.Shell.OnError == "continue" {
 			o.logger.Warn("shell command failed, continuing", "step", step.ID, "error", err)
-			step.Complete(outputs)
+			if completeErr := step.Complete(outputs); completeErr != nil {
+				return fmt.Errorf("completing step after error: %w", completeErr)
+			}
 			return nil
 		}
 		return fmt.Errorf("shell command failed: %w", err)
 	}
 
-	step.Complete(outputs)
+	if err := step.Complete(outputs); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
 	return nil
 }
 
@@ -472,7 +492,9 @@ func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step
 		return fmt.Errorf("spawn step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	if o.agents == nil {
 		return fmt.Errorf("spawn executor not implemented: %w", ErrNotImplemented)
@@ -483,7 +505,9 @@ func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step
 	}
 
 	// Spawn completes when agent is running
-	step.Complete(nil)
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
 	return nil
 }
 
@@ -493,7 +517,9 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 		return fmt.Errorf("kill step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	if o.agents == nil {
 		return fmt.Errorf("kill executor not implemented: %w", ErrNotImplemented)
@@ -503,7 +529,9 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 		return fmt.Errorf("stopping agent: %w", err)
 	}
 
-	step.Complete(nil)
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
 	return nil
 }
 
@@ -513,7 +541,9 @@ func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, ste
 		return fmt.Errorf("expand step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	if o.expander == nil {
 		return fmt.Errorf("expand executor not implemented: %w", ErrNotImplemented)
@@ -523,7 +553,9 @@ func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, ste
 		return fmt.Errorf("expanding template: %w", err)
 	}
 
-	step.Complete(nil)
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
 	return nil
 }
 
@@ -533,7 +565,9 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 		return fmt.Errorf("branch step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	// Branch executor evaluates condition and expands appropriate target
 	// This is a stub - will be implemented in pivot-406
@@ -546,7 +580,9 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Workflow, step
 		return fmt.Errorf("agent step %s missing config", step.ID)
 	}
 
-	step.Start()
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
 
 	if o.agents == nil {
 		return fmt.Errorf("agent executor not implemented: %w", ErrNotImplemented)
