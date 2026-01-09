@@ -11,8 +11,8 @@
 #   - Agent 3 (track-events): Complete events system
 #   - Agent 4 (track-integration): TmuxAgentManager refactor + CLI + final integration
 #
-# Agents 1-3 run in parallel. Agent 4 waits for all three to complete before
-# starting the integration work that depends on their outputs.
+# Each agent follows the same lifecycle:
+#   spawn -> work (with spec reading) -> self-review -> verify-committed -> kill
 #
 # Usage:
 #   meow run .meow/templates/adapter-events-impl.meow.toml
@@ -34,7 +34,7 @@ echo "Cleanup complete"
 """
 
 # ============================================================================
-# PHASE 1: Setup - Create Worktrees (Parallel)
+# PHASE 1: Create Worktrees (Parallel)
 # ============================================================================
 
 [[main.steps]]
@@ -43,339 +43,227 @@ executor = "shell"
 description = "Create worktree for types track"
 command = """
 set -e
+WORKTREE=".meow/worktrees/track-types"
 BRANCH="track-types-$(date +%s)"
-git worktree add -b "$BRANCH" .meow/worktrees/track-types HEAD
-echo ".meow/worktrees/track-types"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
 """
-[main.steps.outputs]
+[main.steps.shell_outputs]
 path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/track-types/.meow-branch" }
 
 [[main.steps]]
 id = "create-worktree-adapter"
 executor = "shell"
 description = "Create worktree for adapter track"
+needs = ["create-worktree-types"]
 command = """
 set -e
+WORKTREE=".meow/worktrees/track-adapter"
 BRANCH="track-adapter-$(date +%s)"
-git worktree add -b "$BRANCH" .meow/worktrees/track-adapter HEAD
-echo ".meow/worktrees/track-adapter"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
 """
-[main.steps.outputs]
+[main.steps.shell_outputs]
 path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/track-adapter/.meow-branch" }
 
 [[main.steps]]
 id = "create-worktree-events"
 executor = "shell"
 description = "Create worktree for events track"
+needs = ["create-worktree-adapter"]
 command = """
 set -e
+WORKTREE=".meow/worktrees/track-events"
 BRANCH="track-events-$(date +%s)"
-git worktree add -b "$BRANCH" .meow/worktrees/track-events HEAD
-echo ".meow/worktrees/track-events"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
 """
-[main.steps.outputs]
+[main.steps.shell_outputs]
 path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/track-events/.meow-branch" }
 
 [[main.steps]]
 id = "create-worktree-integration"
 executor = "shell"
 description = "Create worktree for integration track"
+needs = ["create-worktree-events"]
 command = """
 set -e
+WORKTREE=".meow/worktrees/track-integration"
 BRANCH="track-integration-$(date +%s)"
-git worktree add -b "$BRANCH" .meow/worktrees/track-integration HEAD
-echo ".meow/worktrees/track-integration"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
 """
-[main.steps.outputs]
+[main.steps.shell_outputs]
 path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/track-integration/.meow-branch" }
 
 # ============================================================================
-# PHASE 2: Spawn Agents 1-3 (Parallel)
+# PHASE 2: Run Parallel Agent Lifecycles (Types, Adapter, Events)
 # ============================================================================
 
 [[main.steps]]
-id = "spawn-types"
-executor = "spawn"
-description = "Spawn agent for types track"
-agent = "types-agent"
-workdir = "{{create-worktree-types.outputs.path}}"
+id = "lifecycle-types"
+executor = "expand"
+template = ".agent-lifecycle"
 needs = ["create-worktree-types"]
+[main.steps.variables]
+agent_name = "types-agent"
+track_name = "types"
+worktree_path = "{{create-worktree-types.outputs.path}}"
+beads_list = """
+- **meow-354.1**: Define Adapter Configuration Types
+  - Create `internal/types/adapter.go`
+  - Define AdapterConfig, SpawnConfig, PromptInjection, etc.
+  - Add TOML tags, duration parsing, validation
 
-[[main.steps]]
-id = "spawn-adapter"
-executor = "spawn"
-description = "Spawn agent for adapter track"
-agent = "adapter-agent"
-workdir = "{{create-worktree-adapter.outputs.path}}"
-needs = ["create-worktree-adapter"]
+- **meow-354.5**: Add Adapter Field to SpawnConfig
+  - Modify `internal/types/step.go`
+  - Add `Adapter string` field to SpawnConfig struct
 
-[[main.steps]]
-id = "spawn-events"
-executor = "spawn"
-description = "Spawn agent for events track"
-agent = "events-agent"
-workdir = "{{create-worktree-events.outputs.path}}"
-needs = ["create-worktree-events"]
-
-# ============================================================================
-# PHASE 3: Execute Tracks 1-3 (Parallel Agent Work)
-# ============================================================================
-
-[[main.steps]]
-id = "work-types"
-executor = "agent"
-agent = "types-agent"
-needs = ["spawn-types"]
-prompt = """
-# Track: Types Foundation
-
-You are implementing the foundation types for the MEOW Agent Adapter and Events system.
-
-## Your Beads
-Run `bd show <id>` for full details on each:
-
-1. **meow-354.1**: Define Adapter Configuration Types
-   - Create `internal/types/adapter.go`
-   - Define AdapterConfig, SpawnConfig, PromptInjection, etc.
-   - Add TOML tags, duration parsing, validation
-
-2. **meow-354.5**: Add Adapter Field to SpawnConfig
-   - Modify `internal/types/step.go`
-   - Add `Adapter string` field to SpawnConfig struct
-
-3. **meow-354.10**: Add Project and Global Config for Default Adapter
-   - Modify `internal/config/config.go`
-   - Add `[agents]` section with `default_adapter` field
-
-## Workflow
-1. Read each bead: `bd show meow-354.1`, `bd show meow-354.5`, `bd show meow-354.10`
-2. Implement each task with tests
-3. Commit after each task
-4. Close beads as you complete them: `bd close meow-354.1`
-5. When all done, call `meow done`
-
-## Key Files
+- **meow-354.10**: Add Project and Global Config for Default Adapter
+  - Modify `internal/config/config.go`
+  - Add `[agents]` section with `default_adapter` field
+"""
+key_files = """
 - `internal/types/adapter.go` (CREATE)
 - `internal/types/step.go` (MODIFY - add Adapter field)
 - `internal/config/config.go` (MODIFY - add agents config)
-
-## Important
-- Write unit tests for all new code
-- Follow existing code style (see other files in internal/types/)
-- Commit frequently with descriptive messages
-- Your work will be merged by another agent, so keep commits clean
-
-When complete, run: `meow done`
 """
 
 [[main.steps]]
-id = "work-adapter"
-executor = "agent"
-agent = "adapter-agent"
-needs = ["spawn-adapter"]
-prompt = """
-# Track: Adapter Core
+id = "lifecycle-adapter"
+executor = "expand"
+template = ".agent-lifecycle"
+needs = ["create-worktree-adapter"]
+[main.steps.variables]
+agent_name = "adapter-agent"
+track_name = "adapter"
+worktree_path = "{{create-worktree-adapter.outputs.path}}"
+beads_list = """
+- **meow-354.2**: Implement Adapter Loader
+  - Create `internal/adapter/` package
+  - `registry.go`: AdapterRegistry struct
+  - `loader.go`: Load adapters from ~/.meow/adapters/
+  - Resolution order: step -> workflow -> project -> global -> builtin
 
-You are implementing the adapter loading system and built-in Claude adapter.
-
-## Dependencies
-This work depends on types from track-types. The types agent is working in parallel.
-You may need to wait or pull their changes. Check if `internal/types/adapter.go` exists.
-
-If types aren't ready yet, you can:
-1. Start with meow-354.2 scaffolding (create package structure)
-2. Define your own temporary types and refactor when real types arrive
-3. Work on meow-354.3 (Claude adapter TOML files don't need Go types)
-
-## Your Beads
-Run `bd show <id>` for full details:
-
-1. **meow-354.2**: Implement Adapter Loader
-   - Create `internal/adapter/` package
-   - `registry.go`: AdapterRegistry struct
-   - `loader.go`: Load adapters from ~/.meow/adapters/
-   - Resolution order: step -> workflow -> project -> global -> builtin
-
-2. **meow-354.3**: Create Built-in Claude Adapter
-   - Create adapter.toml for Claude Code
-   - Extract current hardcoded values from agent_manager.go
-   - Include event-translator.sh for hook support
-
-## Workflow
-1. Read each bead for full details
-2. Create the internal/adapter/ package
-3. Implement with tests
-4. Commit after each logical unit
-5. Close beads as completed
-6. When all done, call `meow done`
-
-## Key Files
+- **meow-354.3**: Create Built-in Claude Adapter
+  - Create adapter.toml for Claude Code
+  - Extract current hardcoded values from agent_manager.go
+  - Include event-translator.sh for hook support
+"""
+key_files = """
 - `internal/adapter/registry.go` (CREATE)
 - `internal/adapter/loader.go` (CREATE)
 - `internal/adapter/builtin.go` (CREATE - embed claude adapter)
 - `adapters/claude/adapter.toml` (CREATE)
 - `adapters/claude/event-translator.sh` (CREATE)
-
-## Coordination
-If you need types from track-types:
-```bash
-git fetch origin
-git merge origin/track-types-* --no-edit
-```
-
-When complete, run: `meow done`
 """
 
 [[main.steps]]
-id = "work-events"
-executor = "agent"
-agent = "events-agent"
-needs = ["spawn-events"]
-prompt = """
-# Track: Events System
+id = "lifecycle-events"
+executor = "expand"
+template = ".agent-lifecycle"
+needs = ["create-worktree-events"]
+[main.steps.variables]
+agent_name = "events-agent"
+track_name = "events"
+worktree_path = "{{create-worktree-events.outputs.path}}"
+beads_list = """
+- **meow-xds.1**: Define Event IPC Message Types
+  - Modify `internal/ipc/messages.go`
+  - Add EventMessage, AwaitEventMessage types
 
-You are implementing the complete Events system for MEOW.
+- **meow-xds.2**: Implement Event Routing in Orchestrator
+  - Create `internal/orchestrator/event_router.go`
+  - EventRouter with waiter registration
+  - Add HandleEvent, HandleAwaitEvent to ipc_handler.go
 
-## Your Beads
-Run `bd show <id>` for full details:
+- **meow-xds.3**: Implement meow event CLI Command
+  - Create `cmd/meow/cmd/event.go`
 
-1. **meow-xds.1**: Define Event IPC Message Types
-   - Modify `internal/ipc/messages.go`
-   - Add EventMessage, AwaitEventMessage types
-   - Add message type constants
+- **meow-xds.4**: Implement meow await-event CLI Command
+  - Create `cmd/meow/cmd/await_event.go`
 
-2. **meow-xds.2**: Implement Event Routing in Orchestrator
-   - Create `internal/orchestrator/event_router.go`
-   - EventRouter with waiter registration
-   - Route() for matching events to waiters
-   - Add HandleEvent, HandleAwaitEvent to ipc_handler.go
-
-3. **meow-xds.3**: Implement meow event CLI Command
-   - Create `cmd/meow/cmd/event.go`
-   - `meow event <type> [--data k=v ...]`
-
-4. **meow-xds.4**: Implement meow await-event CLI Command
-   - Create `cmd/meow/cmd/await_event.go`
-   - `meow await-event <type> [--filter k=v] [--timeout duration]`
-
-5. **meow-xds.5**: Implement meow step-status CLI Command
-   - Create `cmd/meow/cmd/step_status.go`
-   - `meow step-status <step-id> [--is done]`
-
-## Workflow
-1. Read each bead for full implementation details
-2. Start with IPC types (xds.1) - no dependencies
-3. Build event router (xds.2)
-4. Implement CLI commands (xds.3-5)
-5. Write tests for each component
-6. Commit frequently, close beads as done
-7. When all complete, call `meow done`
-
-## Key Files
+- **meow-xds.5**: Implement meow step-status CLI Command
+  - Create `cmd/meow/cmd/step_status.go`
+"""
+key_files = """
 - `internal/ipc/messages.go` (MODIFY)
 - `internal/orchestrator/event_router.go` (CREATE)
 - `internal/orchestrator/ipc_handler.go` (MODIFY)
 - `cmd/meow/cmd/event.go` (CREATE)
 - `cmd/meow/cmd/await_event.go` (CREATE)
 - `cmd/meow/cmd/step_status.go` (CREATE)
-
-## Important
-- This track is independent of the Adapter track
-- No file conflicts expected with other agents
-- Write comprehensive tests - this is new functionality
-
-When complete, run: `meow done`
 """
 
 # ============================================================================
-# PHASE 4: Spawn Integration Agent (After Tracks 1-3 Complete)
+# PHASE 3: Merge Parallel Tracks -> Integration Worktree
 # ============================================================================
 
 [[main.steps]]
 id = "merge-to-integration"
 executor = "shell"
 description = "Merge all track branches into integration worktree"
-needs = ["work-types", "work-adapter", "work-events"]
+needs = ["lifecycle-types.done", "lifecycle-adapter.done", "lifecycle-events.done"]
 command = """
 set -e
 cd .meow/worktrees/track-integration
 
-echo "Fetching all branches..."
-git fetch origin
+# Branch names from earlier steps (local branches)
+TYPES_BRANCH="{{create-worktree-types.outputs.branch}}"
+ADAPTER_BRANCH="{{create-worktree-adapter.outputs.branch}}"
+EVENTS_BRANCH="{{create-worktree-events.outputs.branch}}"
 
-echo "Merging track-types..."
-git merge origin/track-types-* --no-edit -m "Merge track-types" || true
+echo "Merging $TYPES_BRANCH..."
+git merge "$TYPES_BRANCH" --no-edit -m "Merge track-types"
 
-echo "Merging track-adapter..."
-git merge origin/track-adapter-* --no-edit -m "Merge track-adapter" || true
+echo "Merging $ADAPTER_BRANCH..."
+git merge "$ADAPTER_BRANCH" --no-edit -m "Merge track-adapter"
 
-echo "Merging track-events..."
-git merge origin/track-events-* --no-edit -m "Merge track-events" || true
+echo "Merging $EVENTS_BRANCH..."
+git merge "$EVENTS_BRANCH" --no-edit -m "Merge track-events"
 
 echo "All tracks merged into integration worktree"
 git log --oneline -10
 """
 
+# ============================================================================
+# PHASE 4: Integration Agent Lifecycle
+# ============================================================================
+
 [[main.steps]]
-id = "spawn-integration"
-executor = "spawn"
-description = "Spawn agent for integration track"
-agent = "integration-agent"
-workdir = "{{create-worktree-integration.outputs.path}}"
+id = "lifecycle-integration"
+executor = "expand"
+template = ".agent-lifecycle"
 needs = ["merge-to-integration", "create-worktree-integration"]
+[main.steps.variables]
+agent_name = "integration-agent"
+track_name = "integration"
+worktree_path = "{{create-worktree-integration.outputs.path}}"
+beads_list = """
+- **meow-354.4**: Refactor TmuxAgentManager to Use Adapters
+  - This is the MAIN integration task
+  - Modify `internal/orchestrator/agent_manager.go`
+  - Replace hardcoded Claude logic with adapter delegation
+  - Use AdapterRegistry to load adapters
 
-[[main.steps]]
-id = "work-integration"
-executor = "agent"
-agent = "integration-agent"
-needs = ["spawn-integration"]
-prompt = """
-# Track: Integration
+- **meow-354.6**: Implement meow adapter install Command
+- **meow-354.7**: Implement meow adapter list/show Commands
+- **meow-354.8**: Implement meow adapter setup Command
+- **meow-354.9**: Implement meow adapter remove Command
 
-You are completing the integration work that ties together the Adapter and Events systems.
-
-## Context
-Three other agents have completed their work:
-- **track-types**: Created adapter types in internal/types/adapter.go
-- **track-adapter**: Created internal/adapter/ package with loader and claude adapter
-- **track-events**: Created events system with IPC, routing, and CLI commands
-
-Their changes have been merged into your worktree. Verify by checking:
-```bash
-ls internal/types/adapter.go
-ls internal/adapter/
-ls internal/orchestrator/event_router.go
-```
-
-## Your Beads
-
-1. **meow-354.4**: Refactor TmuxAgentManager to Use Adapters
-   - This is the MAIN integration task
-   - Modify `internal/orchestrator/agent_manager.go`
-   - Replace hardcoded Claude logic with adapter delegation
-   - Use AdapterRegistry to load adapters
-   - See bead for detailed implementation guide
-
-2. **meow-354.6**: Implement meow adapter install Command
-3. **meow-354.7**: Implement meow adapter list/show Commands
-4. **meow-354.8**: Implement meow adapter setup Command
-5. **meow-354.9**: Implement meow adapter remove Command
-
-6. **meow-xds.6**: Integrate Event Translator with Adapters
-   - Connect adapter's event-translator.sh to events system
-   - Update spawn to set up event translation
-
-## Workflow
-1. First, verify all dependencies are present (check files above)
-2. Read meow-354.4 carefully - it's the critical integration point
-3. Refactor agent_manager.go to use adapters
-4. Implement adapter CLI commands
-5. Integrate event translator
-6. Run full test suite to ensure nothing broke
-7. Commit with clear messages
-8. Close all beads
-
-## Key Files
+- **meow-xds.6**: Integrate Event Translator with Adapters
+  - Connect adapter's event-translator.sh to events system
+  - Update spawn to set up event translation
+"""
+key_files = """
 - `internal/orchestrator/agent_manager.go` (MAJOR REFACTOR)
 - `cmd/meow/cmd/adapter.go` (CREATE - parent command)
 - `cmd/meow/cmd/adapter_install.go` (CREATE)
@@ -383,84 +271,323 @@ ls internal/orchestrator/event_router.go
 - `cmd/meow/cmd/adapter_show.go` (CREATE)
 - `cmd/meow/cmd/adapter_setup.go` (CREATE)
 - `cmd/meow/cmd/adapter_remove.go` (CREATE)
+"""
 
-## Testing
-After implementation, run:
+# ============================================================================
+# PHASE 5: Final Review and Merge to Main
+# ============================================================================
+
+[[main.steps]]
+id = "final-review"
+executor = "expand"
+template = ".final-review-and-merge"
+needs = ["lifecycle-integration.done"]
+[main.steps.variables]
+worktree_path = "{{create-worktree-integration.outputs.path}}"
+integration_branch = "{{create-worktree-integration.outputs.branch}}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL TEMPLATE: Agent Lifecycle
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Standard lifecycle for each parallel agent:
+#   spawn -> work (read spec, implement beads) -> self-review -> verify-clean -> kill -> done
+#
+# Variables required:
+#   - agent_name: Unique agent identifier
+#   - track_name: Human-readable track name
+#   - worktree_path: Path to the agent's worktree
+#   - beads_list: Markdown list of beads to implement
+#   - key_files: Markdown list of key files to create/modify
+#
+
+[agent-lifecycle]
+name = "agent-lifecycle"
+description = "Standard lifecycle for a parallel implementation agent"
+internal = true
+
+[agent-lifecycle.variables]
+agent_name = { required = true, description = "Unique agent identifier" }
+track_name = { required = true, description = "Human-readable track name" }
+worktree_path = { required = true, description = "Path to the agent's worktree" }
+beads_list = { required = true, description = "Markdown list of beads to implement" }
+key_files = { required = true, description = "Markdown list of key files" }
+
+# Step 1: Spawn the agent
+[[agent-lifecycle.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent_name}}"
+workdir = "{{worktree_path}}"
+
+# Step 2: Main work - read spec, implement beads
+[[agent-lifecycle.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["spawn"]
+prompt = """
+# {{track_name}} Track Agent
+
+## FIRST: Read the Specification
+Before doing ANY work, read the complete MEOW specification:
+
+@docs/MVP-SPEC-v2.md
+
+This is REQUIRED. The spec defines all types, executors, and patterns you must follow.
+
+## Your Assignment
+You are the **{{track_name}}** agent. Your ONLY job is to implement these beads:
+
+{{beads_list}}
+
+## Key Files
+{{key_files}}
+
+## IMPORTANT CONSTRAINTS
+- **ONLY** implement the beads listed above
+- Do NOT work on other beads you might see in `bd list`
+- Do NOT modify files outside your assignment scope
+- If you discover related work needed, note it but do NOT implement it
+
+## Workflow
+1. Run `bd show <bead-id>` for each bead to understand full requirements
+2. Write tests first (TDD approach)
+3. Implement the minimum code to pass tests
+4. Commit after each bead with a clear message referencing the bead ID
+5. Close beads as you complete them: `bd close <bead-id>`
+
+## When Done
+After ALL your assigned beads are implemented and closed, run:
+
+```
+meow done
+```
+"""
+
+# Step 3: Self-review with fresh eyes
+[[agent-lifecycle.steps]]
+id = "review"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["work"]
+prompt = """
+# Self-Review: {{track_name}} Track
+
+Take a step back and carefully reread your most recent code changes with fresh eyes.
+
+## Review Checklist
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Check for confusing patterns** - would another developer understand this?
+5. **Verify test coverage** - do tests actually test the important behavior?
+6. **Check imports** - any unused imports? Missing imports that will cause build failures?
+
+## Actions
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
+
+## When Done
+After reviewing and fixing any issues found, run:
+
+```
+meow done
+```
+"""
+
+# Step 4: Verify all changes are committed
+[[agent-lifecycle.steps]]
+id = "verify-clean"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["review"]
+prompt = """
+# Final Commit Check: {{track_name}} Track
+
+Ensure ALL your changes are committed before this track completes.
+
+## Steps
+1. Run `git status` to check for any uncommitted changes
+2. If there are uncommitted changes:
+   - Stage them: `git add -A`
+   - Commit with message: "chore: final changes for {{track_name}} track"
+3. Run `git status` again to verify working directory is clean
+4. Run `git log --oneline -5` to show recent commits
+
+## Important
+Do NOT proceed until `git status` shows a clean working directory.
+
+When your working directory is clean, run:
+
+```
+meow done
+```
+"""
+
+# Step 5: Kill the agent
+[[agent-lifecycle.steps]]
+id = "kill"
+executor = "kill"
+agent = "{{agent_name}}"
+needs = ["verify-clean"]
+graceful = true
+
+# Step 6: Completion marker (needed for join dependencies - validator doesn't see expanded children)
+[[agent-lifecycle.steps]]
+id = "done"
+executor = "shell"
+command = "echo '{{track_name}} track complete'"
+needs = ["kill"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL TEMPLATE: Final Review and Merge
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Spawns a review agent to verify all work and merge to main.
+#
+
+[final-review-and-merge]
+name = "final-review-and-merge"
+description = "Final review agent that verifies and merges all work"
+internal = true
+
+[final-review-and-merge.variables]
+worktree_path = { required = true }
+integration_branch = { required = true }
+
+# Spawn review agent
+[[final-review-and-merge.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "review-agent"
+workdir = "{{worktree_path}}"
+
+# Review all changes for spec compliance
+[[final-review-and-merge.steps]]
+id = "review"
+executor = "agent"
+agent = "review-agent"
+needs = ["spawn"]
+prompt = """
+# Final Review Agent
+
+You are the final reviewer. Your job is to verify all implementation work before merging to main.
+
+## FIRST: Read the Specification
+@docs/MVP-SPEC-v2.md
+
+## Your Tasks
+
+### 1. Review All Changes
+Run these commands to understand what was implemented:
+
+```bash
+git log --oneline main..HEAD
+git diff --stat main..HEAD
+```
+
+### 2. Verify Spec Compliance
+For each major change, verify:
+- Types match the spec definitions
+- Executors follow the spec behavior
+- IPC messages match the spec format
+- CLI commands match the spec interface
+
+### 3. Run Tests
 ```bash
 go test ./...
 ```
 
-Ensure the existing spawn-test template still works:
-```bash
-meow run .meow/templates/spawn-test.meow.toml
+All tests must pass.
+
+### 4. Check for Issues
+Look for:
+- Code that doesn't match the spec
+- Missing error handling
+- Incomplete implementations
+- Dead code or unused imports
+
+### 5. Fix Minor Issues
+If you find small issues (typos, missing error checks, etc.), fix them directly.
+For larger issues, document them but do NOT attempt fixes.
+
+## When Done
+After review is complete and tests pass, run:
+
 ```
-
-## Final Steps
-1. Run all tests
-2. Close all your beads
-3. Create a final commit summarizing the integration
-4. Call `meow done`
-
-When complete, run: `meow done`
+meow done
+```
 """
 
-# ============================================================================
-# PHASE 5: Cleanup - Kill Agents
-# ============================================================================
+# Merge to main
+[[final-review-and-merge.steps]]
+id = "merge"
+executor = "agent"
+agent = "review-agent"
+needs = ["review"]
+prompt = """
+# Merge to Main
 
-[[main.steps]]
-id = "kill-types"
+All reviews passed. Now merge the integration branch to main.
+
+## Steps
+
+1. Checkout main branch:
+   ```bash
+   git checkout main
+   ```
+
+2. Merge the integration branch:
+   ```bash
+   git merge {{integration_branch}} --no-edit -m "Merge: Agent Adapters and Events System implementation"
+   ```
+
+3. Verify the merge:
+   ```bash
+   git log --oneline -10
+   ```
+
+4. Run final test suite:
+   ```bash
+   go test ./...
+   ```
+
+## If Merge Conflicts
+If there are merge conflicts:
+1. List the conflicted files
+2. Resolve each conflict carefully
+3. Stage resolved files: `git add <file>`
+4. Complete the merge: `git commit`
+
+## When Done
+After successful merge and tests pass, run:
+
+```
+meow done
+```
+"""
+
+# Kill review agent
+[[final-review-and-merge.steps]]
+id = "kill"
 executor = "kill"
-agent = "types-agent"
-needs = ["work-types"]
+agent = "review-agent"
+needs = ["merge"]
 graceful = true
 
-[[main.steps]]
-id = "kill-adapter"
-executor = "kill"
-agent = "adapter-agent"
-needs = ["work-adapter"]
-graceful = true
-
-[[main.steps]]
-id = "kill-events"
-executor = "kill"
-agent = "events-agent"
-needs = ["work-events"]
-graceful = true
-
-[[main.steps]]
-id = "kill-integration"
-executor = "kill"
-agent = "integration-agent"
-needs = ["work-integration"]
-graceful = true
-
-# ============================================================================
-# PHASE 6: Final Merge to Main
-# ============================================================================
-
-[[main.steps]]
-id = "final-merge"
+# Workflow completion marker
+[[final-review-and-merge.steps]]
+id = "done"
 executor = "shell"
-description = "Merge integration branch back to main"
-needs = ["kill-integration"]
+needs = ["kill"]
 command = """
-set -e
-echo "All agents completed. Integration branch is ready for review."
-
-cd .meow/worktrees/track-integration
-echo ""
-echo "=== Integration Branch Status ==="
-git log --oneline -20
-echo ""
-echo "=== Files Changed ==="
-git diff --stat HEAD~10..HEAD || git diff --stat main..HEAD
-echo ""
-echo "To merge to main:"
-echo "  cd .meow/worktrees/track-integration"
-echo "  git checkout main"
-echo "  git merge track-integration-*"
-echo ""
-echo "Workflow complete!"
+echo "=============================================="
+echo "  WORKFLOW COMPLETE"
+echo "=============================================="
+echo "Agent Adapters and Events System implemented"
+echo "and merged to main."
+echo "=============================================="
 """

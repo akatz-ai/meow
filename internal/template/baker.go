@@ -24,9 +24,12 @@ type Baker struct {
 
 // NewBaker creates a new Baker with default settings.
 func NewBaker(workflowID string) *Baker {
+	vc := NewVarContext()
+	// Defer step output resolution to runtime - outputs aren't available at bake time
+	vc.DeferStepOutputs = true
 	return &Baker{
 		WorkflowID: workflowID,
-		VarContext: NewVarContext(),
+		VarContext: vc,
 		Now:        time.Now,
 	}
 }

@@ -798,10 +798,10 @@ func TestVarContext_BeadLookup_ResolvesOutputsFromStore(t *testing.T) {
 	ctx := NewVarContext()
 
 	// Set up a mock bead lookup function
-	beadStore := map[string]*BeadInfo{
+	beadStore := map[string]*StepInfo{
 		"create-worktree": {
 			ID:     "create-worktree",
-			Status: "closed",
+			Status: "done",
 			Outputs: map[string]any{
 				"path":   "/tmp/worktree",
 				"branch": "feature-x",
@@ -809,8 +809,8 @@ func TestVarContext_BeadLookup_ResolvesOutputsFromStore(t *testing.T) {
 		},
 	}
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		if info, ok := beadStore[beadID]; ok {
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := beadStore[stepID]; ok {
 			return info, nil
 		}
 		return nil, nil
@@ -839,11 +839,11 @@ func TestVarContext_BeadLookup_CachesOutputs(t *testing.T) {
 	ctx := NewVarContext()
 
 	lookupCount := 0
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
 		lookupCount++
-		return &BeadInfo{
-			ID:     beadID,
-			Status: "closed",
+		return &StepInfo{
+			ID:     stepID,
+			Status: "done",
 			Outputs: map[string]any{
 				"value": "cached",
 			},
@@ -871,7 +871,7 @@ func TestVarContext_BeadLookup_CachesOutputs(t *testing.T) {
 func TestVarContext_BeadLookup_BeadNotFound(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
 		return nil, nil // Not found
 	})
 
@@ -887,9 +887,9 @@ func TestVarContext_BeadLookup_BeadNotFound(t *testing.T) {
 func TestVarContext_BeadLookup_BeadNotClosed(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:     beadID,
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:     stepID,
 			Status: "in_progress",
 			Outputs: map[string]any{
 				"value": "incomplete",
@@ -901,7 +901,7 @@ func TestVarContext_BeadLookup_BeadNotClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unclosed bead")
 	}
-	if !strings.Contains(err.Error(), "not closed") {
+	if !strings.Contains(err.Error(), "not done") {
 		t.Errorf("expected 'not closed' error, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "in_progress") {
@@ -912,9 +912,9 @@ func TestVarContext_BeadLookup_BeadNotClosed(t *testing.T) {
 func TestVarContext_BeadLookup_OpenBeadError(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:     beadID,
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:     stepID,
 			Status: "open",
 		}, nil
 	})
@@ -923,7 +923,7 @@ func TestVarContext_BeadLookup_OpenBeadError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for open bead")
 	}
-	if !strings.Contains(err.Error(), "not closed") {
+	if !strings.Contains(err.Error(), "not done") {
 		t.Errorf("expected 'not closed' error, got: %v", err)
 	}
 }
@@ -931,10 +931,10 @@ func TestVarContext_BeadLookup_OpenBeadError(t *testing.T) {
 func TestVarContext_BeadLookup_ClosedButNoOutputs(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:      beadID,
-			Status:  "closed",
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:      stepID,
+			Status:  "done",
 			Outputs: nil, // No outputs
 		}, nil
 	})
@@ -951,7 +951,7 @@ func TestVarContext_BeadLookup_ClosedButNoOutputs(t *testing.T) {
 func TestVarContext_BeadLookup_LookupError(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
 		return nil, fmt.Errorf("database connection failed")
 	})
 
@@ -967,10 +967,10 @@ func TestVarContext_BeadLookup_LookupError(t *testing.T) {
 func TestVarContext_BeadLookup_NestedOutputAccess(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:     beadID,
-			Status: "closed",
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:     stepID,
+			Status: "done",
 			Outputs: map[string]any{
 				"result": map[string]any{
 					"nested": map[string]any{
@@ -999,10 +999,10 @@ func TestVarContext_BeadLookup_PrefersCachedOutputs(t *testing.T) {
 	})
 
 	// Set up lookup that would return different value
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:     beadID,
-			Status: "closed",
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:     stepID,
+			Status: "done",
 			Outputs: map[string]any{
 				"value": "from-lookup",
 			},
@@ -1022,10 +1022,10 @@ func TestVarContext_BeadLookup_PrefersCachedOutputs(t *testing.T) {
 func TestVarContext_BeadLookup_MissingOutputField(t *testing.T) {
 	ctx := NewVarContext()
 
-	ctx.SetBeadLookup(func(beadID string) (*BeadInfo, error) {
-		return &BeadInfo{
-			ID:     beadID,
-			Status: "closed",
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return &StepInfo{
+			ID:     stepID,
+			Status: "done",
 			Outputs: map[string]any{
 				"existing": "value",
 			},

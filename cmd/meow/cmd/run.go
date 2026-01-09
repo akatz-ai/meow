@@ -177,8 +177,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create agent manager for tmux sessions
 	agentManager := orchestrator.NewTmuxAgentManager(dir, logger)
 
+	// Create template expander
+	expander := orchestrator.NewTemplateExpanderAdapter(dir)
+
 	// Create orchestrator with agent support
-	orch := orchestrator.New(cfg, store, agentManager, shellRunner, nil, logger)
+	orch := orchestrator.New(cfg, store, agentManager, shellRunner, expander, logger)
 	orch.SetWorkflowID(workflowID)
 
 	// Set up signal handling for graceful shutdown

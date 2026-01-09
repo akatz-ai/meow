@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -267,6 +268,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	o.logger.Info("dispatching step", "id", step.ID, "executor", step.Executor)
 
+	// Resolve any deferred step output references before executing
+	o.resolveStepOutputRefs(wf, step)
+
 	switch step.Executor {
 	case types.ExecutorShell:
 		return o.handleShell(ctx, wf, step)
@@ -282,6 +286,85 @@ func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *t
 		return o.handleAgent(ctx, wf, step)
 	default:
 		return fmt.Errorf("unknown executor: %s", step.Executor)
+	}
+}
+
+// stepOutputRefPattern matches {{step-id.outputs.field}} references
+var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_-]+)\.outputs\.([a-zA-Z0-9_]+)\}\}`)
+
+// resolveStepOutputRefs substitutes {{step.outputs.field}} references with actual values
+// from completed steps in the workflow.
+func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Step) {
+	// Build a resolver function
+	resolve := func(s string) string {
+		return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
+			// Extract step ID and field name
+			parts := stepOutputRefPattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match // Keep original if parse fails
+			}
+			stepID := parts[1]
+			fieldName := parts[2]
+
+			// Look up the step
+			depStep, ok := wf.Steps[stepID]
+			if !ok {
+				o.logger.Warn("step output ref: step not found", "ref", match, "stepID", stepID)
+				return match
+			}
+
+			// Get the output value
+			if depStep.Outputs == nil {
+				o.logger.Warn("step output ref: step has no outputs", "ref", match, "stepID", stepID)
+				return match
+			}
+
+			val, ok := depStep.Outputs[fieldName]
+			if !ok {
+				o.logger.Warn("step output ref: field not found", "ref", match, "stepID", stepID, "field", fieldName)
+				return match
+			}
+
+			// Convert to string
+			switch v := val.(type) {
+			case string:
+				return v
+			case fmt.Stringer:
+				return v.String()
+			default:
+				return fmt.Sprintf("%v", v)
+			}
+		})
+	}
+
+	// Resolve references in executor-specific configs
+	switch step.Executor {
+	case types.ExecutorShell:
+		if step.Shell != nil {
+			step.Shell.Command = resolve(step.Shell.Command)
+			step.Shell.Workdir = resolve(step.Shell.Workdir)
+			for k, v := range step.Shell.Env {
+				step.Shell.Env[k] = resolve(v)
+			}
+		}
+	case types.ExecutorSpawn:
+		if step.Spawn != nil {
+			step.Spawn.Agent = resolve(step.Spawn.Agent)
+			step.Spawn.Workdir = resolve(step.Spawn.Workdir)
+			step.Spawn.ResumeSession = resolve(step.Spawn.ResumeSession)
+			for k, v := range step.Spawn.Env {
+				step.Spawn.Env[k] = resolve(v)
+			}
+		}
+	case types.ExecutorKill:
+		if step.Kill != nil {
+			step.Kill.Agent = resolve(step.Kill.Agent)
+		}
+	case types.ExecutorAgent:
+		if step.Agent != nil {
+			step.Agent.Agent = resolve(step.Agent.Agent)
+			step.Agent.Prompt = resolve(step.Agent.Prompt)
+		}
 	}
 }
 
@@ -565,6 +648,10 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 		freshWf, err := o.store.Get(ctx, workflowID)
 		if err != nil {
 			o.logger.Error("re-fetching workflow after kill", "error", err)
+			return
+		}
+		if freshWf == nil {
+			o.logger.Error("workflow not found after kill", "workflow", workflowID)
 			return
 		}
 

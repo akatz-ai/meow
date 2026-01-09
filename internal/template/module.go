@@ -253,8 +253,13 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		}
 	}
 
-	// Parse shell_outputs for shell executor
-	if outputs, ok := data["shell_outputs"].(map[string]any); ok {
+	// Parse shell_outputs for shell executor (also check "outputs" for shell steps)
+	shellOutputsData := data["shell_outputs"]
+	if shellOutputsData == nil && s.Executor == ExecutorShell {
+		// For shell executor, also accept "outputs" as key
+		shellOutputsData = data["outputs"]
+	}
+	if outputs, ok := shellOutputsData.(map[string]any); ok {
 		s.ShellOutputs = make(map[string]OutputSource)
 		for k, v := range outputs {
 			if vm, ok := v.(map[string]any); ok {
@@ -682,8 +687,9 @@ func (w *Workflow) Validate() error {
 		return fmt.Errorf("workflow must have at least one step")
 	}
 
-	// Check for duplicate step IDs
+	// Check for duplicate step IDs and track expand steps
 	stepIDs := make(map[string]bool)
+	expandSteps := make(map[string]bool)
 	for i, step := range w.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step[%d]: id is required", i)
@@ -692,12 +698,24 @@ func (w *Workflow) Validate() error {
 			return fmt.Errorf("step[%d]: duplicate id %q", i, step.ID)
 		}
 		stepIDs[step.ID] = true
+		if step.Executor == ExecutorExpand {
+			expandSteps[step.ID] = true
+		}
 	}
 
 	// Validate dependencies reference existing steps
+	// Allow references to children of expand steps (e.g., "expand-step.child")
 	for i, step := range w.Steps {
 		for _, need := range step.Needs {
 			if !stepIDs[need] {
+				// Check if this references a child of an expand step
+				if dotIdx := strings.Index(need, "."); dotIdx > 0 {
+					prefix := need[:dotIdx]
+					if expandSteps[prefix] {
+						// This references a child of an expand step - allowed
+						continue
+					}
+				}
 				return fmt.Errorf("step[%d] %q: needs references unknown step %q", i, step.ID, need)
 			}
 		}

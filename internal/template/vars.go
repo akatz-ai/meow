@@ -7,33 +7,39 @@ import (
 	"time"
 )
 
-// BeadInfo contains the information needed from a bead for output resolution.
-type BeadInfo struct {
+// StepInfo contains the information needed from a step for output resolution.
+type StepInfo struct {
 	ID      string
-	Status  string // "open", "in_progress", "closed"
+	Status  string // "pending", "running", "done", "failed"
 	Outputs map[string]any
 }
 
-// BeadLookupFunc retrieves bead information by ID.
-// Returns nil, nil if the bead is not found.
-type BeadLookupFunc func(beadID string) (*BeadInfo, error)
+// StepLookupFunc retrieves step information by ID.
+// Returns nil, nil if the step is not found.
+type StepLookupFunc func(stepID string) (*StepInfo, error)
 
 // VarContext holds the context for variable substitution.
 type VarContext struct {
 	// Variables are user-defined template variables
 	Variables map[string]any
 
-	// Outputs are bead outputs keyed by bead ID
+	// Outputs are step outputs keyed by step ID
 	// e.g., outputs["step-1"]["stdout"] = "hello"
 	Outputs map[string]map[string]any
 
 	// Builtins are auto-populated variables
 	Builtins map[string]any
 
-	// BeadLookup is an optional function to fetch bead outputs dynamically.
-	// When set, resolveOutput will use this to fetch outputs for beads not
+	// StepLookup is an optional function to fetch step outputs dynamically.
+	// When set, resolveOutput will use this to fetch outputs for steps not
 	// already in the Outputs map.
-	BeadLookup BeadLookupFunc
+	StepLookup StepLookupFunc
+
+	// DeferStepOutputs controls behavior when step outputs can't be resolved.
+	// When true, unresolvable step output references ({{step.outputs.field}})
+	// are left as-is for runtime resolution instead of causing an error.
+	// This is useful during template baking where step outputs aren't yet available.
+	DeferStepOutputs bool
 }
 
 // NewVarContext creates a new variable context with default builtins.
@@ -63,36 +69,39 @@ func (c *VarContext) Get(name string) string {
 	return ""
 }
 
-// SetBuiltin sets a builtin variable (e.g., agent, bead_id).
+// SetBuiltin sets a builtin variable (e.g., agent, step_id).
 func (c *VarContext) SetBuiltin(name string, value any) {
 	c.Builtins[name] = value
 }
 
-// SetOutput sets an output value for a bead.
-func (c *VarContext) SetOutput(beadID, field string, value any) {
-	if c.Outputs[beadID] == nil {
-		c.Outputs[beadID] = make(map[string]any)
+// SetOutput sets an output value for a step.
+func (c *VarContext) SetOutput(stepID, field string, value any) {
+	if c.Outputs[stepID] == nil {
+		c.Outputs[stepID] = make(map[string]any)
 	}
-	c.Outputs[beadID][field] = value
+	c.Outputs[stepID][field] = value
 }
 
-// SetOutputs sets all outputs for a bead.
-func (c *VarContext) SetOutputs(beadID string, outputs map[string]any) {
-	c.Outputs[beadID] = outputs
+// SetOutputs sets all outputs for a step.
+func (c *VarContext) SetOutputs(stepID string, outputs map[string]any) {
+	c.Outputs[stepID] = outputs
 }
 
-// SetBeadLookup sets the function used to look up bead outputs dynamically.
-// When a {{bead_id.outputs.field}} reference is encountered and the bead's outputs
+// SetStepLookup sets the function used to look up step outputs dynamically.
+// When a {{step_id.outputs.field}} reference is encountered and the step's outputs
 // are not in the cache, this function will be called to fetch them.
-func (c *VarContext) SetBeadLookup(fn BeadLookupFunc) {
-	c.BeadLookup = fn
+func (c *VarContext) SetStepLookup(fn StepLookupFunc) {
+	c.StepLookup = fn
 }
+
+// errDeferred is a sentinel error indicating the variable should be left for runtime
+var errDeferred = fmt.Errorf("deferred for runtime")
 
 // varPattern matches {{variable.path}} patterns
 var varPattern = regexp.MustCompile(`\{\{([^{}]+)\}\}`)
 
 // Substitute replaces all {{...}} patterns in the input string.
-// Returns an error if a required variable is missing.
+// Returns an error if a required variable is missing (unless deferred).
 func (c *VarContext) Substitute(input string) (string, error) {
 	var lastErr error
 	maxDepth := 10 // Prevent infinite recursion
@@ -105,6 +114,10 @@ func (c *VarContext) Substitute(input string) (string, error) {
 
 			value, err := c.resolve(path)
 			if err != nil {
+				// If deferred, keep the original pattern for runtime resolution
+				if err == errDeferred {
+					return match
+				}
 				lastErr = err
 				return match // Keep original on error
 			}
@@ -119,8 +132,8 @@ func (c *VarContext) Substitute(input string) (string, error) {
 		result = newResult
 	}
 
-	// Check for remaining unresolved variables
-	if varPattern.MatchString(result) && lastErr == nil {
+	// Check for remaining unresolved variables (only if not in defer mode)
+	if !c.DeferStepOutputs && varPattern.MatchString(result) && lastErr == nil {
 		matches := varPattern.FindAllString(result, -1)
 		lastErr = fmt.Errorf("unresolved variables after max depth: %v", matches)
 	}
@@ -138,19 +151,19 @@ func (c *VarContext) resolve(path string) (any, error) {
 
 	root := parts[0]
 
-	// Check for output reference: bead_id.outputs.field
+	// Check for output reference: step_id.outputs.field
 	if len(parts) >= 3 && parts[1] == "outputs" {
-		beadID := parts[0]
+		stepID := parts[0]
 		field := strings.Join(parts[2:], ".")
-		return c.resolveOutput(beadID, field)
+		return c.resolveOutput(stepID, field)
 	}
 
 	// Check for special prefixes
 	if root == "output" && len(parts) >= 3 {
 		// output.step.field format
-		beadID := parts[1]
+		stepID := parts[1]
 		field := strings.Join(parts[2:], ".")
-		return c.resolveOutput(beadID, field)
+		return c.resolveOutput(stepID, field)
 	}
 
 	// Check user variables first
@@ -176,33 +189,44 @@ func (c *VarContext) resolve(path string) (any, error) {
 	return nil, fmt.Errorf("undefined variable: %s", root)
 }
 
-// resolveOutput looks up a bead output.
-// If the bead's outputs are not cached and a BeadLookup function is set,
-// it will be used to fetch the bead and its outputs.
-func (c *VarContext) resolveOutput(beadID, field string) (any, error) {
-	outputs, ok := c.Outputs[beadID]
+// resolveOutput looks up a step output.
+// If the step's outputs are not cached and a StepLookup function is set,
+// it will be used to fetch the step and its outputs.
+func (c *VarContext) resolveOutput(stepID, field string) (any, error) {
+	outputs, ok := c.Outputs[stepID]
 	if !ok {
-		// Try to fetch from BeadLookup if available
-		if c.BeadLookup != nil {
-			info, err := c.BeadLookup(beadID)
+		// Try to fetch from StepLookup if available
+		if c.StepLookup != nil {
+			info, err := c.StepLookup(stepID)
 			if err != nil {
-				return nil, fmt.Errorf("looking up bead %q: %w", beadID, err)
+				return nil, fmt.Errorf("looking up step %q: %w", stepID, err)
 			}
 			if info == nil {
-				return nil, fmt.Errorf("bead %q not found", beadID)
+				// Step not found - defer if enabled
+				if c.DeferStepOutputs {
+					return nil, errDeferred
+				}
+				return nil, fmt.Errorf("step %q not found", stepID)
 			}
-			// Check if bead is closed (outputs only available after closing)
-			if info.Status != "closed" {
-				return nil, fmt.Errorf("bead %q is not closed (status: %s), outputs not available", beadID, info.Status)
+			// Check if step is done (outputs only available after completion)
+			if info.Status != "done" {
+				if c.DeferStepOutputs {
+					return nil, errDeferred
+				}
+				return nil, fmt.Errorf("step %q is not done (status: %s), outputs not available", stepID, info.Status)
 			}
 			if info.Outputs == nil {
-				return nil, fmt.Errorf("bead %q has no outputs", beadID)
+				return nil, fmt.Errorf("step %q has no outputs", stepID)
 			}
 			// Cache the outputs for future lookups
-			c.Outputs[beadID] = info.Outputs
+			c.Outputs[stepID] = info.Outputs
 			outputs = info.Outputs
 		} else {
-			return nil, fmt.Errorf("no outputs for bead %q", beadID)
+			// No lookup function - defer if enabled, otherwise error
+			if c.DeferStepOutputs {
+				return nil, errDeferred
+			}
+			return nil, fmt.Errorf("no outputs for step %q", stepID)
 		}
 	}
 
@@ -221,10 +245,10 @@ func (c *VarContext) resolveOutput(beadID, field string) (any, error) {
 				for k := range v {
 					available = append(available, k)
 				}
-				return nil, fmt.Errorf("output %q not found in bead %q (available: %v)", field, beadID, available)
+				return nil, fmt.Errorf("output %q not found in step %q (available: %v)", field, stepID, available)
 			}
 		default:
-			return nil, fmt.Errorf("cannot access field %q on non-map value in bead %q", part, beadID)
+			return nil, fmt.Errorf("cannot access field %q on non-map value in step %q", part, stepID)
 		}
 	}
 
@@ -248,26 +272,13 @@ func (c *VarContext) resolvePath(val any, parts []string) (any, error) {
 				return nil, fmt.Errorf("field %q not found", part)
 			}
 		default:
-			return nil, fmt.Errorf("cannot access field %q on %T", part, val)
+			return nil, fmt.Errorf("cannot access field %q on non-map value", part)
 		}
 	}
 	return val, nil
 }
 
-// SubstituteMap applies substitution to all string values in a map.
-func (c *VarContext) SubstituteMap(m map[string]string) (map[string]string, error) {
-	result := make(map[string]string, len(m))
-	for k, v := range m {
-		subbed, err := c.Substitute(v)
-		if err != nil {
-			return nil, fmt.Errorf("substitute %q: %w", k, err)
-		}
-		result[k] = subbed
-	}
-	return result, nil
-}
-
-// ApplyDefaults fills in missing variables from template defaults.
+// ApplyDefaults sets default values for variables that are not already set.
 func (c *VarContext) ApplyDefaults(vars map[string]Var) {
 	for name, v := range vars {
 		if _, ok := c.Variables[name]; !ok && v.Default != nil {
@@ -277,15 +288,13 @@ func (c *VarContext) ApplyDefaults(vars map[string]Var) {
 }
 
 // ValidateRequired checks that all required variables are set.
+// Variables with defaults are not considered missing even if Required is true.
 func (c *VarContext) ValidateRequired(vars map[string]Var) error {
 	var missing []string
 	for name, v := range vars {
-		if v.Required {
+		if v.Required && v.Default == nil {
 			if _, ok := c.Variables[name]; !ok {
-				// Check if there's a default
-				if v.Default == nil {
-					missing = append(missing, name)
-				}
+				missing = append(missing, name)
 			}
 		}
 	}
@@ -295,135 +304,165 @@ func (c *VarContext) ValidateRequired(vars map[string]Var) error {
 	return nil
 }
 
-// SubstituteTemplate applies variable substitution to all string fields in a template step.
+// SubstituteMap substitutes variables in all values of a string map.
+func (c *VarContext) SubstituteMap(m map[string]string) (map[string]string, error) {
+	result := make(map[string]string, len(m))
+	for k, v := range m {
+		substituted, err := c.Substitute(v)
+		if err != nil {
+			return nil, fmt.Errorf("key %q: %w", k, err)
+		}
+		result[k] = substituted
+	}
+	return result, nil
+}
+
+// SubstituteStep substitutes variables in all string fields of a Step.
 func (c *VarContext) SubstituteStep(step *Step) (*Step, error) {
-	// Create a copy
+	if step == nil {
+		return nil, nil
+	}
+
+	// Create a copy to avoid modifying the original
 	result := *step
 
 	var err error
 
+	// Substitute simple string fields
 	if result.Description != "" {
 		result.Description, err = c.Substitute(result.Description)
 		if err != nil {
-			return nil, fmt.Errorf("substitute description: %w", err)
+			return nil, fmt.Errorf("description: %w", err)
 		}
 	}
 
+	if result.Prompt != "" {
+		result.Prompt, err = c.Substitute(result.Prompt)
+		if err != nil {
+			return nil, fmt.Errorf("prompt: %w", err)
+		}
+	}
+
+	// Legacy instructions field
 	if result.Instructions != "" {
 		result.Instructions, err = c.Substitute(result.Instructions)
 		if err != nil {
-			return nil, fmt.Errorf("substitute instructions: %w", err)
-		}
-	}
-
-	if result.Code != "" {
-		result.Code, err = c.Substitute(result.Code)
-		if err != nil {
-			return nil, fmt.Errorf("substitute code: %w", err)
+			return nil, fmt.Errorf("instructions: %w", err)
 		}
 	}
 
 	if result.Condition != "" {
 		result.Condition, err = c.Substitute(result.Condition)
 		if err != nil {
-			return nil, fmt.Errorf("substitute condition: %w", err)
+			return nil, fmt.Errorf("condition: %w", err)
 		}
 	}
 
 	if result.Template != "" {
 		result.Template, err = c.Substitute(result.Template)
 		if err != nil {
-			return nil, fmt.Errorf("substitute template: %w", err)
+			return nil, fmt.Errorf("template: %w", err)
+		}
+	}
+
+	if result.Command != "" {
+		result.Command, err = c.Substitute(result.Command)
+		if err != nil {
+			return nil, fmt.Errorf("command: %w", err)
+		}
+	}
+
+	if result.Code != "" {
+		result.Code, err = c.Substitute(result.Code)
+		if err != nil {
+			return nil, fmt.Errorf("code: %w", err)
 		}
 	}
 
 	if result.Validation != "" {
 		result.Validation, err = c.Substitute(result.Validation)
 		if err != nil {
-			return nil, fmt.Errorf("substitute validation: %w", err)
+			return nil, fmt.Errorf("validation: %w", err)
 		}
 	}
 
 	if result.Timeout != "" {
 		result.Timeout, err = c.Substitute(result.Timeout)
 		if err != nil {
-			return nil, fmt.Errorf("substitute timeout: %w", err)
+			return nil, fmt.Errorf("timeout: %w", err)
 		}
 	}
 
-	if len(step.Variables) > 0 {
-		result.Variables, err = c.SubstituteMap(step.Variables)
+	// Substitute variables map
+	if len(result.Variables) > 0 {
+		result.Variables, err = c.SubstituteMap(result.Variables)
 		if err != nil {
-			return nil, fmt.Errorf("substitute variables: %w", err)
+			return nil, fmt.Errorf("variables: %w", err)
 		}
 	}
 
-	// Handle expansion targets
-	if step.OnTrue != nil {
-		result.OnTrue, err = c.substituteTarget(step.OnTrue)
+	// Substitute expansion targets
+	if result.OnTrue != nil {
+		result.OnTrue, err = c.substituteExpansionTarget(result.OnTrue, "on_true")
 		if err != nil {
-			return nil, fmt.Errorf("substitute on_true: %w", err)
+			return nil, err
 		}
 	}
 
-	if step.OnFalse != nil {
-		result.OnFalse, err = c.substituteTarget(step.OnFalse)
+	if result.OnFalse != nil {
+		result.OnFalse, err = c.substituteExpansionTarget(result.OnFalse, "on_false")
 		if err != nil {
-			return nil, fmt.Errorf("substitute on_false: %w", err)
+			return nil, err
 		}
 	}
 
-	if step.OnTimeout != nil {
-		result.OnTimeout, err = c.substituteTarget(step.OnTimeout)
+	if result.OnTimeout != nil {
+		result.OnTimeout, err = c.substituteExpansionTarget(result.OnTimeout, "on_timeout")
 		if err != nil {
-			return nil, fmt.Errorf("substitute on_timeout: %w", err)
+			return nil, err
 		}
 	}
 
 	return &result, nil
 }
 
-func (c *VarContext) substituteTarget(target *ExpansionTarget) (*ExpansionTarget, error) {
+// substituteExpansionTarget substitutes variables in an ExpansionTarget.
+func (c *VarContext) substituteExpansionTarget(target *ExpansionTarget, fieldName string) (*ExpansionTarget, error) {
+	if target == nil {
+		return nil, nil
+	}
+
 	result := *target
 	var err error
 
 	if result.Template != "" {
 		result.Template, err = c.Substitute(result.Template)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s.template: %w", fieldName, err)
 		}
 	}
 
-	if len(target.Variables) > 0 {
-		result.Variables, err = c.SubstituteMap(target.Variables)
+	if len(result.Variables) > 0 {
+		result.Variables, err = c.SubstituteMap(result.Variables)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s.variables: %w", fieldName, err)
 		}
 	}
 
 	return &result, nil
 }
 
-// ShellEscape escapes a string for safe use in shell commands.
-// It wraps the string in single quotes and escapes any internal single quotes
-// using the pattern 'text'"'"'more text' (end quote, double-quoted single quote, start quote).
+// ShellEscape wraps a string in single quotes for safe shell usage.
+// Any single quotes in the string are properly escaped using the '"'"' technique.
 func ShellEscape(s string) string {
-	// Single-quote the string and escape any single quotes within it.
-	// The pattern ''"'"' works as follows:
-	// ' - end the current single-quoted string
-	// "'" - a single quote in double quotes
-	// ' - start a new single-quoted string
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+	// Replace single quotes with '"'"' (end single quote, double-quote the single quote, start single quote)
+	escaped := strings.ReplaceAll(s, "'", "'\"'\"'")
+	return "'" + escaped + "'"
 }
 
-// SubstituteForShell replaces all {{...}} patterns in the input string with
-// shell-escaped values. Use this for shell commands where variable values
-// could contain special characters that would be interpreted by the shell.
-//
-// Unlike Substitute, this does NOT do recursive substitution. If a resolved
-// value contains {{...}}, it is treated as literal text (and shell-escaped),
-// not as another variable reference. This prevents unintended interpretation
-// of user-provided values as template syntax.
+// SubstituteForShell substitutes variables and shell-escapes the values.
+// This prevents command injection when variable values contain shell metacharacters.
+// Unlike Substitute, this does NOT do recursive substitution - values are escaped once.
 func (c *VarContext) SubstituteForShell(input string) (string, error) {
 	var lastErr error
 
@@ -433,11 +472,14 @@ func (c *VarContext) SubstituteForShell(input string) (string, error) {
 
 		value, err := c.resolve(path)
 		if err != nil {
+			if err == errDeferred {
+				return match
+			}
 			lastErr = err
-			return match // Keep original on error
+			return match
 		}
 
-		// Shell-escape the resolved value
+		// Shell-escape the value to prevent injection
 		return ShellEscape(fmt.Sprintf("%v", value))
 	})
 

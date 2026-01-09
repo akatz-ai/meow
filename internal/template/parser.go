@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -385,7 +386,9 @@ func (t *Template) Validate() error {
 		return fmt.Errorf("template must have at least one step")
 	}
 
+	// Track step IDs and which steps are expand steps
 	stepIDs := make(map[string]bool)
+	expandSteps := make(map[string]bool)
 	for i, step := range t.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step[%d]: id is required", i)
@@ -394,12 +397,24 @@ func (t *Template) Validate() error {
 			return fmt.Errorf("step[%d]: duplicate id %q", i, step.ID)
 		}
 		stepIDs[step.ID] = true
+		if step.Executor == ExecutorExpand {
+			expandSteps[step.ID] = true
+		}
 	}
 
 	// Validate dependencies reference existing steps
+	// Allow references to children of expand steps (e.g., "expand-step.child")
 	for i, step := range t.Steps {
 		for _, need := range step.Needs {
 			if !stepIDs[need] {
+				// Check if this references a child of an expand step
+				if dotIdx := strings.Index(need, "."); dotIdx > 0 {
+					prefix := need[:dotIdx]
+					if expandSteps[prefix] {
+						// This references a child of an expand step - allowed
+						continue
+					}
+				}
 				return fmt.Errorf("step[%d] %q: needs references unknown step %q", i, step.ID, need)
 			}
 		}
