@@ -27,13 +27,11 @@ type Module struct {
 
 // Workflow represents a single workflow within a module.
 type Workflow struct {
-	Name        string           `toml:"name"`
-	Description string           `toml:"description,omitempty"`
-	Ephemeral   bool             `toml:"ephemeral,omitempty"`   // All steps become wisps
-	Internal    bool             `toml:"internal,omitempty"`    // Cannot be called from outside
-	HooksTo     string           `toml:"hooks_to,omitempty"`    // Variable name for HookBead
-	Variables   map[string]*Var  `toml:"variables,omitempty"`   // Reuses template.Var
-	Steps       []*Step          `toml:"steps"`
+	Name        string          `toml:"name"`
+	Description string          `toml:"description,omitempty"`
+	Internal    bool            `toml:"internal,omitempty"` // Cannot be called from outside
+	Variables   map[string]*Var `toml:"variables,omitempty"`
+	Steps       []*Step         `toml:"steps"`
 }
 
 // GetWorkflow returns the workflow with the given name, or nil if not found.
@@ -136,15 +134,11 @@ func parseWorkflow(name string, data map[string]any) (*Workflow, error) {
 	if v, ok := data["description"].(string); ok {
 		w.Description = v
 	}
-	if v, ok := data["ephemeral"].(bool); ok {
-		w.Ephemeral = v
-	}
 	if v, ok := data["internal"].(bool); ok {
 		w.Internal = v
 	}
-	if v, ok := data["hooks_to"].(string); ok {
-		w.HooksTo = v
-	}
+	// Note: ephemeral and hooks_to are no longer supported
+	// They are ignored if present in templates for backwards compatibility
 
 	// Parse variables
 	if vars, ok := data["variables"].(map[string]any); ok {
@@ -834,9 +828,6 @@ func ValidateFullModule(m *Module) *ModuleValidationResult {
 	// Validate cross-workflow references
 	validateLocalReferences(m, result)
 
-	// Validate hooks_to references
-	validateHooksTo(m, result)
-
 	return result
 }
 
@@ -992,38 +983,6 @@ func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *M
 		}
 	}
 }
-
-// validateHooksTo checks that hooks_to references a defined variable.
-func validateHooksTo(m *Module, result *ModuleValidationResult) {
-	for workflowName, w := range m.Workflows {
-		if w.HooksTo == "" {
-			continue
-		}
-
-		// hooks_to should reference a variable defined in this workflow
-		if w.Variables == nil {
-			result.Add(workflowName, "", "hooks_to",
-				fmt.Sprintf("hooks_to references variable %q but no variables are defined", w.HooksTo),
-				fmt.Sprintf("define [%s.variables.%s]", workflowName, w.HooksTo))
-			continue
-		}
-
-		if _, exists := w.Variables[w.HooksTo]; !exists {
-			var varNames []string
-			for name := range w.Variables {
-				varNames = append(varNames, name)
-			}
-			suggest := ""
-			if len(varNames) > 0 {
-				suggest = fmt.Sprintf("defined variables: %s", strings.Join(varNames, ", "))
-			}
-			result.Add(workflowName, "", "hooks_to",
-				fmt.Sprintf("hooks_to references undefined variable %q", w.HooksTo),
-				suggest)
-		}
-	}
-}
-
 // validateModuleVariableReferences checks that all variable references in a workflow are defined.
 func validateModuleVariableReferences(m *Module, workflowName string, w *Workflow, result *ModuleValidationResult) {
 	// Collect all defined variables
@@ -1139,10 +1098,9 @@ func validateModuleTypeSpecific(workflowName string, w *Workflow, result *Module
 			}
 
 		case "task", "collaborative":
-			// Task and collaborative need an assignee (often a variable)
-			// This is a soft check - might be inherited or set at bake time
-			// So we only warn if it's empty and not in an ephemeral workflow
-			// Actually, don't enforce this - it can be set at bake time
+			// Task and collaborative steps may need an assignee
+			// This is a soft check - assignee can be set at bake time
+			// so we don't enforce it during template parsing
 
 		case "expand":
 			// Expand steps need a template

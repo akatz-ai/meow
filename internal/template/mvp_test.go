@@ -90,27 +90,21 @@ needs = ["implement"]
 		if main.Name != "work-loop" {
 			t.Errorf("expected main name 'work-loop', got %q", main.Name)
 		}
-		if main.Ephemeral {
-			t.Error("main should not be ephemeral")
-		}
 
-		// Implement workflow should be ephemeral
+		// Implement workflow should be internal
+		// Note: ephemeral and hooks_to are no longer supported at workflow level
 		impl := module.GetWorkflow("implement")
 		if impl == nil {
 			t.Fatal("implement workflow not found")
 		}
-		if !impl.Ephemeral {
-			t.Error("implement should be ephemeral")
-		}
 		if !impl.Internal {
 			t.Error("implement should be internal")
 		}
-		if impl.HooksTo != "work_bead" {
-			t.Errorf("expected hooks_to 'work_bead', got %q", impl.HooksTo)
-		}
 	})
 
-	t.Run("BakeEphemeralWorkflowAsWisps", func(t *testing.T) {
+	t.Run("BakeWorkflowSteps", func(t *testing.T) {
+		// Note: workflow.Ephemeral and hooks_to are no longer supported
+		// Steps are TierWork unless step.Ephemeral is set
 		module, err := ParseModuleString(moduleToml, "test.meow.toml")
 		if err != nil {
 			t.Fatalf("ParseModuleString failed: %v", err)
@@ -140,17 +134,17 @@ needs = ["implement"]
 			t.Errorf("expected 4 beads, got %d", len(result.Beads))
 		}
 
-		// All should be wisps (ephemeral workflow)
+		// All should be TierWork (since step.Ephemeral is not set)
 		for _, bead := range result.Beads {
-			if bead.Tier != types.TierWisp {
-				t.Errorf("bead %s: expected tier wisp, got %s", bead.ID, bead.Tier)
+			if bead.Tier != types.TierWork {
+				t.Errorf("bead %s: expected tier work, got %s", bead.ID, bead.Tier)
 			}
 		}
 
-		// All should link to the work bead via HookBead
+		// HookBead should be empty (hooks_to is no longer supported)
 		for _, bead := range result.Beads {
-			if bead.HookBead != "bd-task-456" {
-				t.Errorf("bead %s: expected HookBead 'bd-task-456', got %q", bead.ID, bead.HookBead)
+			if bead.HookBead != "" {
+				t.Errorf("bead %s: expected empty HookBead, got %q", bead.ID, bead.HookBead)
 			}
 		}
 
@@ -214,11 +208,11 @@ needs = ["implement"]
 	})
 
 	t.Run("TierDetectionByStepType", func(t *testing.T) {
-		// Test that orchestrator types get orchestrator tier even in ephemeral workflow
+		// Test that orchestrator types get orchestrator tier and tasks get work tier
+		// Note: workflow.Ephemeral is no longer supported; use step.Ephemeral instead
 		orchestratorModule := `
 [main]
 name = "with-orchestrator"
-ephemeral = true
 
 [[main.steps]]
 id = "check-ready"
@@ -245,7 +239,7 @@ title = "Do work"
 		}
 
 		// condition should be orchestrator tier
-		// task in ephemeral workflow should be wisp tier
+		// task should be work tier (since step.Ephemeral is not set)
 		for _, bead := range result.Beads {
 			switch bead.Type {
 			case types.BeadTypeCondition:
@@ -253,8 +247,8 @@ title = "Do work"
 					t.Errorf("condition bead: expected tier orchestrator, got %s", bead.Tier)
 				}
 			case types.BeadTypeTask:
-				if bead.Tier != types.TierWisp {
-					t.Errorf("task bead: expected tier wisp (in ephemeral workflow), got %s", bead.Tier)
+				if bead.Tier != types.TierWork {
+					t.Errorf("task bead: expected tier work, got %s", bead.Tier)
 				}
 			}
 		}
@@ -567,6 +561,8 @@ type = "task"
 }
 
 func TestParseModuleString_WorkflowAllFields(t *testing.T) {
+	// Note: ephemeral and hooks_to are no longer supported at workflow level
+	// They are ignored if present in templates for backwards compatibility
 	moduleToml := `
 [main]
 name = "full-workflow"
@@ -591,14 +587,9 @@ type = "task"
 	if main.Description != "A complete workflow" {
 		t.Errorf("expected description, got %q", main.Description)
 	}
-	if !main.Ephemeral {
-		t.Error("expected ephemeral to be true")
-	}
+	// ephemeral and hooks_to are ignored - not tested
 	if !main.Internal {
 		t.Error("expected internal to be true")
-	}
-	if main.HooksTo != "parent_bead" {
-		t.Errorf("expected hooks_to, got %q", main.HooksTo)
 	}
 
 	// Check variable parsing
