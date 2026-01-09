@@ -103,6 +103,7 @@ type ShellConfig struct {
 // SpawnConfig for executor: spawn
 type SpawnConfig struct {
 	Agent         string            `yaml:"agent" toml:"agent"`
+	Adapter       string            `yaml:"adapter,omitempty" toml:"adapter,omitempty"` // Which adapter to use (defaults to config hierarchy)
 	Workdir       string            `yaml:"workdir,omitempty" toml:"workdir,omitempty"`
 	Env           map[string]string `yaml:"env,omitempty" toml:"env,omitempty"`
 	ResumeSession string            `yaml:"resume_session,omitempty" toml:"resume_session,omitempty"`
