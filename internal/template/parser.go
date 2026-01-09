@@ -60,15 +60,17 @@ const (
 	ExecutorExpand ExecutorType = "expand"
 	ExecutorBranch ExecutorType = "branch"
 	ExecutorAgent  ExecutorType = "agent"
-	ExecutorGate   ExecutorType = "gate"
+	// Note: Gate is NOT an executor. Human approval is implemented via
+	// branch executor with condition = "meow await-approval <gate-id>"
 )
 
 // Valid returns true if the executor type is valid.
+// Note: Empty executor is allowed during template migration period.
 func (e ExecutorType) Valid() bool {
 	switch e {
-	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorAgent, ExecutorGate:
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorAgent:
 		return true
-	case "": // Allow empty for backwards compatibility during transition
+	case "": // Allow empty during migration - templates use type field
 		return true
 	}
 	return false
@@ -98,7 +100,7 @@ type AgentOutputDef struct {
 // Step represents a single step in a template.
 type Step struct {
 	ID       string       `toml:"id"`
-	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent | gate
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent
 
 	// Shared fields
 	Needs   []string          `toml:"needs,omitempty"` // Step IDs that must complete first
@@ -138,8 +140,9 @@ type Step struct {
 	// Agent output definitions (for agent executor)
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
 
-	// === Legacy fields (for backwards compatibility during transition) ===
-	// These will be removed once all templates are migrated
+	// === Legacy fields - MIGRATION REQUIRED ===
+	// TODO: Migrate existing templates to use executor/prompt/command fields,
+	// then remove these fields. See .meow/templates/*.toml for templates to migrate.
 
 	Type         string          `toml:"type,omitempty"`         // DEPRECATED: use executor
 	Title        string          `toml:"title,omitempty"`        // Human-readable title
@@ -195,10 +198,6 @@ func (s *Step) Validate() error {
 		}
 		if s.Prompt == "" {
 			return fmt.Errorf("agent executor requires prompt")
-		}
-	case ExecutorGate:
-		if s.Prompt == "" {
-			return fmt.Errorf("gate executor requires prompt")
 		}
 	}
 
@@ -277,7 +276,7 @@ type ExpansionTarget struct {
 // It mirrors the Step struct to ensure all fields are preserved when parsing inline steps.
 type InlineStep struct {
 	ID       string       `toml:"id"`
-	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent | gate
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent
 
 	// Shared fields
 	Needs   []string `toml:"needs,omitempty"`
@@ -314,7 +313,7 @@ type InlineStep struct {
 	// Agent outputs
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
 
-	// === Legacy fields ===
+	// === Legacy fields - MIGRATION REQUIRED ===
 	Type         string          `toml:"type,omitempty"`
 	Title        string          `toml:"title,omitempty"`
 	Description  string          `toml:"description,omitempty"`

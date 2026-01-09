@@ -847,8 +847,7 @@ func TestExecutorType_Valid(t *testing.T) {
 		{ExecutorExpand, true},
 		{ExecutorBranch, true},
 		{ExecutorAgent, true},
-		{ExecutorGate, true},
-		{"", true},           // Empty allowed for backwards compatibility
+		{"", true},           // Empty allowed during migration
 		{"invalid", false},
 		{"task", false},      // Old type, not valid executor
 	}
@@ -867,7 +866,7 @@ func TestExecutorType_IsOrchestrator(t *testing.T) {
 		ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch,
 	}
 	externalExecutors := []ExecutorType{
-		ExecutorAgent, ExecutorGate, "",
+		ExecutorAgent, "",
 	}
 
 	for _, e := range orchestratorExecutors {
@@ -1139,46 +1138,8 @@ func TestStep_Validate_Agent(t *testing.T) {
 	}
 }
 
-func TestStep_Validate_Gate(t *testing.T) {
-	tests := []struct {
-		name    string
-		step    Step
-		wantErr string
-	}{
-		{
-			name: "valid gate step",
-			step: Step{
-				ID:       "review-gate",
-				Executor: ExecutorGate,
-				Prompt:   "Review the implementation",
-			},
-			wantErr: "",
-		},
-		{
-			name: "gate without prompt",
-			step: Step{
-				ID:       "missing-prompt",
-				Executor: ExecutorGate,
-			},
-			wantErr: "gate executor requires prompt",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.step.Validate()
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-			} else {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
-				}
-			}
-		})
-	}
-}
+// Note: Gate is NOT an executor. Human approval is implemented via
+// branch executor with condition = "meow await-approval <gate-id>"
 
 func TestStep_Validate_Mode(t *testing.T) {
 	tests := []struct {
