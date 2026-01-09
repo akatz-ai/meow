@@ -403,3 +403,43 @@ func (c *VarContext) substituteTarget(target *ExpansionTarget) (*ExpansionTarget
 
 	return &result, nil
 }
+
+// ShellEscape escapes a string for safe use in shell commands.
+// It wraps the string in single quotes and escapes any internal single quotes
+// using the pattern 'text'"'"'more text' (end quote, double-quoted single quote, start quote).
+func ShellEscape(s string) string {
+	// Single-quote the string and escape any single quotes within it.
+	// The pattern ''"'"' works as follows:
+	// ' - end the current single-quoted string
+	// "'" - a single quote in double quotes
+	// ' - start a new single-quoted string
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+// SubstituteForShell replaces all {{...}} patterns in the input string with
+// shell-escaped values. Use this for shell commands where variable values
+// could contain special characters that would be interpreted by the shell.
+//
+// Unlike Substitute, this does NOT do recursive substitution. If a resolved
+// value contains {{...}}, it is treated as literal text (and shell-escaped),
+// not as another variable reference. This prevents unintended interpretation
+// of user-provided values as template syntax.
+func (c *VarContext) SubstituteForShell(input string) (string, error) {
+	var lastErr error
+
+	result := varPattern.ReplaceAllStringFunc(input, func(match string) string {
+		// Extract the variable path (remove {{ and }})
+		path := strings.TrimSpace(match[2 : len(match)-2])
+
+		value, err := c.resolve(path)
+		if err != nil {
+			lastErr = err
+			return match // Keep original on error
+		}
+
+		// Shell-escape the resolved value
+		return ShellEscape(fmt.Sprintf("%v", value))
+	})
+
+	return result, lastErr
+}
