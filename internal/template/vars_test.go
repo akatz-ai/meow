@@ -1053,3 +1053,190 @@ func TestVarContext_BeadLookup_WithoutLookupFuncFallsBackToError(t *testing.T) {
 		t.Errorf("expected 'no outputs' error, got: %v", err)
 	}
 }
+
+// Shell Escaping Tests (meow-306)
+
+func TestShellEscape(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple string",
+			input:    "hello world",
+			expected: "'hello world'",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "''",
+		},
+		{
+			name:     "single quote inside",
+			input:    "it's a test",
+			expected: "'it'\"'\"'s a test'",
+		},
+		{
+			name:     "multiple single quotes",
+			input:    "don't won't can't",
+			expected: "'don'\"'\"'t won'\"'\"'t can'\"'\"'t'",
+		},
+		{
+			name:     "command injection semicolon",
+			input:    "value; rm -rf /",
+			expected: "'value; rm -rf /'",
+		},
+		{
+			name:     "command injection pipe",
+			input:    "value | cat /etc/passwd",
+			expected: "'value | cat /etc/passwd'",
+		},
+		{
+			name:     "backticks",
+			input:    "hello `whoami`",
+			expected: "'hello `whoami`'",
+		},
+		{
+			name:     "dollar subshell",
+			input:    "hello $(whoami)",
+			expected: "'hello $(whoami)'",
+		},
+		{
+			name:     "dollar variable",
+			input:    "path is $PATH",
+			expected: "'path is $PATH'",
+		},
+		{
+			name:     "double quotes",
+			input:    `say "hello"`,
+			expected: `'say "hello"'`,
+		},
+		{
+			name:     "newlines",
+			input:    "line1\nline2",
+			expected: "'line1\nline2'",
+		},
+		{
+			name:     "ampersand",
+			input:    "cmd1 && cmd2",
+			expected: "'cmd1 && cmd2'",
+		},
+		{
+			name:     "redirect",
+			input:    "echo foo > /tmp/file",
+			expected: "'echo foo > /tmp/file'",
+		},
+		{
+			name:     "complex injection",
+			input:    "'; DROP TABLE users; --",
+			expected: "''\"'\"'; DROP TABLE users; --'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ShellEscape(tt.input)
+			if result != tt.expected {
+				t.Errorf("ShellEscape(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestVarContext_SubstituteForShell(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("safe_name", "simple")
+	ctx.SetVariable("dangerous_name", "value; rm -rf /")
+	ctx.SetVariable("quote_name", "it's mine")
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "safe value substitution",
+			input:    "echo {{safe_name}}",
+			expected: "echo 'simple'",
+		},
+		{
+			name:     "dangerous value gets escaped",
+			input:    "echo {{dangerous_name}}",
+			expected: "echo 'value; rm -rf /'",
+		},
+		{
+			name:     "quote in value gets escaped",
+			input:    "echo {{quote_name}}",
+			expected: "echo 'it'\"'\"'s mine'",
+		},
+		{
+			name:     "multiple substitutions",
+			input:    "echo {{safe_name}} {{dangerous_name}}",
+			expected: "echo 'simple' 'value; rm -rf /'",
+		},
+		{
+			name:     "no substitutions",
+			input:    "echo hello",
+			expected: "echo hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ctx.SubstituteForShell(tt.input)
+			if err != nil {
+				t.Fatalf("SubstituteForShell failed: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("SubstituteForShell(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestVarContext_SubstituteForShell_Errors(t *testing.T) {
+	ctx := NewVarContext()
+
+	_, err := ctx.SubstituteForShell("echo {{undefined}}")
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("expected error about undefined, got: %v", err)
+	}
+}
+
+func TestVarContext_SubstituteForShell_NestedValues(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetOutput("build-step", "path", "/tmp/build; rm -rf /")
+
+	result, err := ctx.SubstituteForShell("cd {{build-step.outputs.path}}")
+	if err != nil {
+		t.Fatalf("SubstituteForShell failed: %v", err)
+	}
+
+	expected := "cd '/tmp/build; rm -rf /'"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestVarContext_SubstituteForShell_NoRecursiveSubstitution(t *testing.T) {
+	ctx := NewVarContext()
+	// Set a variable whose value looks like a template reference
+	ctx.SetVariable("user_input", "{{malicious}}")
+	ctx.SetVariable("malicious", "SHOULD_NOT_APPEAR")
+
+	result, err := ctx.SubstituteForShell("echo {{user_input}}")
+	if err != nil {
+		t.Fatalf("SubstituteForShell failed: %v", err)
+	}
+
+	// The {{malicious}} in the value should be treated as literal text,
+	// not interpreted as another variable reference
+	expected := "echo '{{malicious}}'"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
