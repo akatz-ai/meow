@@ -137,7 +137,7 @@ No SQLite. No lock files. Just files.
 
 > **Complex behaviors emerge from simple primitives composed together.**
 
-MEOW has one primitive (Step) with six executors. Loops, conditionals, parallel execution, human gates, agent handoffs—all emerge from composing these simple building blocks.
+MEOW has one primitive (Step) with seven executors. Loops, conditionals, parallel execution, human gates, agent handoffs, dynamic iteration—all emerge from composing these simple building blocks.
 
 ---
 
@@ -197,11 +197,47 @@ A step is **ready** when:
 
 The orchestrator processes ready steps in order, prioritizing orchestrator executors over agent executors.
 
+### Wildcard Dependencies
+
+The `needs` field supports wildcard patterns for dynamic dependencies, particularly useful with `foreach` expansions:
+
+```yaml
+# Wait for all steps matching a pattern
+needs: ["parallel-workers.*"]              # All direct children of parallel-workers
+needs: ["parallel-workers.*.implement"]    # Only 'implement' steps from each iteration
+needs: ["feature-*.test"]                  # All test steps from feature branches
+```
+
+**Pattern Syntax:**
+- `*` matches any single path segment (like glob)
+- Patterns are evaluated at runtime against existing step IDs
+- If no steps match the pattern, the dependency is considered satisfied (empty set)
+
+**Use Cases:**
+
+```yaml
+# Wait for all foreach iterations to complete their 'build' step
+[[steps]]
+id = "run-integration-tests"
+executor = "shell"
+command = "npm run test:integration"
+needs = ["parallel-builds.*.build"]  # Wait for build step in each iteration
+
+# Wait for any step that starts with 'validate-'
+[[steps]]
+id = "final-report"
+executor = "agent"
+prompt = "Generate a summary of all validation results"
+needs = ["validate-*"]  # Matches validate-frontend, validate-backend, etc.
+```
+
+**Note:** For most `foreach` use cases, you don't need wildcard patterns—the implicit join means you can simply `need` the foreach step itself. Wildcard patterns are useful when you need finer control, such as waiting for a specific step within each iteration rather than all steps.
+
 ---
 
 ## Executors
 
-Executors determine **who** runs a step and **how**. There are six executors in two categories:
+Executors determine **who** runs a step and **how**. There are seven executors in two categories:
 
 ### Orchestrator Executors
 
@@ -214,6 +250,7 @@ These run internally—the orchestrator handles them without external interactio
 | `kill` | Stop an agent process | Agent session is terminated |
 | `expand` | Inline another workflow | Expanded steps are inserted |
 | `branch` | Conditional expansion | Branch is evaluated and expanded |
+| `foreach` | Iterate over a list | All iterations complete (implicit join) |
 
 ### External Executors
 
@@ -560,6 +597,147 @@ This handles common stuck scenarios like hung tools or infinite loops.
 7. Validate outputs against definitions
 8. If valid: mark step `done` with outputs, proceed to next step
 9. If invalid: return error to agent, keep step `running`, agent retries
+
+---
+
+### `foreach` — Iterate Over a List
+
+Dynamically expand a template for each item in a list, with built-in parallel execution and implicit join semantics.
+
+```yaml
+id: "parallel-workers"
+executor: "foreach"
+items: "{{planner.outputs.tasks}}"   # JSON array to iterate over
+item_var: "task"                      # Variable name for current item
+index_var: "i"                        # Optional: variable name for index
+
+template: ".worker-task"              # Template to expand for each item
+variables:
+  agent_id: "worker-{{i}}"
+  task_description: "{{task.description}}"
+  task_files: "{{task.files}}"
+
+parallel: true                        # Run iterations in parallel (default: true)
+max_concurrent: 5                     # Optional: limit concurrent executions
+join: true                            # Wait for all iterations (default: true)
+```
+
+**Fields:**
+- `items` (required): JSON array expression to iterate over
+- `item_var` (required): Variable name that holds the current item in each iteration
+- `index_var` (optional): Variable name for the 0-based iteration index
+- `template` (required): Template reference to expand for each item
+- `variables` (optional): Variables to pass to each expansion (can reference `item_var` and `index_var`)
+- `parallel` (optional): Run iterations in parallel (default: `true`)
+- `max_concurrent` (optional): Maximum concurrent iterations (only applies when `parallel: true`)
+- `join` (optional): Wait for all iterations to complete before marking foreach as done (default: `true`)
+
+**Child Step Naming:**
+Child steps are prefixed with the foreach step ID and the iteration index:
+```yaml
+# After foreach "parallel-workers" expands over 3 items:
+steps:
+  parallel-workers:
+    status: done  # or running if join: true and children still running
+    expanded_into: ["parallel-workers.0", "parallel-workers.1", "parallel-workers.2"]
+
+  parallel-workers.0.create-worktree:
+    status: done
+    expanded_from: parallel-workers
+    # ...
+
+  parallel-workers.0.implement:
+    status: running
+    # ...
+
+  parallel-workers.1.create-worktree:
+    status: done
+    # ...
+```
+
+**Orchestrator Behavior:**
+1. Evaluate `items` expression to get JSON array
+2. For each item in array:
+   a. Set `item_var` to current item
+   b. Set `index_var` to current index (if specified)
+   c. Substitute variables
+   d. Expand template with prefixed step IDs (`{foreach_id}.{index}.{step_id}`)
+3. If `parallel: false`, chain iterations sequentially (each depends on previous)
+4. If `join: true` (default): foreach step stays `running` until all child steps complete
+5. If `join: false`: foreach step marked `done` after expansion, children run independently
+
+**Implicit Join Semantics:**
+By default (`join: true`), the foreach step acts as a synchronization barrier:
+- The foreach step is not marked `done` until ALL child steps are `done`
+- Downstream steps that `need` the foreach step automatically wait for all iterations
+- This eliminates the need for explicit join steps in most cases
+
+```yaml
+[[steps]]
+id = "parallel-workers"
+executor = "foreach"
+items = "{{tasks}}"
+template = ".worker-task"
+# join: true is the default
+
+[[steps]]
+id = "merge-all"
+executor = "agent"
+prompt = "All workers complete. Merge the branches."
+needs = ["parallel-workers"]  # Waits for ALL iterations due to implicit join
+```
+
+**Disabling Implicit Join:**
+Set `join: false` when you want iterations to run independently without blocking:
+
+```yaml
+[[steps]]
+id = "fire-and-forget"
+executor = "foreach"
+items = "{{notifications}}"
+template = ".send-notification"
+join = false  # Don't wait for notifications to complete
+
+[[steps]]
+id = "continue-work"
+executor = "agent"
+prompt = "Continue with main task..."
+needs = ["fire-and-forget"]  # Proceeds immediately after expansion
+```
+
+**Sequential Iteration:**
+For ordered processing where each iteration depends on the previous:
+
+```yaml
+[[steps]]
+id = "sequential-migrations"
+executor = "foreach"
+items = "{{migrations}}"
+item_var = "migration"
+template = ".run-migration"
+parallel = false  # Each migration runs after the previous completes
+```
+
+**Concurrency Limiting:**
+Control resource usage with `max_concurrent`:
+
+```yaml
+[[steps]]
+id = "parallel-tests"
+executor = "foreach"
+items = "{{test_suites}}"
+template = ".run-test-suite"
+max_concurrent = 3  # At most 3 test suites running at once
+```
+
+The orchestrator will start up to `max_concurrent` iterations, then wait for one to complete before starting the next.
+
+**Error Handling in foreach:**
+If any child step fails:
+- With `join: true`: The foreach step fails when the child fails (unless child has `on_error`)
+- With `join: false`: Child failure doesn't affect the foreach step (it's already done)
+
+Individual iteration failures can be handled via `on_error` in the expanded template.
 
 ---
 
@@ -2608,6 +2786,7 @@ steps:
   my-step:
     status: failed
     error:
+      type: "command_failed"          # Error classification
       message: "Command exited with code 1"
       code: 1
       output: "npm ERR! ..."
@@ -2615,42 +2794,224 @@ steps:
 
 ### On-Error Handling
 
-For `shell` executor:
+The `on_error` field controls what happens when a step fails. It accepts three types of values:
+
+| Value | Behavior |
+|-------|----------|
+| `"fail"` (default) | Workflow fails immediately |
+| `"continue"` | Log error, skip step, continue to next |
+| `".template-ref"` | Expand recovery template with error context |
+
+**Simple modes:**
 
 ```yaml
-id = "risky-command"
+# Fail workflow on error (default)
+id = "critical-step"
 executor = "shell"
 command = "npm test"
-on_error = "continue"  # continue | fail (default: fail)
+on_error = "fail"
+
+# Continue on error (for optional steps)
+id = "optional-notification"
+executor = "shell"
+command = "curl https://slack.com/webhook/..."
+on_error = "continue"
 ```
 
-### Agent Step Errors
+**Template-based recovery:**
 
-If `meow done` fails validation:
+```yaml
+id = "implement-feature"
+executor = "agent"
+agent = "worker"
+prompt = "Implement feature X"
+timeout = "2h"
+on_error = ".impl-recovery"  # Expand this template on failure
+```
+
+When a step fails and `on_error` references a template:
+1. Step is marked `failed`
+2. Error context is captured in `_failed_step` variables
+3. Recovery template is expanded
+4. Workflow continues from the recovery template
+
+### Recovery Context (`_failed_step`)
+
+When a recovery template is expanded, these variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `_failed_step.id` | ID of the step that failed |
+| `_failed_step.executor` | Executor type (`agent`, `shell`, etc.) |
+| `_failed_step.error_type` | Error classification (see below) |
+| `_failed_step.error_message` | Human-readable error description |
+| `_failed_step.started_at` | When the step started |
+| `_failed_step.duration` | How long the step ran |
+| `_failed_step.retries` | Number of recovery attempts so far |
+| `_failed_step.agent` | Agent ID (for agent steps) |
+| `_failed_step.prompt` | Original prompt (for agent steps) |
+
+**Recovery template example:**
+
+```toml
+# Retry with escalation after 3 failures
+[impl-recovery]
+internal = true
+
+[[impl-recovery.steps]]
+id = "check-retries"
+executor = "branch"
+condition = "test {{_failed_step.retries}} -lt 3"
+
+[impl-recovery.steps.on_true]
+template = ".retry-implementation"
+
+[impl-recovery.steps.on_false]
+template = ".escalate-to-human"
+
+
+[retry-implementation]
+internal = true
+
+[[retry-implementation.steps]]
+id = "kill-stuck-agent"
+executor = "kill"
+agent = "{{_failed_step.agent}}"
+
+[[retry-implementation.steps]]
+id = "spawn-fresh"
+executor = "spawn"
+agent = "retry-{{_failed_step.retries}}"
+workdir = "{{worktree}}"
+needs = ["kill-stuck-agent"]
+
+[[retry-implementation.steps]]
+id = "retry"
+executor = "agent"
+agent = "retry-{{_failed_step.retries}}"
+prompt = """
+Previous attempt failed: {{_failed_step.error_message}}
+
+Please try again with a simpler approach:
+{{_failed_step.prompt}}
+"""
+timeout = "2h"
+needs = ["spawn-fresh"]
+
+
+[escalate-to-human]
+internal = true
+
+[[escalate-to-human.steps]]
+id = "notify"
+executor = "shell"
+command = """
+echo "Task failed after {{_failed_step.retries}} retries"
+echo "Error: {{_failed_step.error_message}}"
+echo "Approve to skip: meow approve {{workflow_id}} skip-gate"
+"""
+
+[[escalate-to-human.steps]]
+id = "skip-gate"
+executor = "branch"
+condition = "meow await-approval skip-gate --timeout 24h"
+needs = ["notify"]
+
+[escalate-to-human.steps.on_true]
+inline = []  # Human approved, continue workflow
+
+[escalate-to-human.steps.on_false]
+inline = [
+  { id = "abort", executor = "shell", command = "exit 1", on_error = "fail" }
+]
+```
+
+### Error Types by Executor
+
+Each executor can produce specific error types:
+
+**Agent Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `timeout` | Step duration exceeded `timeout` limit |
+| `agent_not_found` | Agent's tmux session doesn't exist |
+| `agent_crashed` | Agent's tmux session died during execution |
+
+**Shell Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `command_failed` | Command exited with non-zero code |
+| `timeout` | Command exceeded timeout (if specified) |
+
+**Spawn Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `spawn_failed` | tmux session creation failed, command failed to start, or workdir doesn't exist |
+
+**Kill Executor:**
+The `kill` executor is **idempotent**—killing a non-existent session succeeds. This matches the goal: "ensure agent is not running."
+
+**Expand Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `template_not_found` | Referenced template doesn't exist |
+| `expansion_limit` | Max expansion depth or step count exceeded |
+
+**Branch Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `condition_error` | Condition command crashed (not just returned false) |
+| `expansion_limit` | Branch expansion exceeded limits |
+
+**Foreach Executor:**
+| Error Type | Cause |
+|------------|-------|
+| `invalid_items` | Items expression didn't evaluate to a JSON array |
+| `expansion_limit` | Max expansion depth or step count exceeded |
+| `child_failed` | A child step failed (with `join: true`) |
+
+### Agent Step Errors (Validation vs Failure)
+
+**Output validation failures are NOT step failures.** When an agent calls `meow done` with invalid outputs:
+
 1. Error message returned to agent
-2. Step remains `running`
+2. Step remains `running` (not failed!)
 3. Agent sees error and should retry
 4. If agent stops, stop hook fires
 5. `meow prime` re-injects current prompt
 6. Agent continues naturally (Ralph Wiggum loop)
+
+The step only fails on:
+- **Timeout**: External time limit reached
+- **Agent crash**: tmux session died
+- **Agent not found**: tmux session doesn't exist
+
+This preserves the Ralph Wiggum loop—agents can't give up on validation, they must keep trying until they succeed or timeout.
 
 ### Agent Step Timeout
 
 If an agent step exceeds its `timeout`:
 1. Orchestrator sends C-c to agent's tmux session
 2. Waits 10 seconds for graceful stop
-3. Step marked `failed` with "Step timed out" error
-4. Workflow continues based on `on_error` (default: fail)
+3. Step marked `failed` with `error_type: timeout`
+4. If `on_error` is a template, expand it
+5. Otherwise, workflow continues based on `on_error` setting
 
 ### Workflow Failure
 
-When a step fails and `on_error` is `fail`:
+When a step fails and `on_error` is `"fail"`:
 1. Workflow status becomes `failed`
 2. No more steps are executed
 3. Cleanup runs (kills agents, runs cleanup script)
 4. Human intervention required (fix and resume, or abandon)
 
+### Recovery Depth Limit
+
+Recovery templates can themselves have `on_error` handlers, enabling nested recovery. To prevent infinite recovery loops, there's a maximum recovery depth (default: 3). If recovery keeps failing beyond this depth, the workflow fails.
+
 ### Retry Support (Future)
+
+Built-in retry with backoff may be added as syntactic sugar:
 
 ```yaml
 id = "flaky-step"
@@ -2660,7 +3021,10 @@ retry:
   max_attempts: 3
   delay: "10s"
   backoff: "exponential"
+on_error = ".handle-final-failure"  # After all retries exhausted
 ```
+
+Until then, retry logic can be implemented via recovery templates as shown above.
 
 ---
 
@@ -2827,7 +3191,7 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 
 - [ ] Crash recovery (resume workflows)
 - [ ] Output validation (all types)
-- [ ] Error handling (on_error modes)
+- [ ] Error handling (`on_error` modes: fail, continue)
 - [ ] `completing` state handling with guards
 - [ ] Atomic file writes (write-then-rename)
 - [ ] Partial expansion recovery
@@ -2836,6 +3200,7 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 - [ ] Workflow cleanup hook
 - [ ] Signal handling (SIGINT/SIGTERM)
 - [ ] Agent step timeouts
+- [ ] Error type classification per executor
 
 ### Phase 4: Multi-Agent
 
@@ -2862,7 +3227,27 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 - [ ] `meow step-status` command for event loops
 - [ ] Event translator script pattern documentation
 
-### Phase 7: Developer Experience
+### Phase 7: Dynamic Iteration
+
+- [ ] `foreach` executor
+- [ ] Items expression evaluation (JSON arrays)
+- [ ] `item_var` and `index_var` substitution
+- [ ] Parallel iteration with `max_concurrent` limiting
+- [ ] Sequential iteration (`parallel: false`)
+- [ ] Implicit join semantics (`join: true` default)
+- [ ] `join: false` fire-and-forget mode
+- [ ] Child step ID prefixing (`foreach-id.index.step-id`)
+- [ ] Wildcard patterns in `needs` field
+
+### Phase 8: Advanced Error Handling
+
+- [ ] Template-based `on_error` recovery
+- [ ] `_failed_step` context variables
+- [ ] Recovery depth limiting
+- [ ] Error type propagation to recovery templates
+- [ ] Retry count tracking across recovery attempts
+
+### Phase 9: Developer Experience
 
 - [ ] `meow run --resume` for workflow continuation
 - [ ] Template validation command
@@ -2964,7 +3349,7 @@ Worktrees are created via `shell` steps because:
 - Established in the ecosystem
 - Distinct from state files (YAML)
 
-### Why Six Executors?
+### Why Seven Executors?
 
 This is the minimal set that enables all coordination patterns:
 
@@ -2973,13 +3358,17 @@ This is the minimal set that enables all coordination patterns:
 | Sequential work | `agent` with `needs` |
 | Conditional | `branch` |
 | Loops | `branch` + recursive `expand` |
-| Parallel | Multiple `agent` steps |
+| Static parallel | Multiple `agent` steps |
+| Dynamic parallel | `foreach` with parallel iterations |
 | Agent lifecycle | `spawn`, `kill` |
 | Setup/teardown | `shell` |
 | Human approval | `branch` + `meow await-approval` |
 | Composition | `expand` |
+| Iteration over lists | `foreach` |
 
 Human gates were originally a separate executor, but they're just blocking conditions—`branch` with a command that waits for approval. Removing the dedicated `gate` executor simplifies the system and makes approval mechanisms user-customizable.
+
+The `foreach` executor was added because dynamic iteration over runtime-generated lists is a common pattern that's cumbersome to express with `branch` + recursive `expand`. While technically possible without `foreach`, the ergonomic benefit of native support for iteration justifies the additional executor.
 
 ### Why No Built-in Stuck Detection?
 
