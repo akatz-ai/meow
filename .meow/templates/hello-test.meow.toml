@@ -1,0 +1,47 @@
+# Simple Hello World Test Workflow
+# Tests basic MEOW functionality: start agent, execute task, close
+#
+# Usage:
+#   meow run .meow/templates/hello-test.meow.toml --var agent=test-agent
+
+[main]
+name = "hello-test"
+description = "Simple test workflow to verify MEOW functionality"
+ephemeral = true
+
+[main.variables]
+agent = { required = true, description = "Agent ID to spawn" }
+
+# Step 1: Start the agent in tmux
+[[main.steps]]
+id = "start-agent"
+type = "start"
+title = "Start test agent"
+assignee = "{{agent}}"
+
+# Step 2: Simple task for the agent
+[[main.steps]]
+id = "hello-task"
+type = "task"
+title = "Say hello world"
+assignee = "{{agent}}"
+needs = ["start-agent"]
+instructions = """
+## Hello World Test
+
+Your task is simple: confirm you're running by saying "Hello World!"
+
+When done, close this task:
+  meow close <this-bead-id>
+"""
+
+# Step 3: A code bead to verify something worked
+[[main.steps]]
+id = "verify"
+type = "code"
+title = "Verify test completed"
+needs = ["hello-task"]
+code = """
+echo "Test workflow completed successfully!"
+echo "Timestamp: $(date)"
+"""

@@ -1,0 +1,23 @@
+# MEOW Configuration
+version = "1"
+
+[paths]
+template_dir = ".meow/templates"
+beads_dir = ".beads"
+state_dir = ".meow/state"
+
+[defaults]
+agent = "claude-1"
+stop_grace_period = 10
+
+[orchestrator]
+poll_interval = "100ms"
+heartbeat_interval = "30s"
+
+[cleanup]
+ephemeral = "on_complete"
+
+[logging]
+level = "info"
+format = "json"
+file = ".meow/state/meow.log"

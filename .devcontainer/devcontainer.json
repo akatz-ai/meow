@@ -1,0 +1,31 @@
+{
+  "name": "meow-machine",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "redhat.vscode-yaml",
+        "esbenp.prettier-vscode",
+        "eamodio.gitlens",
+        "usernamehw.errorlens"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "editor.formatOnSave": true,
+        "go.useLanguageServer": true
+      }
+    }
+  },
+
+  "forwardPorts": [8080, 3000],
+
+  "postCreateCommand": "echo 'Dev container ready!'",
+
+  "remoteUser": "ubuntu"
+}

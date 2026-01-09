@@ -2,290 +2,96 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/config"
+	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
-// BeadStore provides access to bead state.
-type BeadStore interface {
-	// GetNextReady returns the next bead that is ready to execute.
-	// A bead is ready if all its dependencies are closed.
-	// Returns nil if no beads are ready.
-	GetNextReady(ctx context.Context) (*types.Bead, error)
+var (
+	// ErrAllDone signals that all workflows have completed.
+	ErrAllDone = errors.New("all workflows complete")
 
-	// Get retrieves a bead by ID.
-	Get(ctx context.Context, id string) (*types.Bead, error)
+	// ErrNotImplemented signals that an executor is not yet implemented.
+	ErrNotImplemented = errors.New("executor not implemented")
+)
 
-	// Update saves changes to a bead.
-	Update(ctx context.Context, bead *types.Bead) error
-
-	// AllDone returns true if there are no open or in-progress beads.
-	AllDone(ctx context.Context) (bool, error)
-}
-
-// AgentManager manages agent lifecycle.
+// AgentManager manages agent lifecycle (tmux sessions).
 type AgentManager interface {
 	// Start spawns an agent in a tmux session.
-	Start(ctx context.Context, spec *types.StartSpec) error
+	Start(ctx context.Context, wf *types.Workflow, step *types.Step) error
 
 	// Stop kills an agent's tmux session.
-	Stop(ctx context.Context, spec *types.StopSpec) error
+	Stop(ctx context.Context, wf *types.Workflow, step *types.Step) error
 
 	// IsRunning checks if an agent is currently running.
 	IsRunning(ctx context.Context, agentID string) (bool, error)
+
+	// InjectPrompt sends ESC + prompt to agent's tmux session.
+	InjectPrompt(ctx context.Context, agentID string, prompt string) error
 }
 
-// TemplateExpander expands templates into beads.
+// ShellRunner executes shell commands.
+type ShellRunner interface {
+	// Run executes a shell command and captures outputs.
+	Run(ctx context.Context, cfg *types.ShellConfig) (map[string]any, error)
+}
+
+// TemplateExpander expands templates into steps.
 type TemplateExpander interface {
-	// Expand loads a template and creates beads from it.
-	// parentBead may be nil for root-level expansions (e.g., initial workflow template).
-	// When parentBead is nil, the created beads have no parent reference.
-	Expand(ctx context.Context, spec *types.ExpandSpec, parentBead *types.Bead) error
-}
-
-// CodeExecutor runs shell code.
-type CodeExecutor interface {
-	// Execute runs shell code and captures outputs.
-	Execute(ctx context.Context, spec *types.CodeSpec) (map[string]any, error)
+	// Expand loads a template and inserts steps into the workflow.
+	Expand(ctx context.Context, wf *types.Workflow, step *types.Step) error
 }
 
 // Orchestrator is the main workflow engine.
+// It processes workflows by dispatching ready steps to appropriate executors.
 type Orchestrator struct {
 	cfg      *config.Config
-	store    BeadStore
+	store    WorkflowStore
 	agents   AgentManager
+	shell    ShellRunner
 	expander TemplateExpander
-	executor CodeExecutor
 	logger   *slog.Logger
 
-	// State persistence
-	persister *StatePersister
-	state     *OrchestratorState
+	// IPC channel for receiving messages from agents
+	ipcChan chan ipc.Message
+
+	// Active workflow ID (for single-workflow mode)
+	workflowID string
 
 	// Shutdown coordination
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-
-	// Condition goroutines
-	condMu       sync.Mutex
-	condRoutines map[string]context.CancelFunc
-}
-
-// StartupConfig holds configuration for orchestrator startup.
-type StartupConfig struct {
-	// Template to execute (for fresh start)
-	Template string
-
-	// WorkflowID for identification
-	WorkflowID string
-
-	// StateDir is the directory for state files
-	StateDir string
 }
 
 // New creates a new Orchestrator.
-func New(cfg *config.Config, store BeadStore, agents AgentManager, expander TemplateExpander, executor CodeExecutor, logger *slog.Logger) *Orchestrator {
+func New(cfg *config.Config, store WorkflowStore, agents AgentManager, shell ShellRunner, expander TemplateExpander, logger *slog.Logger) *Orchestrator {
 	return &Orchestrator{
-		cfg:          cfg,
-		store:        store,
-		agents:       agents,
-		expander:     expander,
-		executor:     executor,
-		logger:       logger,
-		condRoutines: make(map[string]context.CancelFunc),
+		cfg:      cfg,
+		store:    store,
+		agents:   agents,
+		shell:    shell,
+		expander: expander,
+		logger:   logger,
+		ipcChan:  make(chan ipc.Message, 100),
 	}
 }
 
-// StartOrResume initializes the orchestrator, either resuming from a crash or starting fresh.
-// It acquires the exclusive lock, recovers from any previous crash, and prepares to run.
-func (o *Orchestrator) StartOrResume(ctx context.Context, startCfg *StartupConfig) error {
-	// Initialize persister
-	o.persister = NewStatePersister(startCfg.StateDir)
-
-	// Acquire exclusive lock
-	if err := o.persister.AcquireLock(); err != nil {
-		return fmt.Errorf("acquiring lock: %w", err)
-	}
-
-	// Load bead store
-	if loader, ok := o.store.(interface{ Load(context.Context) error }); ok {
-		if err := loader.Load(ctx); err != nil {
-			o.persister.ReleaseLock()
-			return fmt.Errorf("loading bead store: %w", err)
-		}
-	}
-
-	// Check for existing state (resume vs fresh start)
-	existingState, err := o.persister.LoadState()
-	if err != nil {
-		o.persister.ReleaseLock()
-		return fmt.Errorf("loading state: %w", err)
-	}
-
-	if existingState != nil {
-		// Resume from existing state
-		o.logger.Info("resuming from existing state",
-			"workflow_id", existingState.WorkflowID,
-			"tick_count", existingState.TickCount,
-			"previous_pid", existingState.PID,
-		)
-		o.state = existingState
-
-		// Perform crash recovery
-		if err := o.recoverFromCrash(ctx, existingState); err != nil {
-			o.persister.ReleaseLock()
-			return fmt.Errorf("crash recovery: %w", err)
-		}
-	} else {
-		// Fresh start
-		o.logger.Info("starting fresh workflow",
-			"workflow_id", startCfg.WorkflowID,
-			"template", startCfg.Template,
-		)
-
-		o.state = &OrchestratorState{
-			Version:      "1",
-			WorkflowID:   startCfg.WorkflowID,
-			TemplateName: startCfg.Template,
-			StartedAt:    time.Now(),
-			PID:          os.Getpid(),
-		}
-
-		// If a template is specified, expand it to create initial beads
-		if startCfg.Template != "" {
-			if err := o.expandInitialTemplate(ctx, startCfg); err != nil {
-				o.persister.ReleaseLock()
-				return fmt.Errorf("expanding initial template: %w", err)
-			}
-		}
-	}
-
-	// Update state with current PID
-	o.state.PID = os.Getpid()
-
-	// Save initial state
-	if err := o.persister.SaveState(o.state); err != nil {
-		o.persister.ReleaseLock()
-		return fmt.Errorf("saving state: %w", err)
-	}
-
-	return nil
+// SetWorkflowID sets the active workflow ID for single-workflow mode.
+func (o *Orchestrator) SetWorkflowID(id string) {
+	o.workflowID = id
 }
 
-// recoverFromCrash handles recovery after a crash by:
-// 1. Checking which agents are still running via tmux
-// 2. Resetting in-progress beads from dead agents back to open
-func (o *Orchestrator) recoverFromCrash(ctx context.Context, prevState *OrchestratorState) error {
-	o.logger.Info("performing crash recovery")
-
-	// Get all in-progress beads
-	inProgressBeads, err := o.getInProgressBeads(ctx)
-	if err != nil {
-		return fmt.Errorf("getting in-progress beads: %w", err)
-	}
-
-	if len(inProgressBeads) == 0 {
-		o.logger.Info("no in-progress beads to recover")
-		return nil
-	}
-
-	o.logger.Info("found in-progress beads", "count", len(inProgressBeads))
-
-	// Check each bead's assignee
-	for _, bead := range inProgressBeads {
-		if bead.Assignee == "" {
-			// No assignee - this is either an orchestrator bead (condition, code, expand)
-			// or an unassigned task. Either way, reset it since:
-			// - Orchestrator beads: the orchestrator crashed mid-execution
-			// - Unassigned tasks: no agent is working on it
-			o.logger.Info("resetting unassigned in-progress bead",
-				"id", bead.ID,
-				"type", bead.Type,
-			)
-			bead.Status = types.BeadStatusOpen
-			if err := o.store.Update(ctx, bead); err != nil {
-				return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
-			}
-			continue
-		}
-
-		// Bead has an assignee - check if the assigned agent is still running
-		running, err := o.agents.IsRunning(ctx, bead.Assignee)
-		if err != nil {
-			o.logger.Warn("error checking agent status",
-				"agent", bead.Assignee,
-				"bead", bead.ID,
-				"error", err,
-			)
-			continue
-		}
-
-		if !running {
-			// Agent is dead - reset the bead so it can be picked up again
-			o.logger.Info("resetting bead from dead agent",
-				"id", bead.ID,
-				"agent", bead.Assignee,
-			)
-			bead.Status = types.BeadStatusOpen
-			if err := o.store.Update(ctx, bead); err != nil {
-				return fmt.Errorf("resetting bead %s: %w", bead.ID, err)
-			}
-		} else {
-			o.logger.Info("agent still running, keeping bead in progress",
-				"id", bead.ID,
-				"agent", bead.Assignee,
-			)
-		}
-	}
-
-	return nil
-}
-
-// getInProgressBeads returns all beads with status in_progress.
-func (o *Orchestrator) getInProgressBeads(ctx context.Context) ([]*types.Bead, error) {
-	// Check if store supports listing
-	if lister, ok := o.store.(interface {
-		List(context.Context, types.BeadStatus) ([]*types.Bead, error)
-	}); ok {
-		return lister.List(ctx, types.BeadStatusInProgress)
-	}
-
-	// Fallback: we can't list beads, return empty
-	o.logger.Warn("bead store does not support listing, skipping recovery scan")
-	return nil, nil
-}
-
-// expandInitialTemplate expands the initial workflow template.
-func (o *Orchestrator) expandInitialTemplate(ctx context.Context, startCfg *StartupConfig) error {
-	expandSpec := &types.ExpandSpec{
-		Template: startCfg.Template,
-	}
-
-	// Pass nil as parent - this is the root of the workflow, there's no parent bead.
-	// The expander should handle nil parent gracefully (top-level beads have no parent).
-	if err := o.expander.Expand(ctx, expandSpec, nil); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ReleaseLock releases the orchestrator lock.
-// Call this when done with the orchestrator (typically deferred after StartOrResume).
-func (o *Orchestrator) ReleaseLock() error {
-	if o.persister != nil {
-		return o.persister.ReleaseLock()
-	}
-	return nil
+// IPCChannel returns the channel for receiving IPC messages.
+// The IPC server should send messages to this channel.
+func (o *Orchestrator) IPCChannel() chan<- ipc.Message {
+	return o.ipcChan
 }
 
 // Run starts the orchestrator main loop.
@@ -303,20 +109,19 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			o.logger.Info("orchestrator shutting down", "reason", ctx.Err())
-			o.waitForConditions()
+			o.wg.Wait()
 			return ctx.Err()
+
+		case msg := <-o.ipcChan:
+			if err := o.handleIPC(ctx, msg); err != nil {
+				o.logger.Error("IPC handling error", "error", err)
+			}
 
 		case <-ticker.C:
 			if err := o.tick(ctx); err != nil {
-				if err == errAllDone {
+				if errors.Is(err, ErrAllDone) {
 					o.logger.Info("all work complete")
-					o.waitForConditions()
-					// Clean up workflow beads (tier-based cleanup)
-					if o.state != nil && o.state.WorkflowID != "" {
-						if cleanupErr := o.cleanupWorkflow(ctx, o.state.WorkflowID); cleanupErr != nil {
-							o.logger.Warn("failed to cleanup workflow beads", "error", cleanupErr)
-						}
-					}
+					o.wg.Wait()
 					return nil
 				}
 				o.logger.Error("tick error", "error", err)
@@ -331,845 +136,466 @@ func (o *Orchestrator) Shutdown() {
 	if o.cancel != nil {
 		o.cancel()
 	}
-	o.waitForConditions()
-}
-
-var errAllDone = fmt.Errorf("all beads complete")
-
-// tick performs one iteration of the main loop.
-func (o *Orchestrator) tick(ctx context.Context) error {
-	// Check if all done
-	done, err := o.store.AllDone(ctx)
-	if err != nil {
-		return fmt.Errorf("checking completion: %w", err)
-	}
-	if done {
-		return errAllDone
-	}
-
-	// Get next ready bead
-	bead, err := o.store.GetNextReady(ctx)
-	if err != nil {
-		return fmt.Errorf("getting next ready bead: %w", err)
-	}
-	if bead == nil {
-		// No ready beads, but not done - waiting on dependencies or conditions
-		return nil
-	}
-
-	// Dispatch based on type
-	return o.dispatch(ctx, bead)
-}
-
-// dispatch routes a bead to the appropriate handler.
-func (o *Orchestrator) dispatch(ctx context.Context, bead *types.Bead) error {
-	o.logger.Info("dispatching bead",
-		"id", bead.ID,
-		"type", bead.Type,
-		"title", bead.Title,
-	)
-
-	switch bead.Type {
-	case types.BeadTypeTask:
-		return o.handleTask(ctx, bead)
-	case types.BeadTypeCollaborative:
-		// Collaborative beads work like tasks but with multiple agents
-		return o.handleTask(ctx, bead)
-	case types.BeadTypeGate:
-		return o.handleGate(ctx, bead)
-	case types.BeadTypeCondition:
-		return o.handleCondition(ctx, bead)
-	case types.BeadTypeStop:
-		return o.handleStop(ctx, bead)
-	case types.BeadTypeStart:
-		return o.handleStart(ctx, bead)
-	case types.BeadTypeCode:
-		return o.handleCode(ctx, bead)
-	case types.BeadTypeExpand:
-		return o.handleExpand(ctx, bead)
-	default:
-		return fmt.Errorf("unknown bead type: %s", bead.Type)
-	}
-}
-
-// handleTask waits for an agent to close the task bead.
-func (o *Orchestrator) handleTask(ctx context.Context, bead *types.Bead) error {
-	// Ensure the assigned agent is running
-	if bead.Assignee != "" {
-		running, err := o.agents.IsRunning(ctx, bead.Assignee)
-		if err != nil {
-			return fmt.Errorf("checking agent %s: %w", bead.Assignee, err)
-		}
-		if !running {
-			o.logger.Warn("task assigned to non-running agent",
-				"bead", bead.ID,
-				"agent", bead.Assignee,
-			)
-			// Don't spawn automatically - let the workflow handle it
-		}
-	}
-
-	// Mark as in_progress if not already
-	if bead.Status == types.BeadStatusOpen {
-		bead.Status = types.BeadStatusInProgress
-		if err := o.store.Update(ctx, bead); err != nil {
-			return fmt.Errorf("updating bead status: %w", err)
-		}
-	}
-
-	// Task beads are closed by agents via `meow close`
-	// The orchestrator just waits - it will be picked up on next tick
-	return nil
-}
-
-// handleGate waits for human approval via `meow approve`.
-// Gates block workflow progress until explicitly approved.
-func (o *Orchestrator) handleGate(ctx context.Context, bead *types.Bead) error {
-	// Mark as in_progress if not already
-	if bead.Status == types.BeadStatusOpen {
-		bead.Status = types.BeadStatusInProgress
-		if err := o.store.Update(ctx, bead); err != nil {
-			return fmt.Errorf("updating gate bead status: %w", err)
-		}
-	}
-
-	// Gate beads are closed by humans via `meow approve`
-	// The orchestrator just waits - it will be picked up on next tick
-	return nil
-}
-
-// handleCondition evaluates a condition and expands the appropriate branch.
-// Conditions run in goroutines to avoid blocking the main loop.
-func (o *Orchestrator) handleCondition(ctx context.Context, bead *types.Bead) error {
-	if bead.ConditionSpec == nil {
-		return fmt.Errorf("condition bead %s missing spec", bead.ID)
-	}
-
-	// Mark as in_progress
-	bead.Status = types.BeadStatusInProgress
-	if err := o.store.Update(ctx, bead); err != nil {
-		return fmt.Errorf("updating bead status: %w", err)
-	}
-
-	// Run condition in goroutine (may block!)
-	condCtx, cancel := context.WithCancel(ctx)
-	o.condMu.Lock()
-	o.condRoutines[bead.ID] = cancel
-	o.condMu.Unlock()
-
-	// Capture immutable data for goroutine to avoid race condition.
-	// The bead pointer is shared with the main loop, so we extract
-	// the ID and spec before spawning the goroutine.
-	beadID := bead.ID
-	spec := bead.ConditionSpec
-
-	o.wg.Add(1)
-	go func() {
-		defer o.wg.Done()
-		defer func() {
-			o.condMu.Lock()
-			delete(o.condRoutines, beadID)
-			o.condMu.Unlock()
-		}()
-
-		o.evalCondition(condCtx, beadID, spec)
-	}()
-
-	return nil
-}
-
-// evalCondition runs the condition command and handles the result.
-// Takes beadID and spec separately to avoid holding a bead pointer that
-// could race with the main tick loop.
-func (o *Orchestrator) evalCondition(ctx context.Context, beadID string, spec *types.ConditionSpec) {
-	// Parse timeout if specified
-	var timeout time.Duration
-	if spec.Timeout != "" {
-		var err error
-		timeout, err = time.ParseDuration(spec.Timeout)
-		if err != nil {
-			o.logger.Warn("invalid condition timeout, ignoring",
-				"bead", beadID,
-				"timeout", spec.Timeout,
-				"error", err,
-			)
-		}
-	}
-
-	// Create context with timeout if specified
-	execCtx := ctx
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
-	// Execute condition as shell command
-	codeSpec := &types.CodeSpec{
-		Code: spec.Condition,
-	}
-
-	outputs, err := o.executor.Execute(execCtx, codeSpec)
-
-	// Determine which branch to take
-	var target *types.ExpansionTarget
-	isTimeout := execCtx.Err() == context.DeadlineExceeded
-
-	if isTimeout {
-		o.logger.Info("condition timed out",
-			"bead", beadID,
-			"timeout", timeout,
-		)
-		if spec.OnTimeout != nil {
-			target = spec.OnTimeout
-		} else {
-			// Default to on_false if no on_timeout specified
-			target = spec.OnFalse
-		}
-	} else if err != nil {
-		o.logger.Info("condition evaluated false",
-			"bead", beadID,
-			"error", err,
-		)
-		target = spec.OnFalse
-	} else {
-		exitCode, _ := outputs["exit_code"].(int)
-		if exitCode == 0 {
-			o.logger.Info("condition evaluated true", "bead", beadID)
-			target = spec.OnTrue
-		} else {
-			o.logger.Info("condition evaluated false",
-				"bead", beadID,
-				"exit_code", exitCode,
-			)
-			target = spec.OnFalse
-		}
-	}
-
-	// Expand the target - either template or inline steps
-	// Fetch fresh bead for expansion to avoid race with main loop.
-	if target != nil {
-		bead, err := o.store.Get(ctx, beadID)
-		if err != nil {
-			o.logger.Error("failed to get bead for expansion",
-				"bead", beadID,
-				"error", err,
-			)
-			return
-		}
-		if bead == nil {
-			o.logger.Error("bead not found for expansion", "bead", beadID)
-			return
-		}
-
-		if target.Template != "" {
-			expandSpec := &types.ExpandSpec{
-				Template:  target.Template,
-				Variables: target.Variables,
-			}
-			if err := o.expander.Expand(ctx, expandSpec, bead); err != nil {
-				o.logger.Error("failed to expand condition branch",
-					"bead", beadID,
-					"template", target.Template,
-					"error", err,
-				)
-				return
-			}
-		} else if len(target.Inline) > 0 {
-			// Process inline steps when no template is specified
-			if err := o.expandInlineSteps(ctx, bead, target.Inline); err != nil {
-				o.logger.Error("failed to expand inline steps",
-					"bead", beadID,
-					"error", err,
-				)
-				return
-			}
-		}
-	}
-
-	// Fetch fresh bead for closing to get current state.
-	freshBead, err := o.store.Get(ctx, beadID)
-	if err != nil {
-		o.logger.Error("failed to get bead for closing",
-			"bead", beadID,
-			"error", err,
-		)
-		return
-	}
-	if freshBead == nil {
-		o.logger.Error("bead not found for closing", "bead", beadID)
-		return
-	}
-
-	// Close the condition bead
-	if err := freshBead.Close(nil); err != nil {
-		o.logger.Error("failed to close condition bead",
-			"bead", beadID,
-			"error", err,
-		)
-		return
-	}
-	if err := o.store.Update(ctx, freshBead); err != nil {
-		o.logger.Error("failed to save closed condition bead",
-			"bead", beadID,
-			"error", err,
-		)
-	}
-}
-
-// handleStop kills an agent's tmux session.
-func (o *Orchestrator) handleStop(ctx context.Context, bead *types.Bead) error {
-	if bead.StopSpec == nil {
-		return fmt.Errorf("stop bead %s missing spec", bead.ID)
-	}
-
-	if err := o.agents.Stop(ctx, bead.StopSpec); err != nil {
-		return fmt.Errorf("stopping agent %s: %w", bead.StopSpec.Agent, err)
-	}
-
-	// Auto-close the bead
-	if err := bead.Close(nil); err != nil {
-		return fmt.Errorf("closing stop bead: %w", err)
-	}
-	return o.store.Update(ctx, bead)
-}
-
-// handleStart spawns an agent in a tmux session.
-func (o *Orchestrator) handleStart(ctx context.Context, bead *types.Bead) error {
-	if bead.StartSpec == nil {
-		return fmt.Errorf("start bead %s missing spec", bead.ID)
-	}
-
-	if err := o.agents.Start(ctx, bead.StartSpec); err != nil {
-		return fmt.Errorf("starting agent %s: %w", bead.StartSpec.Agent, err)
-	}
-
-	// Auto-close the bead
-	if err := bead.Close(nil); err != nil {
-		return fmt.Errorf("closing start bead: %w", err)
-	}
-	return o.store.Update(ctx, bead)
-}
-
-// handleCode executes shell code and captures outputs.
-func (o *Orchestrator) handleCode(ctx context.Context, bead *types.Bead) error {
-	if bead.CodeSpec == nil {
-		return fmt.Errorf("code bead %s missing spec", bead.ID)
-	}
-
-	// Mark as in_progress
-	bead.Status = types.BeadStatusInProgress
-	if err := o.store.Update(ctx, bead); err != nil {
-		return fmt.Errorf("updating bead status: %w", err)
-	}
-
-	maxRetries := bead.CodeSpec.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3 // Default retries
-	}
-
-	var outputs map[string]any
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		outputs, lastErr = o.executor.Execute(ctx, bead.CodeSpec)
-		if lastErr == nil {
-			// Success
-			break
-		}
-
-		// Check error handling strategy
-		switch bead.CodeSpec.OnError {
-		case types.OnErrorAbort:
-			return fmt.Errorf("code execution failed (abort): %w", lastErr)
-
-		case types.OnErrorRetry:
-			if attempt < maxRetries {
-				o.logger.Warn("code execution failed, retrying",
-					"bead", bead.ID,
-					"attempt", attempt,
-					"max_retries", maxRetries,
-					"error", lastErr,
-				)
-				// Exponential backoff: 100ms, 200ms, 400ms, ...
-				backoff := time.Duration(100<<(attempt-1)) * time.Millisecond
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(backoff):
-				}
-				continue
-			}
-			o.logger.Error("code execution failed after retries",
-				"bead", bead.ID,
-				"attempts", maxRetries,
-				"error", lastErr,
-			)
-
-		default: // OnErrorContinue
-			o.logger.Warn("code execution failed, continuing",
-				"bead", bead.ID,
-				"error", lastErr,
-			)
-			break // Don't retry on continue
-		}
-		break
-	}
-
-	// Auto-close the bead with captured outputs
-	if err := bead.Close(outputs); err != nil {
-		return fmt.Errorf("closing code bead: %w", err)
-	}
-	return o.store.Update(ctx, bead)
-}
-
-// handleExpand expands a template into beads.
-func (o *Orchestrator) handleExpand(ctx context.Context, bead *types.Bead) error {
-	if bead.ExpandSpec == nil {
-		return fmt.Errorf("expand bead %s missing spec", bead.ID)
-	}
-
-	if err := o.expander.Expand(ctx, bead.ExpandSpec, bead); err != nil {
-		return fmt.Errorf("expanding template %s: %w", bead.ExpandSpec.Template, err)
-	}
-
-	// Auto-close the bead
-	if err := bead.Close(nil); err != nil {
-		return fmt.Errorf("closing expand bead: %w", err)
-	}
-	return o.store.Update(ctx, bead)
-}
-
-// waitForConditions waits for all condition goroutines to complete.
-func (o *Orchestrator) waitForConditions() {
-	o.condMu.Lock()
-	for _, cancel := range o.condRoutines {
-		cancel()
-	}
-	o.condMu.Unlock()
-
 	o.wg.Wait()
 }
 
-// cleanupEphemeralBeads removes all beads labeled as ephemeral.
-// This is called after workflow completion to clean up machinery beads
-// that were created during execution.
-// Deprecated: Use cleanupWorkflow for tier-based cleanup instead.
-func (o *Orchestrator) cleanupEphemeralBeads(ctx context.Context) error {
-	// Check if store supports deletion
-	deleter, ok := o.store.(interface {
-		Delete(context.Context, string) error
-	})
-	if !ok {
-		o.logger.Debug("bead store does not support deletion, skipping ephemeral cleanup")
-		return nil
-	}
-
-	// Check if store supports listing all beads
-	lister, ok := o.store.(interface {
-		List(context.Context, types.BeadStatus) ([]*types.Bead, error)
-	})
-	if !ok {
-		o.logger.Debug("bead store does not support listing, skipping ephemeral cleanup")
-		return nil
-	}
-
-	// Get all beads (empty status = all)
-	beads, err := lister.List(ctx, "")
+// tick performs one iteration of the main loop.
+func (o *Orchestrator) tick(ctx context.Context) error {
+	// Get running workflows
+	workflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusRunning})
 	if err != nil {
-		return fmt.Errorf("listing beads: %w", err)
+		return fmt.Errorf("listing workflows: %w", err)
 	}
 
-	var deleted int
-	for _, bead := range beads {
-		if bead.IsEphemeral() {
-			if err := deleter.Delete(ctx, bead.ID); err != nil {
-				o.logger.Warn("failed to delete ephemeral bead",
-					"bead", bead.ID,
-					"error", err,
-				)
-				continue
+	// If single-workflow mode, filter to just that workflow
+	if o.workflowID != "" {
+		filtered := make([]*types.Workflow, 0, 1)
+		for _, wf := range workflows {
+			if wf.ID == o.workflowID {
+				filtered = append(filtered, wf)
+				break
 			}
-			deleted++
 		}
-	}
+		workflows = filtered
 
-	if deleted > 0 {
-		o.logger.Info("cleaned up ephemeral beads", "count", deleted)
-	}
-
-	return nil
-}
-
-// cleanupWorkflow removes all non-work beads (wisps and orchestrator) for a workflow
-// once all beads in that workflow are closed. This is the tier-based cleanup approach.
-//
-// Cleanup only happens when:
-// - All beads in the workflow are closed
-// - Cleanup config is set to "on_complete" (default)
-//
-// Work beads are preserved as they represent permanent deliverables.
-func (o *Orchestrator) cleanupWorkflow(ctx context.Context, workflowID string) error {
-	if o.cfg.Cleanup.Ephemeral != config.EphemeralCleanupOnComplete {
-		o.logger.Debug("cleanup disabled by config", "config", o.cfg.Cleanup.Ephemeral)
-		return nil
-	}
-
-	// Check if store supports filtered listing
-	lister, ok := o.store.(interface {
-		ListFiltered(context.Context, BeadFilter) ([]*types.Bead, error)
-	})
-	if !ok {
-		o.logger.Debug("bead store does not support filtered listing, skipping workflow cleanup")
-		return nil
-	}
-
-	// Check if store supports deletion
-	deleter, ok := o.store.(interface {
-		Delete(context.Context, string) error
-	})
-	if !ok {
-		o.logger.Debug("bead store does not support deletion, skipping workflow cleanup")
-		return nil
-	}
-
-	// Get all beads for this workflow
-	beads, err := lister.ListFiltered(ctx, BeadFilter{WorkflowID: workflowID})
-	if err != nil {
-		return fmt.Errorf("listing workflow beads: %w", err)
-	}
-
-	if len(beads) == 0 {
-		o.logger.Debug("no beads found for workflow", "workflow_id", workflowID)
-		return nil
-	}
-
-	// Check if all beads are closed
-	for _, bead := range beads {
-		if bead.Status != types.BeadStatusClosed {
-			o.logger.Debug("workflow not fully complete, skipping cleanup",
-				"workflow_id", workflowID,
-				"incomplete_bead", bead.ID,
-				"status", bead.Status,
-			)
+		// If workflow not in running list, check its actual status
+		if len(workflows) == 0 {
+			wf, err := o.store.Get(ctx, o.workflowID)
+			if err != nil {
+				return fmt.Errorf("getting workflow %s: %w", o.workflowID, err)
+			}
+			// Workflow completed (done or failed)
+			if wf.Status.IsTerminal() {
+				return ErrAllDone
+			}
+			// Workflow is pending - wait for it to start
 			return nil
 		}
 	}
 
-	// All beads closed - burn non-work tier beads
-	return o.burnWisps(ctx, beads, deleter)
-}
-
-// burnWisps deletes all wisp and orchestrator tier beads from the given list.
-// Work tier beads are preserved as permanent deliverables.
-func (o *Orchestrator) burnWisps(ctx context.Context, beads []*types.Bead, deleter interface {
-	Delete(context.Context, string) error
-}) error {
-	var deleted int
-	for _, bead := range beads {
-		// Only delete non-work tier beads
-		if bead.Tier == types.TierWork || bead.Tier == "" {
-			continue
-		}
-
-		if err := deleter.Delete(ctx, bead.ID); err != nil {
-			o.logger.Warn("failed to delete wisp bead",
-				"bead", bead.ID,
-				"tier", bead.Tier,
-				"error", err,
-			)
-			continue
-		}
-		deleted++
+	if len(workflows) == 0 {
+		return ErrAllDone
 	}
 
-	if deleted > 0 {
-		o.logger.Info("burned wisp beads", "count", deleted)
+	allComplete := true
+	for _, wf := range workflows {
+		if err := o.processWorkflow(ctx, wf); err != nil {
+			return err
+		}
+		if wf.Status == types.WorkflowStatusRunning {
+			allComplete = false
+		}
 	}
 
+	if allComplete {
+		return ErrAllDone
+	}
 	return nil
 }
 
-// squashWisps creates a digest summary of all wisps and appends it to the work bead's notes,
-// then burns the wisps. This preserves a record of the workflow execution while cleaning up
-// the ephemeral machinery.
-//
-// The digest includes:
-// - List of wisp step titles and statuses
-// - Workflow duration (first created to last closed)
-// - Count of steps by type
-func (o *Orchestrator) squashWisps(ctx context.Context, workflowID string, workBeadID string) error {
-	if o.cfg.Cleanup.Ephemeral != config.EphemeralCleanupOnComplete {
-		o.logger.Debug("cleanup disabled by config", "config", o.cfg.Cleanup.Ephemeral)
-		return nil
-	}
+// processWorkflow processes a single workflow, dispatching all ready steps.
+func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) error {
+	// Check timeouts for running agent steps
+	o.checkStepTimeouts(ctx, wf)
 
-	// Check if store supports filtered listing
-	lister, ok := o.store.(interface {
-		ListFiltered(context.Context, BeadFilter) ([]*types.Bead, error)
-	})
-	if !ok {
-		return fmt.Errorf("bead store does not support filtered listing")
-	}
-
-	// Check if store supports deletion
-	deleter, ok := o.store.(interface {
-		Delete(context.Context, string) error
-	})
-	if !ok {
-		return fmt.Errorf("bead store does not support deletion")
-	}
-
-	// Get all wisp beads for this workflow
-	wisps, err := lister.ListFiltered(ctx, BeadFilter{
-		WorkflowID: workflowID,
-		Tier:       types.TierWisp,
-	})
-	if err != nil {
-		return fmt.Errorf("listing wisps: %w", err)
-	}
-
-	if len(wisps) == 0 {
-		o.logger.Debug("no wisps found for workflow", "workflow_id", workflowID)
-		return nil
-	}
-
-	// Generate digest
-	digest := o.generateWispDigest(wisps)
-
-	// Get and update work bead
-	workBead, err := o.store.Get(ctx, workBeadID)
-	if err != nil {
-		return fmt.Errorf("getting work bead: %w", err)
-	}
-	if workBead == nil {
-		return fmt.Errorf("work bead %s not found", workBeadID)
-	}
-
-	// Append digest to notes
-	if workBead.Notes != "" {
-		workBead.Notes += "\n\n"
-	}
-	workBead.Notes += digest
-
-	if err := o.store.Update(ctx, workBead); err != nil {
-		return fmt.Errorf("updating work bead with digest: %w", err)
-	}
-
-	o.logger.Info("squashed wisps to digest",
-		"workflow_id", workflowID,
-		"work_bead", workBeadID,
-		"wisp_count", len(wisps),
-	)
-
-	// Get all beads for burning (including orchestrator tier)
-	allBeads, err := lister.ListFiltered(ctx, BeadFilter{WorkflowID: workflowID})
-	if err != nil {
-		return fmt.Errorf("listing all workflow beads: %w", err)
-	}
-
-	// Burn the wisps and orchestrator beads
-	return o.burnWisps(ctx, allBeads, deleter)
-}
-
-// generateWispDigest creates a summary of wisp execution for preservation.
-func (o *Orchestrator) generateWispDigest(wisps []*types.Bead) string {
-	if len(wisps) == 0 {
-		return ""
-	}
-
-	// Sort wisps by CreatedAt for chronological output
-	sortedWisps := make([]*types.Bead, len(wisps))
-	copy(sortedWisps, wisps)
-	sort.Slice(sortedWisps, func(i, j int) bool {
-		return sortedWisps[i].CreatedAt.Before(sortedWisps[j].CreatedAt)
-	})
-
-	// Count by type
-	typeCounts := make(map[types.BeadType]int)
-	var earliestCreated, latestClosed time.Time
-
-	for _, w := range sortedWisps {
-		typeCounts[w.Type]++
-
-		if earliestCreated.IsZero() || w.CreatedAt.Before(earliestCreated) {
-			earliestCreated = w.CreatedAt
-		}
-		if w.ClosedAt != nil && (latestClosed.IsZero() || w.ClosedAt.After(latestClosed)) {
-			latestClosed = *w.ClosedAt
-		}
-	}
-
-	// Build digest
-	var sb strings.Builder
-	sb.WriteString("## Workflow Execution Digest\n\n")
-
-	// Duration
-	if !earliestCreated.IsZero() && !latestClosed.IsZero() {
-		duration := latestClosed.Sub(earliestCreated)
-		sb.WriteString(fmt.Sprintf("**Duration**: %s\n", duration.Round(time.Second)))
-	}
-
-	// Counts
-	sb.WriteString(fmt.Sprintf("**Total Steps**: %d\n\n", len(sortedWisps)))
-
-	// Sort type keys for deterministic output
-	if len(typeCounts) > 0 {
-		sb.WriteString("**Steps by Type**:\n")
-		typeKeys := make([]types.BeadType, 0, len(typeCounts))
-		for t := range typeCounts {
-			typeKeys = append(typeKeys, t)
-		}
-		sort.Slice(typeKeys, func(i, j int) bool {
-			return string(typeKeys[i]) < string(typeKeys[j])
-		})
-		for _, t := range typeKeys {
-			sb.WriteString(fmt.Sprintf("- %s: %d\n", t, typeCounts[t]))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Step list (already sorted chronologically)
-	sb.WriteString("**Steps Executed**:\n")
-	for _, w := range sortedWisps {
-		status := "closed"
-		if w.Status != types.BeadStatusClosed {
-			status = string(w.Status)
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n", status, w.Title))
-	}
-
-	return sb.String()
-}
-
-// inlineStep represents a parsed inline step from JSON.
-// This mirrors template.InlineStep but is defined here to avoid import cycles.
-type inlineStep struct {
-	ID           string   `json:"id"`
-	Type         string   `json:"type"`
-	Description  string   `json:"description,omitempty"`
-	Instructions string   `json:"instructions,omitempty"`
-	Assignee     string   `json:"assignee,omitempty"`
-	Needs        []string `json:"needs,omitempty"`
-}
-
-// expandInlineSteps creates beads from inline step definitions.
-// This handles the case where a condition branch has inline steps instead of a template.
-func (o *Orchestrator) expandInlineSteps(ctx context.Context, parentBead *types.Bead, inlineRaw []json.RawMessage) error {
-	if len(inlineRaw) == 0 {
-		return nil
-	}
-
-	// Check if store supports creation
-	creator, ok := o.store.(interface {
-		Create(context.Context, *types.Bead) error
-	})
-	if !ok {
-		return fmt.Errorf("bead store does not support creation")
-	}
-
-	// Parse inline steps from JSON
-	steps := make([]inlineStep, 0, len(inlineRaw))
-	for i, raw := range inlineRaw {
-		var step inlineStep
-		if err := json.Unmarshal(raw, &step); err != nil {
-			return fmt.Errorf("parsing inline step %d: %w", i, err)
-		}
-		steps = append(steps, step)
-	}
-
-	// Generate bead IDs for all steps first
-	stepToBeadID := make(map[string]string)
-	for _, step := range steps {
-		beadID := fmt.Sprintf("%s.inline.%s", parentBead.ID, step.ID)
-		stepToBeadID[step.ID] = beadID
-	}
-
-	// Create beads from inline steps
-	for _, step := range steps {
-		beadID := stepToBeadID[step.ID]
-
-		// Translate dependencies from step IDs to bead IDs
-		var needs []string
-		hasInternalDep := false
-		for _, need := range step.Needs {
-			if beadNeed, ok := stepToBeadID[need]; ok {
-				needs = append(needs, beadNeed)
-				hasInternalDep = true
+	readySteps := wf.GetReadySteps()
+	if len(readySteps) == 0 {
+		if wf.AllDone() {
+			// Check for failures first - HasFailed() implies AllDone() but with failures
+			if wf.HasFailed() {
+				wf.Fail()
+				o.logger.Info("workflow failed", "id", wf.ID)
 			} else {
-				// Unknown dependency - keep as-is (might be external)
-				needs = append(needs, need)
+				wf.Complete()
+				o.logger.Info("workflow completed", "id", wf.ID)
+			}
+			return o.store.Save(ctx, wf)
+		}
+		return nil // Waiting for external completion
+	}
+
+	// Sort by priority: orchestrator executors first, then by step ID
+	sort.Slice(readySteps, func(i, j int) bool {
+		if readySteps[i].Executor.IsOrchestrator() != readySteps[j].Executor.IsOrchestrator() {
+			return readySteps[i].Executor.IsOrchestrator()
+		}
+		return readySteps[i].ID < readySteps[j].ID
+	})
+
+	// Process ALL ready steps (enables parallel agent execution)
+	for _, step := range readySteps {
+		// For agent steps, only dispatch if agent is idle
+		if step.Executor == types.ExecutorAgent {
+			if step.Agent == nil {
+				o.logger.Error("agent step missing config", "step", step.ID)
+				continue
+			}
+			if !wf.AgentIsIdle(step.Agent.Agent) {
+				continue
 			}
 		}
 
-		// Steps without internal dependencies must depend on the parent condition bead.
-		// This ensures they don't execute until the condition evaluation is complete.
-		if !hasInternalDep {
-			needs = append([]string{parentBead.ID}, needs...)
+		if err := o.dispatch(ctx, wf, step); err != nil {
+			o.logger.Error("dispatch error", "step", step.ID, "error", err)
+			// For orchestrator executors, mark step as failed
+			if step.Executor.IsOrchestrator() {
+				step.Fail(&types.StepError{Message: err.Error()})
+			}
+		}
+	}
+
+	return o.store.Save(ctx, wf)
+}
+
+// dispatch routes a step to the appropriate executor handler.
+// IMPORTANT: Exactly 6 executors. Gate is NOT an executor.
+func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	o.logger.Info("dispatching step", "id", step.ID, "executor", step.Executor)
+
+	switch step.Executor {
+	case types.ExecutorShell:
+		return o.handleShell(ctx, wf, step)
+	case types.ExecutorSpawn:
+		return o.handleSpawn(ctx, wf, step)
+	case types.ExecutorKill:
+		return o.handleKill(ctx, wf, step)
+	case types.ExecutorExpand:
+		return o.handleExpand(ctx, wf, step)
+	case types.ExecutorBranch:
+		return o.handleBranch(ctx, wf, step)
+	case types.ExecutorAgent:
+		return o.handleAgent(ctx, wf, step)
+	default:
+		return fmt.Errorf("unknown executor: %s", step.Executor)
+	}
+}
+
+// handleIPC processes an IPC message from an agent.
+func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
+	switch m := msg.(type) {
+	case *ipc.StepDoneMessage:
+		return o.handleStepDone(ctx, m)
+	case *ipc.GetPromptMessage:
+		return o.handleGetPrompt(ctx, m)
+	case *ipc.ApprovalMessage:
+		return o.handleApproval(ctx, m)
+	default:
+		o.logger.Warn("unknown IPC message type", "type", fmt.Sprintf("%T", msg))
+		return nil
+	}
+}
+
+// handleStepDone processes a meow done message from an agent.
+func (o *Orchestrator) handleStepDone(ctx context.Context, msg *ipc.StepDoneMessage) error {
+	wf, err := o.store.Get(ctx, msg.Workflow)
+	if err != nil {
+		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
+	}
+
+	step, ok := wf.GetStep(msg.Step)
+	if !ok {
+		return fmt.Errorf("step %s not found in workflow %s", msg.Step, msg.Workflow)
+	}
+
+	// Validate step is in running state
+	if step.Status != types.StepStatusRunning {
+		return fmt.Errorf("step %s is not running (status: %s)", msg.Step, step.Status)
+	}
+
+	// Transition to completing to prevent race with stop hook
+	if err := step.SetCompleting(); err != nil {
+		return fmt.Errorf("setting step completing: %w", err)
+	}
+
+	// Validate outputs if defined
+	if step.Agent != nil && len(step.Agent.Outputs) > 0 {
+		if err := o.validateOutputs(step, msg.Outputs); err != nil {
+			// Validation failed - keep step running so agent can retry
+			step.Status = types.StepStatusRunning
+			o.logger.Warn("output validation failed", "step", step.ID, "error", err)
+			return o.store.Save(ctx, wf)
+		}
+	}
+
+	// Mark step complete
+	if err := step.Complete(msg.Outputs); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+
+	o.logger.Info("step completed", "step", step.ID, "workflow", wf.ID)
+	return o.store.Save(ctx, wf)
+}
+
+// handleGetPrompt processes a meow prime request (stop hook).
+func (o *Orchestrator) handleGetPrompt(ctx context.Context, msg *ipc.GetPromptMessage) error {
+	// Find workflows with work for this agent
+	workflows, err := o.store.GetByAgent(ctx, msg.Agent)
+	if err != nil {
+		return fmt.Errorf("getting workflows for agent %s: %w", msg.Agent, err)
+	}
+
+	for _, wf := range workflows {
+		// Check for running step (completing state)
+		step := wf.GetRunningStepForAgent(msg.Agent)
+		if step != nil && step.Status == types.StepStatusCompleting {
+			// Step is transitioning - return empty (stay idle)
+			return nil
 		}
 
-		// Determine bead type
-		beadType := types.BeadType(step.Type)
-		if !beadType.Valid() {
-			beadType = types.BeadTypeTask
+		// Check for next ready step
+		nextStep := wf.GetNextReadyStepForAgent(msg.Agent)
+		if nextStep != nil {
+			// There's work - orchestrator will inject prompt on next tick
+			return nil
 		}
-
-		bead := &types.Bead{
-			ID:           beadID,
-			Type:         beadType,
-			Title:        step.Description,
-			Description:  step.Instructions,
-			Instructions: step.Instructions,
-			Assignee:     step.Assignee,
-			Status:       types.BeadStatusOpen,
-			Tier:         types.TierWisp,
-			Needs:        needs,
-			Parent:       parentBead.ID,
-			CreatedAt:    time.Now(),
-		}
-
-		// Set type-specific specs for non-task beads
-		if err := o.setInlineBeadSpec(bead, step); err != nil {
-			return fmt.Errorf("setting spec for inline step %q: %w", step.ID, err)
-		}
-
-		if err := creator.Create(ctx, bead); err != nil {
-			return fmt.Errorf("creating inline bead %s: %w", beadID, err)
-		}
-
-		o.logger.Debug("created inline bead",
-			"bead", beadID,
-			"type", beadType,
-			"parent", parentBead.ID,
-		)
 	}
 
 	return nil
 }
 
-// setInlineBeadSpec sets the type-specific spec for an inline bead.
-// Inline steps currently only support task and collaborative types.
-// Complex types (condition, code, start, stop, expand) require additional
-// configuration fields not available in inline step definitions.
-func (o *Orchestrator) setInlineBeadSpec(bead *types.Bead, step inlineStep) error {
-	switch bead.Type {
-	case types.BeadTypeTask, types.BeadTypeCollaborative:
-		// Task and collaborative beads use Instructions field, no spec needed
-		return nil
-	case types.BeadTypeGate:
-		// Gate beads don't need a spec - they're approved by humans
-		return nil
-	case types.BeadTypeCondition:
-		return fmt.Errorf("condition beads cannot be defined inline (requires condition command and branches)")
-	case types.BeadTypeCode:
-		return fmt.Errorf("code beads cannot be defined inline (requires code field)")
-	case types.BeadTypeStart:
-		return fmt.Errorf("start beads cannot be defined inline (requires agent specification)")
-	case types.BeadTypeStop:
-		return fmt.Errorf("stop beads cannot be defined inline (requires agent specification)")
-	case types.BeadTypeExpand:
-		return fmt.Errorf("expand beads cannot be defined inline (requires template reference)")
-	default:
-		return fmt.Errorf("unsupported inline bead type: %s", bead.Type)
+// handleApproval processes a gate approval/rejection.
+func (o *Orchestrator) handleApproval(ctx context.Context, msg *ipc.ApprovalMessage) error {
+	wf, err := o.store.Get(ctx, msg.Workflow)
+	if err != nil {
+		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
 	}
+
+	step, ok := wf.GetStep(msg.GateID)
+	if !ok {
+		return fmt.Errorf("gate step %s not found", msg.GateID)
+	}
+
+	if step.Status != types.StepStatusRunning {
+		return fmt.Errorf("gate step %s is not running", msg.GateID)
+	}
+
+	// Gate approval is handled by branch executor via await-approval
+	// This message sets an output that the condition can check
+	if step.Outputs == nil {
+		step.Outputs = make(map[string]any)
+	}
+	step.Outputs["approved"] = msg.Approved
+	step.Outputs["notes"] = msg.Notes
+
+	return o.store.Save(ctx, wf)
+}
+
+// validateOutputs checks that outputs match the expected schema.
+func (o *Orchestrator) validateOutputs(step *types.Step, outputs map[string]any) error {
+	if step.Agent == nil {
+		return nil
+	}
+
+	for name, def := range step.Agent.Outputs {
+		val, ok := outputs[name]
+		if !ok {
+			if def.Required {
+				return fmt.Errorf("missing required output: %s", name)
+			}
+			continue
+		}
+
+		// Type validation
+		switch def.Type {
+		case "string":
+			if _, ok := val.(string); !ok {
+				return fmt.Errorf("output %s: expected string, got %T", name, val)
+			}
+		case "number":
+			switch val.(type) {
+			case int, int64, float64:
+				// OK
+			default:
+				return fmt.Errorf("output %s: expected number, got %T", name, val)
+			}
+		case "boolean":
+			if _, ok := val.(bool); !ok {
+				return fmt.Errorf("output %s: expected boolean, got %T", name, val)
+			}
+		case "file_path":
+			// File path validation would check against agent's workdir
+			// Stub for now - executor track will implement
+		}
+	}
+
+	return nil
+}
+
+// checkStepTimeouts checks for timed-out agent steps.
+func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow) {
+	for _, step := range wf.Steps {
+		if step.Status != types.StepStatusRunning {
+			continue
+		}
+		if step.Executor != types.ExecutorAgent {
+			continue
+		}
+		if step.Agent == nil || step.Agent.Timeout == "" {
+			continue
+		}
+
+		timeout, err := time.ParseDuration(step.Agent.Timeout)
+		if err != nil {
+			continue
+		}
+
+		if step.StartedAt == nil {
+			continue
+		}
+
+		if time.Since(*step.StartedAt) > timeout {
+			o.logger.Warn("step timed out", "step", step.ID)
+			// Send C-c to agent, mark as failed after grace period
+			// Stub - executor track will implement timeout handling
+		}
+	}
+}
+
+// --- Executor Handlers (Stubs) ---
+// These will be implemented by the executor track (pivot-402 through pivot-407)
+
+// handleShell executes a shell command.
+func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Shell == nil {
+		return fmt.Errorf("shell step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	if o.shell == nil {
+		return fmt.Errorf("shell executor not implemented: %w", ErrNotImplemented)
+	}
+
+	outputs, err := o.shell.Run(ctx, step.Shell)
+	if err != nil {
+		if step.Shell.OnError == "continue" {
+			o.logger.Warn("shell command failed, continuing", "step", step.ID, "error", err)
+			if completeErr := step.Complete(outputs); completeErr != nil {
+				return fmt.Errorf("completing step after error: %w", completeErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("shell command failed: %w", err)
+	}
+
+	if err := step.Complete(outputs); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+	return nil
+}
+
+// handleSpawn starts an agent in a tmux session.
+func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Spawn == nil {
+		return fmt.Errorf("spawn step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	if o.agents == nil {
+		return fmt.Errorf("spawn executor not implemented: %w", ErrNotImplemented)
+	}
+
+	if err := o.agents.Start(ctx, wf, step); err != nil {
+		return fmt.Errorf("starting agent: %w", err)
+	}
+
+	// Spawn completes when agent is running
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+	return nil
+}
+
+// handleKill stops an agent's tmux session.
+func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Kill == nil {
+		return fmt.Errorf("kill step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	if o.agents == nil {
+		return fmt.Errorf("kill executor not implemented: %w", ErrNotImplemented)
+	}
+
+	if err := o.agents.Stop(ctx, wf, step); err != nil {
+		return fmt.Errorf("stopping agent: %w", err)
+	}
+
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+	return nil
+}
+
+// handleExpand inlines another workflow template.
+func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Expand == nil {
+		return fmt.Errorf("expand step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	if o.expander == nil {
+		return fmt.Errorf("expand executor not implemented: %w", ErrNotImplemented)
+	}
+
+	if err := o.expander.Expand(ctx, wf, step); err != nil {
+		return fmt.Errorf("expanding template: %w", err)
+	}
+
+	if err := step.Complete(nil); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+	return nil
+}
+
+// handleBranch evaluates a condition and expands the appropriate branch.
+func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Branch == nil {
+		return fmt.Errorf("branch step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	// Branch executor evaluates condition and expands appropriate target
+	// This is a stub - will be implemented in pivot-406
+	return fmt.Errorf("branch executor not implemented: %w", ErrNotImplemented)
+}
+
+// handleAgent injects a prompt into an agent.
+func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Agent == nil {
+		return fmt.Errorf("agent step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	if o.agents == nil {
+		return fmt.Errorf("agent executor not implemented: %w", ErrNotImplemented)
+	}
+
+	// Build prompt for agent
+	prompt := step.Agent.Prompt
+
+	// Inject prompt to agent's tmux session
+	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, prompt); err != nil {
+		return fmt.Errorf("injecting prompt: %w", err)
+	}
+
+	// Agent step stays running until agent calls meow done
+	return nil
 }
