@@ -11,50 +11,43 @@ import (
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
+// ExpandResult contains the steps generated from expanding a template.
+type ExpandResult struct {
+	Steps      []*types.Step
+	WorkflowID string
+}
+
 // FileTemplateExpander expands templates using the template package.
-// It loads templates from the filesystem and bakes them into beads.
+// It loads templates from the filesystem and bakes them into steps.
 type FileTemplateExpander struct {
 	// BaseDir is the project root directory
 	BaseDir string
-
-	// Store is used to create the resulting beads
-	Store BeadStore
 }
 
 // NewFileTemplateExpander creates a new FileTemplateExpander.
-func NewFileTemplateExpander(baseDir string, store BeadStore) *FileTemplateExpander {
+func NewFileTemplateExpander(baseDir string) *FileTemplateExpander {
 	return &FileTemplateExpander{
 		BaseDir: baseDir,
-		Store:   store,
 	}
 }
 
-// Expand implements TemplateExpander.
-// It loads a template and creates beads from it, linking them to the parent bead.
-func (e *FileTemplateExpander) Expand(ctx context.Context, spec *types.ExpandSpec, parentBead *types.Bead) error {
-	if spec == nil {
-		return fmt.Errorf("expand spec is nil")
+// Expand loads a template and bakes it into steps.
+// The caller is responsible for inserting the steps into the workflow.
+func (e *FileTemplateExpander) Expand(ctx context.Context, config *types.ExpandConfig, parentStepID string, parentWorkflowID string) (*ExpandResult, error) {
+	if config == nil {
+		return nil, fmt.Errorf("expand config is nil")
 	}
-	if spec.Template == "" {
-		return fmt.Errorf("template is empty")
+	if config.Template == "" {
+		return nil, fmt.Errorf("template is empty")
 	}
 
-	// Parse the template reference
-	// Formats:
-	//   - "name" - load by name from standard locations
-	//   - "./path/file.toml" - load from relative path
-	//   - "/abs/path/file.toml" - load from absolute path
-	//   - ".workflow" - local reference (module format)
-	//   - "file.toml#workflow" - file with specific workflow
-
-	templateRef := spec.Template
+	templateRef := config.Template
 	var workflow *template.Workflow
 	var workflowID string
 
 	// Determine the workflow ID
-	if parentBead != nil && parentBead.WorkflowID != "" {
-		// Use parent's workflow ID with extension
-		workflowID = parentBead.WorkflowID + "." + sanitizeID(templateRef)
+	if parentWorkflowID != "" {
+		workflowID = parentWorkflowID + "." + sanitizeID(templateRef)
 	} else {
 		workflowID = "expanded-" + sanitizeID(templateRef)
 	}
@@ -62,7 +55,7 @@ func (e *FileTemplateExpander) Expand(ctx context.Context, spec *types.ExpandSpe
 	// Handle different reference formats
 	if strings.HasPrefix(templateRef, ".") && !strings.Contains(templateRef, "/") && !strings.Contains(templateRef, "\\") {
 		// Local workflow reference like ".check-loop" - currently not supported without context
-		return fmt.Errorf("local workflow references (.name) require module context, not supported in direct expansion")
+		return nil, fmt.Errorf("local workflow references (.name) require module context, not supported in direct expansion")
 	}
 
 	// Check for file#workflow format
@@ -79,12 +72,12 @@ func (e *FileTemplateExpander) Expand(ctx context.Context, spec *types.ExpandSpe
 		// Load the module
 		module, err := template.ParseModuleFile(filePath)
 		if err != nil {
-			return fmt.Errorf("loading module %s: %w", filePath, err)
+			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
 		}
 
 		workflow = module.GetWorkflow(workflowName)
 		if workflow == nil {
-			return fmt.Errorf("workflow %q not found in %s", workflowName, filePath)
+			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, filePath)
 		}
 	} else if strings.HasSuffix(templateRef, ".toml") || strings.Contains(templateRef, "/") {
 		// File path
@@ -93,10 +86,10 @@ func (e *FileTemplateExpander) Expand(ctx context.Context, spec *types.ExpandSpe
 			filePath = filepath.Join(e.BaseDir, filePath)
 		}
 
-		// Load the module (prefer module format)
+		// Load the module
 		module, err := template.ParseModuleFile(filePath)
 		if err != nil {
-			return fmt.Errorf("loading module %s: %w", filePath, err)
+			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
 		}
 
 		workflow = module.DefaultWorkflow()
@@ -108,52 +101,40 @@ func (e *FileTemplateExpander) Expand(ctx context.Context, spec *types.ExpandSpe
 			}
 		}
 		if workflow == nil {
-			return fmt.Errorf("no workflow found in %s", filePath)
+			return nil, fmt.Errorf("no workflow found in %s", filePath)
 		}
 	} else {
 		// Template name - use loader
-		return fmt.Errorf("named template loading not yet supported for expansion: %s", templateRef)
+		return nil, fmt.Errorf("named template loading not yet supported for expansion: %s", templateRef)
 	}
 
 	// Create the baker
 	baker := template.NewBaker(workflowID)
 
-	// Merge variables from spec with any defaults
-	vars := make(map[string]string)
-	for k, v := range spec.Variables {
-		vars[k] = v
-	}
-
 	// Bake the workflow
-	result, err := baker.BakeWorkflow(workflow, vars)
+	result, err := baker.BakeWorkflow(workflow, config.Variables)
 	if err != nil {
-		return fmt.Errorf("baking workflow: %w", err)
+		return nil, fmt.Errorf("baking workflow: %w", err)
 	}
 
-	// Check if store supports creation
-	creator, ok := e.Store.(interface {
-		Create(context.Context, *types.Bead) error
-	})
-	if !ok {
-		return fmt.Errorf("store does not support creation")
-	}
+	// Prefix step IDs with parent step ID and set up dependencies
+	for _, step := range result.Steps {
+		// Prefix the step ID: parent.child
+		step.ID = parentStepID + "." + step.ID
 
-	// Link beads to parent and create them
-	for _, bead := range result.Beads {
-		if parentBead != nil {
-			bead.Parent = parentBead.ID
-			// First bead(s) without dependencies should depend on parent
-			if len(bead.Needs) == 0 {
-				bead.Needs = []string{parentBead.ID}
-			}
+		// Update internal dependencies to use prefixed IDs
+		for i, need := range step.Needs {
+			step.Needs[i] = parentStepID + "." + need
 		}
 
-		if err := creator.Create(ctx, bead); err != nil {
-			return fmt.Errorf("creating bead %s: %w", bead.ID, err)
-		}
+		// Steps with no dependencies should depend on parent completing
+		// (This will be handled by the orchestrator when inserting)
 	}
 
-	return nil
+	return &ExpandResult{
+		Steps:      result.Steps,
+		WorkflowID: workflowID,
+	}, nil
 }
 
 // sanitizeID creates a safe ID component from a template reference.
