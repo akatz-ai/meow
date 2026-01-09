@@ -1,0 +1,82 @@
+# Parallel Agents Demo
+# Tests spawning multiple agents that work in parallel.
+#
+# Flow:
+# 1. Spawn agent-alpha and agent-beta (parallel)
+# 2. Each agent runs a simple task (parallel)
+# 3. Kill both agents (parallel)
+#
+# Usage:
+#   meow run .meow/templates/parallel-agents.meow.toml
+
+[main]
+name = "parallel-agents-demo"
+description = "Test running multiple agents in parallel"
+
+# Step 1a: Spawn first agent
+[[main.steps]]
+id = "spawn-alpha"
+executor = "spawn"
+description = "Start agent alpha"
+agent = "alpha"
+
+# Step 1b: Spawn second agent (parallel with 1a)
+[[main.steps]]
+id = "spawn-beta"
+executor = "spawn"
+description = "Start agent beta"
+agent = "beta"
+
+# Step 2a: Agent alpha task
+[[main.steps]]
+id = "task-alpha"
+executor = "agent"
+description = "Alpha counts files in src/"
+needs = ["spawn-alpha"]
+agent = "alpha"
+prompt = """
+You are agent ALPHA in a parallel workflow test.
+
+Your task: Count the number of .go files in the internal/ directory.
+Run: find internal -name "*.go" | wc -l
+
+Then report: "ALPHA: Found X .go files in internal/"
+
+When done, run: meow done
+"""
+
+# Step 2b: Agent beta task (parallel with 2a)
+[[main.steps]]
+id = "task-beta"
+executor = "agent"
+description = "Beta counts files in cmd/"
+needs = ["spawn-beta"]
+agent = "beta"
+prompt = """
+You are agent BETA in a parallel workflow test.
+
+Your task: Count the number of .go files in the cmd/ directory.
+Run: find cmd -name "*.go" | wc -l
+
+Then report: "BETA: Found X .go files in cmd/"
+
+When done, run: meow done
+"""
+
+# Step 3a: Kill alpha (after its task completes)
+[[main.steps]]
+id = "kill-alpha"
+executor = "kill"
+description = "Stop agent alpha"
+needs = ["task-alpha"]
+agent = "alpha"
+graceful = true
+
+# Step 3b: Kill beta (after its task completes, parallel with 3a)
+[[main.steps]]
+id = "kill-beta"
+executor = "kill"
+description = "Stop agent beta"
+needs = ["task-beta"]
+agent = "beta"
+graceful = true

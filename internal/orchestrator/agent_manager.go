@@ -189,8 +189,9 @@ func (m *TmuxAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 	return m.sessionExists(state.tmuxSession), nil
 }
 
-// InjectPrompt sends ESC + prompt to agent's tmux session.
-// Uses tmux load-buffer + paste-buffer for proper multiline handling.
+// InjectPrompt sends a prompt to an agent's tmux session.
+// Uses the "nudge" pattern from gastown: literal mode + delay + Enter with retry.
+// This is tested and reliable for Claude Code sessions.
 func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string) error {
 	m.mu.RLock()
 	state, ok := m.agents[agentID]
@@ -201,33 +202,37 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	}
 
 	sessionName := state.tmuxSession
-	m.logger.Debug("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
+	m.logger.Info("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
 
-	// Send Escape first to ensure we're in command mode
-	if err := m.sendKeys(ctx, sessionName, "Escape"); err != nil {
-		m.logger.Warn("failed to send Escape", "error", err)
+	// Wait for Claude to be ready (check for prompt indicator)
+	if err := m.waitForClaudeReady(ctx, sessionName, 10*time.Second); err != nil {
+		m.logger.Warn("Claude may not be ready", "error", err)
+		// Continue anyway - it might still work
 	}
 
-	// Small delay to ensure Escape is processed
-	time.Sleep(100 * time.Millisecond)
+	// Send text in literal mode (-l flag handles special chars and newlines)
+	if err := m.sendKeysLiteral(ctx, sessionName, prompt); err != nil {
+		return fmt.Errorf("sending prompt: %w", err)
+	}
 
-	// Use paste-buffer for multiline prompts, send-keys for simple ones
-	if strings.Contains(prompt, "\n") {
-		if err := m.pasteText(ctx, sessionName, prompt); err != nil {
-			return fmt.Errorf("pasting prompt: %w", err)
+	// Wait 500ms for paste to complete (tested, required for Claude Code)
+	time.Sleep(500 * time.Millisecond)
+
+	// Send Enter with retry (critical for message submission)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			m.logger.Debug("retrying Enter", "attempt", attempt+1)
+			time.Sleep(200 * time.Millisecond)
 		}
-	} else {
-		if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
-			return fmt.Errorf("sending prompt: %w", err)
+		if err := m.sendKeys(ctx, sessionName, "Enter"); err != nil {
+			lastErr = err
+			m.logger.Debug("Enter attempt failed", "attempt", attempt+1, "error", err)
+			continue
 		}
+		return nil
 	}
-
-	// Send Enter to submit
-	if err := m.sendKeys(ctx, sessionName, "Enter"); err != nil {
-		return fmt.Errorf("sending Enter: %w", err)
-	}
-
-	return nil
+	return fmt.Errorf("failed to send Enter after 3 attempts: %w", lastErr)
 }
 
 // SetCurrentStep updates the current step for an agent.
@@ -328,52 +333,62 @@ func (m *TmuxAgentManager) sendKeys(ctx context.Context, session string, keys st
 	return nil
 }
 
-// pasteText uses tmux load-buffer + paste-buffer for proper multiline text handling.
-// This avoids issues with send-keys where multiline text shows as "[Pasted text #N +M lines]"
-// but doesn't actually get submitted.
-func (m *TmuxAgentManager) pasteText(ctx context.Context, session string, text string) error {
-	// Create temp file with the prompt text
-	tmpFile, err := os.CreateTemp("", "meow-prompt-*.txt")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath) // Clean up temp file
-
-	// Write prompt to temp file
-	if _, err := tmpFile.WriteString(text); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("writing to temp file: %w", err)
-	}
-	tmpFile.Close()
-
-	// Use a unique buffer name to avoid conflicts
-	bufferName := fmt.Sprintf("meow-%d", time.Now().UnixNano())
-
-	// Load file contents into tmux buffer
-	loadCmd := exec.CommandContext(ctx, "tmux", "load-buffer", "-b", bufferName, tmpPath)
+// sendKeysLiteral sends text using tmux's literal mode (-l flag).
+// This properly handles special characters and multiline text.
+func (m *TmuxAgentManager) sendKeysLiteral(ctx context.Context, session string, text string) error {
+	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "-l", text)
 	var stderr bytes.Buffer
-	loadCmd.Stderr = &stderr
-	if err := loadCmd.Run(); err != nil {
-		return fmt.Errorf("tmux load-buffer failed: %w (stderr: %s)", err, stderr.String())
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tmux send-keys -l failed: %w (stderr: %s)", err, stderr.String())
 	}
-
-	// Paste buffer into session (using -p flag for bracketed paste mode)
-	pasteCmd := exec.CommandContext(ctx, "tmux", "paste-buffer", "-b", bufferName, "-t", session, "-p")
-	stderr.Reset()
-	pasteCmd.Stderr = &stderr
-	if err := pasteCmd.Run(); err != nil {
-		// Clean up buffer before returning error
-		_ = exec.CommandContext(ctx, "tmux", "delete-buffer", "-b", bufferName).Run()
-		return fmt.Errorf("tmux paste-buffer failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	// Clean up the buffer
-	deleteCmd := exec.CommandContext(ctx, "tmux", "delete-buffer", "-b", bufferName)
-	if err := deleteCmd.Run(); err != nil {
-		m.logger.Debug("failed to delete buffer", "buffer", bufferName, "error", err)
-		// Not fatal, buffer will be garbage collected by tmux
-	}
-
 	return nil
+}
+
+// waitForClaudeReady polls until Claude's prompt indicator appears in the pane.
+// Claude is ready when we see the input prompt area (indicated by "> " or "❯").
+// This helps ensure we don't send input before Claude is ready to receive it.
+func (m *TmuxAgentManager) waitForClaudeReady(ctx context.Context, session string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Capture last few lines of the pane
+		lines, err := m.capturePane(ctx, session, 15)
+		if err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		// Look for Claude's prompt indicators
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			// Claude Code shows "> " or "❯" at the start of input line
+			if strings.HasPrefix(trimmed, "> ") || strings.HasPrefix(trimmed, "❯") || trimmed == ">" {
+				return nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for Claude prompt")
+}
+
+// capturePane captures the last N lines of a tmux pane.
+func (m *TmuxAgentManager) capturePane(ctx context.Context, session string, lines int) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-p", "-t", session, "-S", fmt.Sprintf("-%d", lines))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("tmux capture-pane failed: %w (stderr: %s)", err, stderr.String())
+	}
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		return nil, nil
+	}
+	return strings.Split(output, "\n"), nil
 }

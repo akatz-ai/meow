@@ -512,6 +512,7 @@ func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step
 }
 
 // handleKill stops an agent's tmux session.
+// Runs asynchronously to avoid blocking parallel step dispatch.
 func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	if step.Kill == nil {
 		return fmt.Errorf("kill step %s missing config", step.ID)
@@ -525,13 +526,27 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 		return fmt.Errorf("kill executor not implemented: %w", ErrNotImplemented)
 	}
 
-	if err := o.agents.Stop(ctx, wf, step); err != nil {
-		return fmt.Errorf("stopping agent: %w", err)
-	}
+	// Run kill asynchronously to allow parallel kills
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
 
-	if err := step.Complete(nil); err != nil {
-		return fmt.Errorf("completing step: %w", err)
-	}
+		if err := o.agents.Stop(ctx, wf, step); err != nil {
+			o.logger.Error("kill step failed", "step", step.ID, "error", err)
+			step.Fail(&types.StepError{Message: err.Error()})
+		} else {
+			if err := step.Complete(nil); err != nil {
+				o.logger.Error("completing kill step", "step", step.ID, "error", err)
+			}
+		}
+
+		// Save workflow state after step completes
+		if err := o.store.Save(ctx, wf); err != nil {
+			o.logger.Error("saving workflow after kill", "error", err)
+		}
+	}()
+
+	// Step is now running, returns immediately
 	return nil
 }
 
