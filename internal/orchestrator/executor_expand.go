@@ -361,6 +361,12 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 					step.Branch.OnFalse.Variables[k] = substituteVars(v, vars)
 				}
 			}
+			if step.Branch.OnTimeout != nil {
+				step.Branch.OnTimeout.Template = substituteVars(step.Branch.OnTimeout.Template, vars)
+				for k, v := range step.Branch.OnTimeout.Variables {
+					step.Branch.OnTimeout.Variables[k] = substituteVars(v, vars)
+				}
+			}
 		}
 	case types.ExecutorAgent:
 		if step.Agent != nil {

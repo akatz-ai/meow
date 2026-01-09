@@ -244,7 +244,13 @@ func validateFilePath(path, workdir string) string {
 	// Check path is within workdir (prevent path traversal)
 	if workdir != "" {
 		absWorkdir := filepath.Clean(workdir)
-		if !strings.HasPrefix(absPath, absWorkdir) {
+		// Ensure workdir ends with separator to prevent prefix matching attacks
+		// e.g., workdir="/home/user/work" shouldn't match "/home/user/workspace"
+		if !strings.HasSuffix(absWorkdir, string(filepath.Separator)) {
+			absWorkdir += string(filepath.Separator)
+		}
+		// The file must be exactly the workdir or within it
+		if absPath != filepath.Clean(workdir) && !strings.HasPrefix(absPath, absWorkdir) {
 			return fmt.Sprintf("file path must be within agent workdir: %s", path)
 		}
 	}

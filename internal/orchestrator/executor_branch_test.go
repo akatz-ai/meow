@@ -202,11 +202,16 @@ func TestExecuteBranch_NoTargetForOutcome(t *testing.T) {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
 
-	if result.Outcome != BranchOutcomeNone {
-		t.Errorf("expected outcome 'none', got %q", result.Outcome)
+	// Outcome should still be 'true' even though there's no target
+	// This preserves information about what the condition evaluated to
+	if result.Outcome != BranchOutcomeTrue {
+		t.Errorf("expected outcome 'true' (condition passed), got %q", result.Outcome)
 	}
 	if len(result.ExpandedSteps) != 0 {
 		t.Errorf("expected 0 expanded steps, got %d", len(result.ExpandedSteps))
+	}
+	if result.Target != nil {
+		t.Errorf("expected nil target, got %v", result.Target)
 	}
 }
 

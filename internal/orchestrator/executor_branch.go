@@ -110,8 +110,9 @@ func ExecuteBranch(
 	}
 
 	// If there's no target for this outcome, we're done
+	// Note: We preserve the original outcome (true/false/timeout) even if there's no target.
+	// BranchOutcomeNone is only set when the outcome itself was none (shouldn't happen).
 	if result.Target == nil {
-		result.Outcome = BranchOutcomeNone
 		return result, nil
 	}
 

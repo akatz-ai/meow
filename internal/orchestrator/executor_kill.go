@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/types"
 )
@@ -90,10 +91,18 @@ func ExecuteKill(ctx context.Context, step *types.Step, workflowID string, stopp
 }
 
 // isAgentAlreadyStoppedError checks if the error indicates the agent was already stopped.
-// This is a placeholder - the actual implementation depends on the AgentStopper implementation.
+// Per the spec: "Doesn't fail if agent already dead" - we're lenient with stop errors.
 func isAgentAlreadyStoppedError(err error) bool {
-	// For now, we'll be lenient and treat any error as non-fatal
-	// The bead spec says: "Doesn't fail if agent already dead"
-	// A more robust implementation would check for specific error types
-	return false
+	if err == nil {
+		return false
+	}
+	// Be lenient - treat most stop errors as "already stopped"
+	// Common cases: session not found, process not running, etc.
+	// The AgentStopper should return specific error types for truly fatal errors.
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "not found") ||
+		strings.Contains(errMsg, "no such") ||
+		strings.Contains(errMsg, "does not exist") ||
+		strings.Contains(errMsg, "not running") ||
+		strings.Contains(errMsg, "already")
 }

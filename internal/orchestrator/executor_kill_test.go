@@ -183,8 +183,10 @@ func TestExecuteKill_MissingAgent(t *testing.T) {
 }
 
 func TestExecuteKill_StopError(t *testing.T) {
+	// Use an error that won't match the "already stopped" patterns
+	// (not found, no such, does not exist, not running, already)
 	stopper := &mockAgentStopper{
-		stopErr: errors.New("tmux session not found"),
+		stopErr: errors.New("permission denied: cannot kill protected process"),
 	}
 	step := &types.Step{
 		ID:       "test-error",
@@ -199,8 +201,37 @@ func TestExecuteKill_StopError(t *testing.T) {
 		t.Fatal("expected error from Stop failure")
 	}
 
-	if stepErr.Message != "failed to stop agent worker-1: tmux session not found" {
+	if stepErr.Message != "failed to stop agent worker-1: permission denied: cannot kill protected process" {
 		t.Errorf("unexpected error message: %s", stepErr.Message)
+	}
+}
+
+func TestExecuteKill_AlreadyStoppedNotAnError(t *testing.T) {
+	// Errors indicating agent is already stopped should NOT fail the step
+	testCases := []string{
+		"session not found",
+		"no such process",
+		"process does not exist",
+		"agent not running",
+		"session already terminated",
+	}
+
+	for _, errMsg := range testCases {
+		stopper := &mockAgentStopper{
+			stopErr: errors.New(errMsg),
+		}
+		step := &types.Step{
+			ID:       "test-lenient",
+			Executor: types.ExecutorKill,
+			Kill: &types.KillConfig{
+				Agent: "worker-1",
+			},
+		}
+
+		_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+		if stepErr != nil {
+			t.Errorf("error %q should be treated as 'already stopped', not a failure: %v", errMsg, stepErr)
+		}
 	}
 }
 

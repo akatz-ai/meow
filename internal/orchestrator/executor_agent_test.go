@@ -308,6 +308,45 @@ func TestCompleteAgentStep_FilePathOutsideWorkdir(t *testing.T) {
 	}
 }
 
+func TestCompleteAgentStep_FilePathPrefixAttack(t *testing.T) {
+	// Test that path prefix attacks are blocked
+	// e.g., workdir="/tmp/work" shouldn't allow "/tmp/workspace/evil.txt"
+	tmpBase := t.TempDir()
+	workDir := filepath.Join(tmpBase, "work")
+	attackDir := filepath.Join(tmpBase, "workspace") // Similar prefix!
+	os.MkdirAll(workDir, 0755)
+	os.MkdirAll(attackDir, 0755)
+
+	// Create a file in the attack directory
+	evilFile := filepath.Join(attackDir, "evil.txt")
+	os.WriteFile(evilFile, []byte("malicious"), 0644)
+
+	step := &types.Step{
+		ID:       "agent-step",
+		Executor: types.ExecutorAgent,
+		Agent: &types.AgentConfig{
+			Agent:  "worker-1",
+			Prompt: "Create file",
+			Outputs: map[string]types.AgentOutputDef{
+				"file": {Required: true, Type: "file_path"},
+			},
+		},
+	}
+
+	outputs := map[string]any{
+		"file": evilFile,
+	}
+
+	result, stepErr := CompleteAgentStep(step, outputs, workDir)
+	if stepErr == nil {
+		t.Fatal("expected validation error for path prefix attack")
+	}
+
+	if !strings.Contains(result.ValidationErrors[0], "within agent workdir") {
+		t.Errorf("expected workdir error for prefix attack, got %q", result.ValidationErrors[0])
+	}
+}
+
 func TestCompleteAgentStep_OptionalOutputMissing(t *testing.T) {
 	step := &types.Step{
 		ID:       "agent-step",
