@@ -460,11 +460,12 @@ description = "Merge all 3 track branches into integration worktree"
 needs = ["track-1-done", "track-2-done", "track-3-done", "create-worktree-4"]
 command = """
 set -e
-cd {{create-worktree-4.outputs.path}}
+cd .meow/worktrees/{{track_name_4}}-track
 
-BRANCH_1="{{create-worktree-1.outputs.branch}}"
-BRANCH_2="{{create-worktree-2.outputs.branch}}"
-BRANCH_3="{{create-worktree-3.outputs.branch}}"
+# Read branch names from files (workaround for shell_outputs variable resolution)
+BRANCH_1=$(cat .meow/worktrees/{{track_name_1}}-track/.meow-branch)
+BRANCH_2=$(cat .meow/worktrees/{{track_name_2}}-track/.meow-branch)
+BRANCH_3=$(cat .meow/worktrees/{{track_name_3}}-track/.meow-branch)
 
 echo "Merging $BRANCH_1..."
 git merge "$BRANCH_1" --no-edit -m "Merge {{track_name_1}} track"

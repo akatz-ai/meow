@@ -1,0 +1,142 @@
+# ============================================================================
+# MEOW Workflow: Merge Agent Only
+# ============================================================================
+#
+# Standalone merge agent workflow for testing or continuing after parallel work.
+# Assumes worktrees already exist with completed work.
+#
+# Usage:
+#   meow run .meow/templates/merge-agent-only.meow.toml \
+#     --var 'integration_worktree=.meow/worktrees/integration-track'
+#
+# ============================================================================
+
+[main]
+name = "merge-agent-only"
+description = "Standalone merge agent for reviewing and merging completed work"
+
+[main.variables]
+integration_worktree = { required = true, description = "Path to integration worktree" }
+
+# ============================================================================
+# Merge Agent Lifecycle
+# ============================================================================
+
+[[main.steps]]
+id = "spawn-merge-agent"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{integration_worktree}}"
+
+[[main.steps]]
+id = "merge-review"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn-merge-agent"]
+prompt = """
+# Final Review Agent
+
+You are the final reviewer. Verify all implementation work before merging to main.
+
+## FIRST: Read the Specification
+@docs/MVP-SPEC-v2.md
+
+## Review All Changes
+
+See what was implemented:
+
+```bash
+git log --oneline main..HEAD
+git diff --stat main..HEAD
+```
+
+## Run Tests
+
+```bash
+go test ./... 2>&1 | tail -30
+```
+
+All tests must pass before proceeding.
+
+## Check for Issues
+
+Look at the actual code changes:
+
+```bash
+git diff main..HEAD | head -200
+```
+
+Check for:
+- Code that doesn't match the spec
+- Missing error handling
+- Incomplete implementations
+- Dead code or unused imports
+
+Fix small issues directly and commit them. Document larger issues but don't attempt major fixes.
+
+When done: `meow done`
+"""
+
+[[main.steps]]
+id = "merge-to-main"
+executor = "agent"
+agent = "merge-agent"
+needs = ["merge-review"]
+prompt = """
+# Merge to Main
+
+All reviews complete. Merge the integration branch to main.
+
+## Steps
+
+1. Get the current branch name:
+   ```bash
+   BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   echo "Current branch: $BRANCH"
+   ```
+
+2. Go to main repo and merge:
+   ```bash
+   cd /data/projects/meow-machine
+   git merge "$BRANCH" --no-edit -m "Merge: Adapter and Events system implementation"
+   ```
+
+3. Verify the merge:
+   ```bash
+   git log --oneline -10
+   ```
+
+4. Run final tests:
+   ```bash
+   go test ./... 2>&1 | tail -20
+   ```
+
+## If Merge Conflicts
+
+If there are merge conflicts:
+1. List conflicted files: `git status`
+2. Resolve each conflict carefully
+3. Stage: `git add <file>`
+4. Complete: `git commit`
+
+When done: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-merge-agent"
+executor = "kill"
+agent = "merge-agent"
+needs = ["merge-to-main"]
+graceful = true
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["kill-merge-agent"]
+command = """
+echo "=============================================="
+echo "  MERGE AGENT WORKFLOW COMPLETE"
+echo "=============================================="
+echo "All work merged to main."
+echo "=============================================="
+"""
