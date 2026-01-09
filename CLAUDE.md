@@ -4,359 +4,184 @@ This document provides instructions for Claude Code when working with the MEOW S
 
 ## Required Reading
 
-Before working on any task, read the architecture document to understand how your piece fits the whole:
+Before working on any task, read the authoritative specification:
 
 ```
-@ARCHITECTURE.md
+@docs/MVP-SPEC-v2.md
 ```
 
-This document explains the 6 primitives, component relationships, data flow, and key interfaces.
+This is the **only** architecture document. It defines:
+- The 6 executors (shell, spawn, kill, expand, branch, agent)
+- Step and Workflow data structures
+- IPC protocol (Unix sockets, single-line JSON)
+- Template system (TOML modules)
+- CLI commands
 
 ## Overview
 
-MEOW Stack (Molecular Expression Of Work) is a recursive, composable workflow system for durable AI agent orchestration. You are executing within this system.
+MEOW (Molecular Expression Of Work) is a coordination language for AI agent orchestration. It is NOT a task tracker - it orchestrates agents through programmable workflows.
 
 ## Project Status: Pre-Customer MVP
 
-**This is a greenfield MVP with zero customers.** There is no legacy code, no deployed users, and no backwards compatibility requirements.
+**This is a greenfield MVP with zero customers.** No legacy code, no deployed users, no backwards compatibility requirements.
 
-**Critical rule:** Do NOT add any of the following:
+**Critical rule:** Do NOT add:
 - "Legacy" format support or compatibility shims
 - Backwards compatibility code for old versions
 - Migration paths from previous formats
 - Deprecation warnings or fallback behaviors
-- Feature flags for "old" vs "new" behavior
 
-If you encounter a task that mentions "legacy compatibility" or "maintain old format", **push back** — we should simply use the new/correct approach. The only format is the current format. Delete old code rather than maintaining parallel paths.
+Delete old code rather than maintaining parallel paths.
 
-This constraint enables moving fast and keeping the codebase clean.
+## Current Work: MVP-SPEC-v2 Pivot
 
-## Core Concepts
+We are implementing the workflow-centric model from MVP-SPEC-v2. Key changes from older code:
 
-### You Are in a Molecule
+| Old (Bead-Centric) | New (Workflow-Centric) |
+|--------------------|------------------------|
+| 8 bead types | 6 executors |
+| BeadStore interface | WorkflowStore interface |
+| Bead struct | Step struct |
+| `meow close` | `meow done` |
+| Three-tier visibility | No tiers - just steps |
+| .beads/issues.jsonl | .meow/workflows/*.yaml |
 
-When executing MEOW workflows, you are always within a **molecule** — a structured workflow with steps. Each step you complete advances the workflow.
+**If you see old patterns in the code, you may be looking at code that needs to be refactored as part of this pivot.**
 
-### The Molecule Stack
+## The 6 Executors
 
-There is a stack of active molecules. You might be:
-- In the **outer-loop** (selecting work, baking molecules)
-- In a **meta-molecule** (executing a batch of tasks)
-- In a **step molecule** (e.g., implementing a task with TDD)
+| Executor | Who Runs | Completes When |
+|----------|----------|----------------|
+| `shell` | Orchestrator | Command exits |
+| `spawn` | Orchestrator | Agent session running |
+| `kill` | Orchestrator | Agent session terminated |
+| `expand` | Orchestrator | Template steps inserted |
+| `branch` | Orchestrator | Condition evaluated, branch expanded |
+| `agent` | Agent (Claude) | Agent calls `meow done` |
 
-Check your position:
-```bash
-bd mol stack    # Show full stack
-bd mol current  # Show current molecule and step
-bd ready        # Show next step to execute
+**Gate is NOT an executor.** Human approval is implemented as: `branch` with `condition = "meow await-approval <gate-id>"`.
+
+## Step Status Lifecycle
+
+```
+pending ──► running ──► completing ──► done
+              │             │
+              │             └──► (back to running if validation fails)
+              │
+              └──► failed
 ```
 
-### Steps Have Templates
+The `completing` state prevents race conditions during step transitions.
 
-When you encounter a step with a `template` label, that step expands into its own molecule. The executor handles this — you just need to complete the current step.
+## Working on Beads
 
-## Execution Protocol
+When assigned a bead to implement:
 
-### At Session Start
+1. **Read the bead**: `bd show <bead-id>`
+2. **Read relevant spec sections**: The bead description often references specific parts of MVP-SPEC-v2
+3. **Implement with TDD**: Write failing tests first, then implement
+4. **Commit frequently**: Small, logical commits
+5. **Close when done**: `bd close <bead-id>`
 
-1. **Check position**:
-   ```bash
-   bd mol current
-   ```
+## Key Files
 
-2. **Read step context**:
-   ```bash
-   bd show <current-step-id>
-   ```
-
-3. **Check for notes from previous session**:
-   Look for handoff notes in the step's notes field.
-
-4. **Resume work**:
-   Continue from where the last session stopped.
-
-### During Execution
-
-1. **Follow step instructions**:
-   Each step has detailed instructions. Follow them carefully.
-
-2. **Complete one step at a time**:
-   Don't skip ahead. The dependency graph enforces order.
-
-3. **Close steps when done**:
-   ```bash
-   bd close <step-id> --continue
-   ```
-   The `--continue` flag advances to the next ready step.
-
-4. **Record context in notes**:
-   If the step is complex, update notes as you work:
-   ```bash
-   bd update <step-id> --notes "PROGRESS: ..."
-   ```
-
-### At Session End (or Context Limit)
-
-If you're about to hit context limits or the session is ending:
-
-1. **Save your progress**:
-   ```bash
-   bd update <current-step> --notes "
-   COMPLETED:
-   - [what you finished]
-
-   IN PROGRESS:
-   - [what you're working on]
-
-   NEXT:
-   - [what needs to happen next]
-
-   CONTEXT:
-   - [important decisions, file locations, etc.]
-   "
-   ```
-
-2. **Commit any code changes**:
-   Don't leave uncommitted work. Future sessions see git history.
-
-3. **The loop continues**:
-   The Ralph Wiggum loop will restart with the same prompt. You'll see your notes.
-
-## Special Step Types
-
-### Atomic Steps
-
-Most steps are atomic — execute them directly following the instructions.
-
-### Gate Steps
-
-When you reach a step with `type: gate`:
-1. Complete any preparation steps (summary, notification)
-2. The workflow will PAUSE
-3. Wait for human to run `meow approve` or `meow reject`
-4. Continue when the gate is closed
-
-### Condition Steps
-
-When you reach a step with `type: condition`:
-1. The orchestrator evaluates the shell condition
-2. Based on exit code (0 = true, non-zero = false), expands `on_true` or `on_false` branch
-3. This is how loops are implemented — a condition that expands itself on_true
-
-## Task Selection
-
-When in the **analyze-pick** step:
-
-1. **Run triage**:
-   ```bash
-   bv --robot-triage
-   ```
-
-2. **Analyze the JSON output**:
-   - `recommendations` — ranked by composite score
-   - `score_breakdown` — why each is ranked
-   - `unblocks_ids` — what completing this enables
-   - `quick_wins` — low effort, high impact
-   - `project_health` — overall status
-
-3. **Consider context**:
-   - What's already in progress?
-   - Would this complete an epic?
-   - Any dependencies bv doesn't know about?
-
-4. **Select coherent batch**:
-   - 1-3 related tasks
-   - Same epic or area
-   - Natural review boundary
-
-## Template-Based Steps
-
-When executing a step that expanded from a template:
-
-### implement (TDD workflow)
-
-1. **load-context**: Read task, identify files
-2. **write-tests**: Write failing tests first
-3. **verify-fail**: Ensure tests fail correctly
-4. **implement**: Write minimum code to pass
-5. **verify-pass**: All tests must pass
-6. **review**: Self-review for quality
-7. **commit**: Descriptive commit message
-
-### test-suite
-
-1. **setup**: Prepare test environment
-2. **unit-tests**: Run unit tests
-3. **integration-tests**: Run integration tests
-4. **e2e-tests**: Run E2E tests (if configured)
-5. **coverage**: Generate coverage report
-6. **report**: Summarize results
-
-### human-gate
-
-1. **prepare-summary**: Summarize completed work
-2. **notify**: Send notification
-3. **await-approval**: STOP — wait for human
-4. **record-decision**: Log human's decision
-
-## Error Handling
-
-### If a Step Fails
-
-1. **Don't panic**. Errors are expected.
-2. **Document the error**:
-   ```bash
-   bd update <step> --notes "ERROR: ..."
-   ```
-3. **Check error handling**:
-   - `on_error = retry` → try again
-   - `on_error = skip` → move on
-   - `on_error = inject-gate` → human/AI triages
-   - `on_error = abort` → stop execution
-
-### If Tests Fail
-
-1. Read the error carefully
-2. Fix the issue in implementation (not the test)
-3. Re-run tests
-4. Don't close verify-pass until tests actually pass
-
-### If You're Stuck
-
-1. Update notes with your understanding of the problem
-2. If human gate is available, request review
-3. Don't thrash — better to pause than waste iterations
+| Purpose | Path |
+|---------|------|
+| Spec | `docs/MVP-SPEC-v2.md` |
+| Types (old) | `internal/types/bead.go` |
+| Types (new) | `internal/types/step.go` (to be created) |
+| Orchestrator | `internal/orchestrator/orchestrator.go` |
+| Templates | `internal/template/` |
+| CLI | `cmd/meow/cmd/` |
 
 ## Commands Reference
 
 ### Beads CLI (bd)
 
 ```bash
-# View state
-bd mol stack              # Show molecule stack
-bd mol current            # Current molecule and step
-bd ready                  # Next executable step
+bd ready                  # Show tasks ready to work on
 bd show <id>              # View bead details
 bd list --status=open     # List open beads
-
-# Update state
-bd close <id>             # Close a step
-bd close <id> --continue  # Close and advance
+bd close <id>             # Close completed bead
 bd update <id> --notes "" # Update notes
-bd update <id> --status in_progress
-
-# Dependencies
-bd dep tree <id>          # Show dependency tree
-bd dep add <a> <b>        # A depends on B
 ```
 
-### Beads Viewer (bv)
+### MEOW CLI (meow) - Current
 
 ```bash
-bv --robot-triage         # Full triage with scoring
-bv --robot-next           # Just top recommendation
-bv --robot-plan           # Parallel execution tracks
+meow run <template>       # Run a workflow
+meow prime                # Get current task (for agents)
+meow close <id>           # Close a task (being renamed to 'done')
 ```
 
-### MEOW CLI (meow)
+### MEOW CLI (meow) - New (MVP-SPEC-v2)
 
 ```bash
-meow status               # Current position and state
-meow approve              # Close current gate (human)
-meow reject --notes ""    # Reject with feedback (human)
+meow run <template>       # Run a workflow
+meow done --output k=v    # Signal step completion
+meow prime                # Get current prompt (for stop hook)
+meow approve <wf> <gate>  # Approve a gate
+meow reject <wf> <gate>   # Reject a gate
 ```
 
 ## Best Practices
 
-### 1. Trust the System
+### 1. Read the Spec First
 
-The molecule stack and dependency graph ensure correct ordering. Don't try to skip ahead or work out of order.
+MVP-SPEC-v2 is comprehensive. If you're unsure about something, it's probably in the spec.
 
-### 2. Write Good Notes
+### 2. No Gate Executor
 
-Future sessions (including yourself) depend on good notes. Be specific:
-- What was done
-- What's in progress
-- What's next
-- Key decisions made
-- File locations
+If you're tempted to add a gate executor or GateConfig, stop. Gates are implemented via branch + await-approval.
 
-### 3. Commit Frequently
+### 3. 6 Executors Only
 
-Each logical unit of work should be committed. The git history is context for future sessions.
+The executors are: shell, spawn, kill, expand, branch, agent. No more, no less.
 
-### 4. Follow TDD Discipline
+### 4. Step IDs Cannot Contain Dots
 
-When in the implement template:
-- Tests first, always
-- Verify they fail before implementing
-- Minimum viable implementation
-- Don't over-engineer
+Dots are reserved for expansion prefixes (e.g., `parent-step.child-step`).
 
-### 5. Be Honest About Gates
+### 5. Atomic File Writes
 
-When reaching a human gate:
-- Provide accurate summary
-- Flag concerns honestly
-- Don't try to skip or auto-approve
+Workflow state files use write-then-rename for atomicity.
 
-### 6. Respect Context Limits
+### 6. Single-Line JSON for IPC
 
-If you're approaching context limits:
-- Save progress in notes
-- Commit changes
-- Let the loop restart cleanly
+IPC messages must be single-line JSON (no pretty printing).
 
-## Integration with Other Systems
+## Error Handling
 
-### mcp_agent_mail
+When a step fails:
+- `on_error: fail` (default) - workflow fails
+- `on_error: continue` - log and continue
 
-For multi-agent scenarios, coordinate via agent mail:
+Agent step timeout handling:
+1. Send C-c to agent's tmux session
+2. Wait 10 seconds
+3. Mark step failed
+
+## Session Notes
+
+If approaching context limits:
+
+1. **Save progress**: Update bead notes with status
+2. **Commit changes**: Don't leave uncommitted work
+3. **Document next steps**: What should the next session do?
+
 ```bash
-am send --to "<agent>" --subject "..." --body "..."
-am inbox
-am lease --path "src/auth/**" --duration 1h
-```
+bd update <bead-id> --notes "
+COMPLETED:
+- [what you finished]
 
-### beads_viewer
+IN PROGRESS:
+- [current state]
 
-For task prioritization:
-```bash
-bv --robot-triage
-bv --robot-next
-bv --robot-insights
-```
-
-## Troubleshooting
-
-### "No ready steps"
-
-The molecule is complete. Check if you should:
-- Pop to parent molecule (`bd mol stack`)
-- Or if outer-loop should restart
-
-### "Cycle detected"
-
-Dependency cycle in beads. Run:
-```bash
-bv --robot-insights  # Will show cycle details
-```
-
-### "Template not found"
-
-Check template exists:
-```bash
-ls .beads/templates/
-```
-
-### "Step already closed"
-
-You're trying to close a step that's already done. Check:
-```bash
-bd show <step-id>
-bd mol current
+NEXT:
+- [what needs to happen]
+"
 ```
 
 ---
 
-*Remember: You are one session in a durable workflow. Do your step well, leave good notes, and trust the system to continue.*
+*The authoritative reference is `docs/MVP-SPEC-v2.md`. When in doubt, read the spec.*

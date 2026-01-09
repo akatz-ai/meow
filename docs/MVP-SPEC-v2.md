@@ -17,13 +17,14 @@
 7. [Agent Interaction Model](#agent-interaction-model)
 8. [IPC and Communication](#ipc-and-communication)
 9. [Persistence and Crash Recovery](#persistence-and-crash-recovery)
-10. [Resource Limits](#resource-limits)
-11. [CLI Commands](#cli-commands)
-12. [Multi-Agent Coordination](#multi-agent-coordination)
-13. [Complete Examples](#complete-examples)
-14. [Error Handling](#error-handling)
-15. [Best Practices](#best-practices)
-16. [Implementation Phases](#implementation-phases)
+10. [Workflow Cleanup](#workflow-cleanup)
+11. [Resource Limits](#resource-limits)
+12. [CLI Commands](#cli-commands)
+13. [Multi-Agent Coordination](#multi-agent-coordination)
+14. [Complete Examples](#complete-examples)
+15. [Error Handling](#error-handling)
+16. [Best Practices](#best-practices)
+17. [Implementation Phases](#implementation-phases)
 
 ---
 
@@ -114,7 +115,7 @@ No SQLite. No lock files. Just files.
 
 > **Complex behaviors emerge from simple primitives composed together.**
 
-MEOW has one primitive (Step) with seven executors. Loops, conditionals, parallel execution, agent handoffs—all emerge from composing these simple building blocks.
+MEOW has one primitive (Step) with six executors. Loops, conditionals, parallel execution, human gates, agent handoffs—all emerge from composing these simple building blocks.
 
 ---
 
@@ -126,7 +127,7 @@ Everything in MEOW is a **Step**. A step has an executor that determines who run
 
 ```yaml
 step:
-  id: string              # Unique within workflow
+  id: string              # Unique within workflow (no dots allowed)
   executor: ExecutorType  # Who runs this step
   status: Status          # pending | running | completing | done | failed
   needs: [string]         # Step IDs that must complete first
@@ -134,6 +135,19 @@ step:
 
   # Executor-specific fields vary by type
 ```
+
+### Step ID Rules
+
+Step IDs must follow these rules:
+- **No dots (`.`) allowed** — dots are reserved for expansion prefixes
+- Valid characters: `[a-zA-Z0-9_-]+`
+- Must be unique within the workflow
+
+When templates expand, child step IDs are prefixed with the parent step ID and a dot:
+- Expand step `do-impl` expands template with step `load`
+- Child step becomes `do-impl.load`
+
+This prevents collisions and makes the expansion hierarchy visible.
 
 ### Status Lifecycle
 
@@ -165,7 +179,7 @@ The orchestrator processes ready steps in order, prioritizing orchestrator execu
 
 ## Executors
 
-Executors determine **who** runs a step and **how**. There are seven executors in two categories:
+Executors determine **who** runs a step and **how**. There are six executors in two categories:
 
 ### Orchestrator Executors
 
@@ -186,7 +200,8 @@ These wait for external completion signals.
 | Executor | Purpose | Completes When |
 |----------|---------|----------------|
 | `agent` | Prompt an agent to do work | Agent runs `meow done` |
-| `gate` | Wait for human approval | Human runs `meow approve` |
+
+**Note:** Human approval gates are implemented using `branch` with blocking conditions. See [Human Approval Pattern](#human-approval-pattern).
 
 ---
 
@@ -265,10 +280,23 @@ User-provided `env` vars are merged with orchestrator defaults. **Orchestrator v
 3. Set environment variables
 4. Start Claude (with `--resume {session_id}` if `resume_session` provided)
 5. Wait for Claude ready prompt
-6. Inject first step's prompt directly via `tmux send-keys`
-7. Mark step `done`
+6. Capture Claude's session ID and store in workflow state
+7. Inject first step's prompt directly via `tmux send-keys`
+8. Mark step `done`
 
 **Note:** Worktrees are user-managed. Create them with `shell` steps, pass the path here. The orchestrator doesn't manage worktrees automatically.
+
+**Session ID Tracking:**
+The orchestrator captures Claude's session ID at startup (from Claude's output) and stores it in the workflow state:
+```yaml
+agents:
+  worker-1:
+    tmux_session: meow-wf-abc123-worker-1
+    claude_session: sess-xyz789  # Captured at spawn
+    workdir: /data/projects/myapp/.meow/worktrees/worker-1
+```
+
+This enables the `meow session-id` command and the `resume_session` field for parent-child workflow patterns.
 
 ---
 
@@ -292,7 +320,8 @@ timeout: 10       # Seconds to wait for graceful shutdown
 **Orchestrator Behavior:**
 1. If `graceful`: send interrupt, wait up to `timeout`
 2. Kill tmux session
-3. Mark step `done`
+3. Remove agent from active agents list
+4. Mark step `done`
 
 ---
 
@@ -340,7 +369,7 @@ steps:
 
 ### `branch` — Conditional Expansion
 
-Evaluate a condition and expand the appropriate branch.
+Evaluate a condition and expand the appropriate branch. This executor also handles human approval gates through blocking conditions.
 
 ```yaml
 id: "check-tests"
@@ -381,6 +410,47 @@ on_true:
 3. Expand selected branch (if any)
 4. Mark branch step `done`
 
+### Human Approval Pattern
+
+Human gates are implemented using `branch` with blocking conditions:
+
+```yaml
+# Notify human and wait for approval
+[[steps]]
+id = "notify-reviewer"
+executor = "shell"
+command = """
+echo "Review needed for {{task_id}}"
+echo "Approve: meow approve {{workflow_id}} review-gate"
+echo "Reject:  meow reject {{workflow_id}} review-gate --reason '...'"
+# Could also send Slack message, email, etc.
+"""
+
+[[steps]]
+id = "review-gate"
+executor = "branch"
+condition = "meow await-approval review-gate --timeout 24h"
+needs = ["notify-reviewer"]
+
+[steps.on_true]
+inline = []  # Continue on approval
+
+[steps.on_false]
+template = ".handle-rejection"
+variables = { reason = "{{review-gate.outputs.reason}}" }
+```
+
+The `meow await-approval` command:
+1. Blocks until human runs `meow approve` or `meow reject`
+2. Exits 0 on approval, non-zero on rejection
+3. Respects the specified timeout (workflow fails on timeout)
+
+This pattern allows custom approval mechanisms:
+- Human approval: `meow await-approval`
+- CI completion: `./scripts/wait-for-ci.sh`
+- API approval: `curl --retry 100 https://api.example.com/approval-status`
+- Slack approval: Custom integration script
+
 ---
 
 ### `agent` — Prompt Agent
@@ -409,6 +479,7 @@ outputs:
     required: false
     type: string
 mode: "autonomous"  # autonomous | interactive
+timeout: "2h"       # Optional: max time for step
 ```
 
 **Fields:**
@@ -416,6 +487,7 @@ mode: "autonomous"  # autonomous | interactive
 - `prompt` (required): Instructions for the agent
 - `outputs` (optional): Expected output definitions
 - `mode` (optional): `autonomous` (default) or `interactive`
+- `timeout` (optional): Maximum time for step execution
 
 **Output Definition:**
 ```yaml
@@ -438,64 +510,32 @@ outputs:
 **File Path Validation:**
 - **Absolute paths** are validated directly
 - **Relative paths** are resolved against the **agent's working directory** (the `workdir` from its `spawn` step)
-- The orchestrator tracks each agent's workdir and uses it for validation
+- The orchestrator tracks each agent's spawn workdir and uses it for validation
+- If an agent changes directories during execution, relative paths still resolve against the original spawn workdir
 
 **Modes:**
 - `autonomous`: Normal execution—on step completion, orchestrator immediately injects next prompt
 - `interactive`: Pauses for human conversation—orchestrator returns empty prompt during stop hook, allowing natural Claude-human interaction
 
-**Orchestrator Behavior:**
-1. Mark step `running`
-2. Update `MEOW_STEP` environment variable in agent's session
-3. Inject prompt directly into agent's tmux session via `send-keys`
-4. Wait for agent to signal completion via `meow done` (IPC)
-5. Validate outputs against definitions
-6. If valid: mark step `done` with outputs, proceed to next step
-7. If invalid: return error to agent, keep step `running`, agent retries
+**Timeout Behavior:**
+If specified, the orchestrator monitors step duration. If the step exceeds the timeout:
+1. Send `C-c` (interrupt) to the agent's tmux session
+2. Wait 10 seconds for graceful stop
+3. Mark step `failed` with error "Step timed out after {duration}"
+4. Continue based on `on_error` setting (default: workflow fails)
 
----
-
-### `gate` — Human Approval
-
-Block until human approves or rejects.
-
-```yaml
-id: "review-gate"
-executor: "gate"
-prompt: |
-  Review the implementation for {{task_id}}.
-
-  Changes:
-  - {{changes_summary}}
-
-  Approve if ready to merge, reject with feedback if changes needed.
-timeout: "24h"
-```
-
-**Fields:**
-- `prompt` (required): Information for the human reviewer
-- `timeout` (optional): How long to wait before auto-action
+This handles common stuck scenarios like hung tools or infinite loops.
 
 **Orchestrator Behavior:**
-1. Mark step `running`
-2. Wait for human to run `meow approve` or `meow reject`
-3. On approve: mark step `done`
-4. On reject: mark step `failed` with rejection reason
-
-**Human Experience:**
-```bash
-$ meow gates
-WORKFLOW      STEP          PROMPT
-wf-abc123     review-gate   Review the implementation for PROJ-123...
-
-$ meow approve wf-abc123 review-gate
-Approved: review-gate
-
-# OR
-
-$ meow reject wf-abc123 review-gate --reason "Missing error handling"
-Rejected: review-gate
-```
+1. Guard: verify step status is `pending` (prevents double-injection)
+2. Mark step `running`, record start time
+3. Update `MEOW_STEP` environment variable in agent's session
+4. Inject prompt directly into agent's tmux session via `send-keys`
+5. Start timeout timer (if configured)
+6. Wait for agent to signal completion via `meow done` (IPC)
+7. Validate outputs against definitions
+8. If valid: mark step `done` with outputs, proceed to next step
+9. If invalid: return error to agent, keep step `running`, agent retries
 
 ---
 
@@ -602,6 +642,12 @@ A template file can contain multiple workflows:
 [main]
 name = "work-loop"
 description = "Continuous work selection and implementation loop"
+
+# Cleanup script runs on workflow end (success, failure, SIGINT, meow stop)
+cleanup = """
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+rm -rf /tmp/meow-{{workflow_id}} 2>/dev/null || true
+"""
 
 [main.variables]
 agent = { required = true, description = "Agent to assign work to" }
@@ -731,6 +777,7 @@ needs = ["verify-passing"]
 name = "human-readable-name"     # Required
 description = "..."              # Optional
 internal = true                  # Cannot be called from outside this file
+cleanup = "shell script..."      # Optional cleanup on workflow end
 
 [workflow-name.variables]
 var_name = { required = true, type = "string", description = "..." }
@@ -760,6 +807,7 @@ The orchestrator is the **central authority**. It:
 - Manages all agent lifecycles
 - Handles all state transitions
 - Communicates with agents via tmux and IPC
+- Is the **single writer** to the workflow state file (eliminates race conditions)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -822,6 +870,9 @@ The orchestrator processes **all ready steps** in each iteration, enabling paral
 │          // Handle any pending IPC messages (meow done, etc.)               │
 │          process_ipc_queue()                                                │
 │                                                                             │
+│          // Check timeouts for running agent steps                          │
+│          check_step_timeouts()                                              │
+│                                                                             │
 │          ready_steps = get_all_ready_steps()                                │
 │                                                                             │
 │          if len(ready_steps) == 0:                                          │
@@ -846,10 +897,9 @@ The orchestrator processes **all ready steps** in each iteration, enabling paral
 │                                 inject_prompt(step)                         │
 │                                 step.status = "running"                     │
 │                                                                             │
-│                  "gate"   → step.status = "running"                         │
-│                                                                             │
 │          persist_state()                                                    │
 │                                                                             │
+│      run_cleanup()                                                          │
 │      shutdown_all_agents()                                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -857,12 +907,13 @@ The orchestrator processes **all ready steps** in each iteration, enabling paral
 
 ### Agent Idle Check
 
-An agent is **idle** if no step assigned to it currently has status `running`:
+An agent is **idle** if no step assigned to it currently has status `running` or `completing`:
 
 ```go
 func agentIsIdle(agentID string, workflow Workflow) bool {
     for _, step := range workflow.steps {
-        if step.agent == agentID && step.status == "running" {
+        if step.agent == agentID &&
+           (step.status == "running" || step.status == "completing") {
             return false
         }
     }
@@ -870,14 +921,14 @@ func agentIsIdle(agentID string, workflow Workflow) bool {
 }
 ```
 
-This prevents injecting multiple prompts to the same agent simultaneously.
+The `completing` check prevents injecting a new prompt while the orchestrator is still processing the previous step's completion.
 
 ### Priority Order
 
 When multiple steps are ready:
 
 1. **Orchestrator executors first** — `shell`, `spawn`, `kill`, `expand`, `branch`
-2. **Then external executors** — `agent`, `gate`
+2. **Then agent executor** — `agent`
 3. **Within category**: Earlier creation time, then lexicographic ID
 
 This ensures machinery completes before agents are given more work.
@@ -954,6 +1005,10 @@ When an agent calls `meow done`, the orchestrator finds the next step **for that
 │    │                │ }                │                   │                │
 │    │                │─────────────────►│                   │                │
 │    │                │                  │                   │                │
+│    │                │                  │ Guard: check      │                │
+│    │                │                  │ step.status ==    │                │
+│    │                │                  │ "running"         │                │
+│    │                │                  │                   │                │
 │    │                │                  │ Set step.status   │                │
 │    │                │                  │ = "completing"    │                │
 │    │                │                  │                   │                │
@@ -977,6 +1032,7 @@ When an agent calls `meow done`, the orchestrator finds the next step **for that
 │    │                │                  │──────────────────►│ PAUSE          │
 │    │                │                  │                   │                │
 │    │                │                  │ If next found:    │                │
+│    │                │                  │ Mark it "running" │                │
 │    │                │                  │ Inject prompt     │                │
 │    │                │                  │──────────────────►│ NEW PROMPT     │
 │    │                │                  │                   │                │
@@ -997,10 +1053,17 @@ When an agent calls `meow done`, the orchestrator finds the next step **for that
 ```go
 func handleStepCompletion(msg StepDoneMessage) {
     step := workflow.steps[msg.step]
-    step.status = "completing"
+
+    // Guard: only process if currently running
+    if step.status != "running" {
+        sendError(msg.agent, "Step is not in running state")
+        return
+    }
+
+    step.status = "completing"  // Block other operations
 
     if !validateOutputs(step, msg.outputs) {
-        step.status = "running"  // Retry
+        step.status = "running"  // Back to running for retry
         sendError(msg.agent, "Invalid outputs...")
         return
     }
@@ -1014,10 +1077,12 @@ func handleStepCompletion(msg StepDoneMessage) {
     sendEsc(msg.agent)  // Pause agent
 
     if nextStep != nil {
+        nextStep.status = "running"  // Claim it before injection
         injectPrompt(msg.agent, nextStep.prompt)
-        nextStep.status = "running"
     }
     // If no next step, agent stays idle (stop hook returns empty)
+
+    persist()  // Single atomic write
 }
 
 func getNextReadyStepForAgent(agentID string) *Step {
@@ -1132,42 +1197,54 @@ Each orchestrator creates a socket for IPC:
 
 All `meow` CLI commands in agent sessions communicate through this socket.
 
+**Note:** Workflow IDs should be kept short to avoid hitting the Unix socket path length limit (typically 108 bytes on Linux).
+
 ### Message Protocol
 
-Messages are newline-delimited JSON:
+Messages are **single-line, newline-delimited JSON**. Each message must be serialized without formatting (no pretty printing) to ensure embedded newlines in strings are properly escaped as `\n`.
 
 **Step completion (meow done → orchestrator):**
 ```json
-{
-  "type": "step_done",
-  "workflow": "wf-abc123",
-  "agent": "worker-1",
-  "step": "impl.write-tests",
-  "outputs": {"test_file": "src/test.ts"},
-  "notes": "optional notes"
-}
+{"type":"step_done","workflow":"wf-abc123","agent":"worker-1","step":"impl.write-tests","outputs":{"test_file":"src/test.ts"},"notes":"optional notes"}
 ```
 
 **Response (orchestrator → meow done):**
 ```json
-{"type": "ack", "success": true}
-// OR
-{"type": "error", "message": "Missing required output: task_id"}
+{"type":"ack","success":true}
+```
+```json
+{"type":"error","message":"Missing required output: task_id"}
 ```
 
 **Prompt request (meow prime → orchestrator):**
 ```json
-{
-  "type": "get_prompt",
-  "agent": "worker-1"
-}
+{"type":"get_prompt","agent":"worker-1"}
 ```
 
 **Response (orchestrator → meow prime):**
 ```json
-{"type": "prompt", "content": "## Write Tests\n\nWrite failing tests..."}
-// OR (during transition or interactive mode)
-{"type": "prompt", "content": ""}
+{"type":"prompt","content":"## Write Tests\n\nWrite failing tests..."}
+```
+```json
+{"type":"prompt","content":""}
+```
+
+**Session ID request (meow session-id → orchestrator):**
+```json
+{"type":"get_session_id","agent":"worker-1"}
+```
+
+**Response:**
+```json
+{"type":"session_id","session_id":"sess-xyz789"}
+```
+
+**Approval signal (meow approve/reject → orchestrator):**
+```json
+{"type":"approval","gate_id":"review-gate","approved":true,"notes":"LGTM"}
+```
+```json
+{"type":"approval","gate_id":"review-gate","approved":false,"reason":"Missing tests"}
 ```
 
 ### Future: Distributed Systems
@@ -1200,6 +1277,10 @@ template: work-loop.meow.toml
 status: running
 started_at: 2026-01-08T21:00:00Z
 
+# Cleanup script (from template)
+cleanup: |
+  git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+
 # Resolved variables
 vars:
   agent: claude-1
@@ -1208,8 +1289,9 @@ vars:
 agents:
   claude-1:
     tmux_session: meow-wf-abc123-claude-1
-    status: active
+    claude_session: sess-xyz789  # Captured at spawn for resume
     workdir: /data/projects/myapp/.meow/worktrees/claude-1
+    status: active
     current_step: impl.write-tests
 
 # All steps with their state (grows with expansions)
@@ -1248,20 +1330,21 @@ steps:
 ### Workflow Lifecycle
 
 ```
-pending ──► running ──► done
+pending ──► running ──► cleaning_up ──► done
+               │             │
+               │             └──► stopped (via meow stop or SIGINT)
                │
-               └──► failed
+               └──► failed ──► cleaning_up ──► failed
 ```
+
+- `pending`: Initial state before orchestrator starts
+- `running`: Workflow is executing
+- `cleaning_up`: Running cleanup script, killing agents
+- `done`: Successfully completed
+- `failed`: A step failed (after cleanup)
+- `stopped`: Manually stopped (after cleanup)
 
 **On completion:** Workflow file remains (for history/debugging). Users can manually delete or archive.
-
-**Optional checkpointing:** Users who want git-based recovery can add `shell` steps:
-```yaml
-id: "checkpoint"
-executor: "shell"
-command: |
-  cp .meow/workflows/{{workflow_id}}.yaml .meow/checkpoints/{{workflow_id}}-{{timestamp}}.yaml
-```
 
 ### Atomic File Writes
 
@@ -1284,9 +1367,14 @@ On orchestrator startup (fresh or resume):
 1. Load workflow state from .meow/workflows/{id}.yaml
    (Handle atomic write recovery if needed—see above)
 
-2. Find steps with status: running or completing
+2. If workflow status is "cleaning_up":
+   - Resume cleanup (run cleanup script, kill agents)
+   - Mark as stopped/failed/done based on prior status
+   - Exit
 
-3. For each such step:
+3. Find steps with status: running or completing
+
+4. For each such step:
    a. If status is "completing":
       - Treat as "running" (orchestrator crashed during transition)
       - The step will be re-evaluated below
@@ -1301,11 +1389,8 @@ On orchestrator startup (fresh or resume):
       - If alive: keep running, orchestrator will re-inject prompt on next loop
       - If dead: reset to pending (will need agent respawn)
 
-   d. If executor is gate:
-      - Keep running (human might still approve)
-
-4. Start IPC server
-5. Resume orchestrator loop
+5. Start IPC server
+6. Resume orchestrator loop
 ```
 
 **Partial Expansion Recovery:**
@@ -1321,6 +1406,91 @@ For agent steps that remain `running` after recovery (agent still alive), the or
 - The stop hook to fire (which calls `meow prime` and gets the current prompt)
 
 This avoids injecting duplicate prompts into an agent that may still be working.
+
+---
+
+## Workflow Cleanup
+
+Templates can define a cleanup script that runs when the workflow ends.
+
+### Definition
+
+```toml
+[main]
+name = "my-workflow"
+cleanup = """
+# Shell script for cleanup
+# Runs on: success, failure, SIGINT, meow stop
+# Environment: workflow variables available
+# Timeout: 60 seconds
+
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+rm -rf /tmp/meow-{{workflow_id}} 2>/dev/null || true
+"""
+```
+
+### When Cleanup Runs
+
+- Workflow completes successfully (all steps done)
+- Workflow fails (step failure with `on_error: fail`)
+- User interrupts orchestrator (Ctrl+C / SIGINT / SIGTERM)
+- User runs `meow stop <workflow_id>`
+- Orchestrator restarts and finds workflow in `running` or `cleaning_up` state
+
+### Cleanup Sequence
+
+1. Workflow status set to `cleaning_up`
+2. Persist state (so cleanup survives crash)
+3. All agent tmux sessions killed (orchestrator-managed)
+4. User cleanup script executed (60 second timeout)
+5. Workflow status set to final state (`done`, `failed`, `stopped`)
+6. Persist final state
+
+### Cleanup Script Environment
+
+- **Working directory:** Orchestrator's working directory
+- **Variables:** All workflow variables and step outputs available
+- **Timeout:** 60 seconds (SIGKILL if exceeded)
+- **Errors:** Logged but don't prevent workflow termination
+
+### Signal Handling
+
+The orchestrator traps SIGINT and SIGTERM:
+
+```go
+func main() {
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+    go func() {
+        <-sigChan
+        log.Println("Received interrupt, cleaning up...")
+        runCleanup(workflow, "stopped")
+        os.Exit(0)
+    }()
+
+    run(workflow)
+}
+```
+
+### Best Practices
+
+Cleanup scripts should be **idempotent** (safe to run multiple times):
+
+```bash
+# Good: handles already-removed worktree
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+
+# Good: handles missing directory
+rm -rf .meow/temp/{{workflow_id}} 2>/dev/null || true
+
+# Good: handles multiple agents
+for agent in frontend backend coordinator; do
+    git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
+done
+```
+
+**Variables in cleanup:** Only reference variables that are guaranteed to exist. Workflow-level variables (from `--var`) are always available. Step outputs may not exist if the workflow failed early.
 
 ---
 
@@ -1389,8 +1559,8 @@ meow run --resume wf-abc123
 meow run --workflow .meow/workflows/wf-abc123.yaml
 
 # Stop workflow (from another terminal)
-meow stop wf-abc123
-meow stop wf-abc123 --force  # Kill immediately
+meow stop wf-abc123           # Graceful: runs cleanup, kills agents
+meow stop wf-abc123 --force   # Immediate: SIGKILL agents, then cleanup
 
 # Check workflow status
 meow status
@@ -1416,22 +1586,30 @@ meow done --notes "Completion notes for handoff"
 meow prime
 meow prime --format prompt    # For stop-hook injection (returns raw text)
 meow prime --format json      # Structured output
+
+# Get agent's Claude session ID (for parent-child workflows)
+meow session-id
+meow session-id --agent worker-1  # Query specific agent
 ```
 
 ### Human Interaction
 
 ```bash
-# List pending gates
+# List pending approval gates
 meow gates
 meow gates --workflow wf-abc123
 
-# Approve a gate
-meow approve wf-abc123 step-id
-meow approve wf-abc123 step-id --notes "LGTM"
+# Approve a gate (unblocks meow await-approval)
+meow approve wf-abc123 gate-id
+meow approve wf-abc123 gate-id --notes "LGTM"
 
-# Reject a gate
-meow reject wf-abc123 step-id
-meow reject wf-abc123 step-id --reason "Needs error handling"
+# Reject a gate (meow await-approval exits non-zero)
+meow reject wf-abc123 gate-id
+meow reject wf-abc123 gate-id --reason "Needs error handling"
+
+# Block until approval/rejection (used in branch conditions)
+meow await-approval gate-id
+meow await-approval gate-id --timeout 24h
 ```
 
 ### Debugging
@@ -1627,8 +1805,8 @@ When an agent completes its work but the join isn't ready yet:
 **Agent Assignment:**
 The join step specifies which agent should execute it. Other agents that completed their pre-join work remain idle until the workflow either:
 - Gives them more work (later steps assigned to them)
-- Reaches completion (orchestrator kills all agents)
-- Fails (agents left running, may need manual cleanup)
+- Reaches completion (cleanup kills all agents)
+- Fails (cleanup kills all agents)
 
 ### Parent-Child Workflows (Call Pattern)
 
@@ -1699,6 +1877,9 @@ needs = ["cleanup-worktree"]
 
 [main]
 name = "simple-loop"
+cleanup = """
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+"""
 
 [main.variables]
 agent = { required = true }
@@ -1741,6 +1922,7 @@ id = "do-work"
 executor = "agent"
 agent = "{{agent}}"
 prompt = "Implement task {{find-work.outputs.task_id}}"
+timeout = "2h"
 needs = ["find-work"]
 
 [[main.steps]]
@@ -1776,6 +1958,7 @@ id = "do-work"
 executor = "agent"
 agent = "{{agent}}"
 prompt = "Implement task {{find-work.outputs.task_id}}"
+timeout = "2h"
 needs = ["find-work"]
 
 [[work-iteration.steps]]
@@ -1796,6 +1979,9 @@ variables = { agent = "{{agent}}" }
 
 [main]
 name = "deploy"
+cleanup = """
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+"""
 
 [main.variables]
 agent = { required = true }
@@ -1821,7 +2007,7 @@ needs = ["build"]
 [[main.steps]]
 id = "create-worktree"
 executor = "shell"
-command = "git worktree add ... && echo path"
+command = "git worktree add -b meow/{{agent}} .meow/worktrees/{{agent}} HEAD && echo .meow/worktrees/{{agent}}"
 needs = ["deploy-staging"]
 
 [main.steps.outputs]
@@ -1842,6 +2028,7 @@ prompt = """
 Run smoke tests against staging environment.
 Report any issues found.
 """
+timeout = "30m"
 needs = ["start-agent"]
 
 [main.steps.outputs]
@@ -1849,21 +2036,37 @@ issues_found = { required = true, type = "boolean" }
 issues = { required = false, type = "json" }
 
 [[main.steps]]
-id = "approval"
-executor = "gate"
-prompt = """
-Staging deployment complete. Smoke test results:
-- Issues found: {{smoke-test.outputs.issues_found}}
-
-Approve to deploy to production.
+id = "notify-reviewer"
+executor = "shell"
+command = """
+echo "Staging deployment complete for {{workflow_id}}"
+echo "Issues found: {{smoke-test.outputs.issues_found}}"
+echo ""
+echo "To approve: meow approve {{workflow_id}} approval-gate"
+echo "To reject:  meow reject {{workflow_id}} approval-gate --reason '...'"
 """
 needs = ["smoke-test"]
+
+[[main.steps]]
+id = "approval-gate"
+executor = "branch"
+condition = "meow await-approval approval-gate --timeout 24h"
+needs = ["notify-reviewer"]
+
+[main.steps.on_true]
+inline = []  # Continue on approval
+
+[main.steps.on_false]
+inline = [
+  { id = "log-rejection", executor = "shell",
+    command = "echo 'Deployment rejected' >> deploy.log" }
+]
 
 [[main.steps]]
 id = "deploy-prod"
 executor = "shell"
 command = "kubectl apply -f k8s/production/"
-needs = ["approval"]
+needs = ["approval-gate"]
 
 [[main.steps]]
 id = "cleanup"
@@ -1872,113 +2075,61 @@ agent = "{{agent}}"
 needs = ["deploy-prod"]
 ```
 
-### Example 3: Parallel Implementation
+### Example 3: Parallel Implementation with Watchdog
 
 ```toml
-# parallel.meow.toml
+# parallel-with-watchdog.meow.toml
 
 [main]
 name = "parallel-impl"
+cleanup = """
+for agent in planner frontend backend watchdog; do
+    git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
+done
+"""
 
 [main.variables]
 task_id = { required = true }
 
-[[main.steps]]
-id = "create-planner-worktree"
-executor = "shell"
-command = "git worktree add -b meow/planner .meow/worktrees/planner HEAD && echo .meow/worktrees/planner"
-
-[main.steps.outputs]
-path = { source = "stdout" }
+# ... worktree creation steps ...
 
 [[main.steps]]
-id = "start-planner"
+id = "start-watchdog"
 executor = "spawn"
-agent = "planner"
-workdir = "{{create-planner-worktree.outputs.path}}"
-needs = ["create-planner-worktree"]
+agent = "watchdog"
+workdir = "{{create-watchdog-worktree.outputs.path}}"
+needs = ["create-watchdog-worktree"]
 
 [[main.steps]]
-id = "plan"
+id = "watchdog-patrol"
 executor = "agent"
-agent = "planner"
-prompt = "Break down {{task_id}} into frontend and backend tasks."
-needs = ["start-planner"]
+agent = "watchdog"
+prompt = """
+You are a watchdog agent. Monitor the other agents for stuck behavior.
 
-[main.steps.outputs]
-frontend_spec = { required = true, type = "string" }
-backend_spec = { required = true, type = "string" }
+Every 5 minutes:
+1. Check .meow/workflows/{{workflow_id}}.yaml for step status
+2. For any step that's been "running" for >30 minutes with no file changes:
+   - Send interrupt: tmux send-keys -t meow-{{workflow_id}}-<agent> C-c
+   - Log the intervention
 
-[[main.steps]]
-id = "create-frontend-worktree"
-executor = "shell"
-command = "git worktree add -b meow/frontend .meow/worktrees/frontend HEAD && echo .meow/worktrees/frontend"
-needs = ["plan"]
+Commands available:
+- tmux send-keys -t meow-{{workflow_id}}-frontend C-c
+- tmux send-keys -t meow-{{workflow_id}}-backend C-c
+- git -C .meow/worktrees/<agent> log --oneline -1
 
-[main.steps.outputs]
-path = { source = "stdout" }
+When the workflow completes (all other steps done), call meow done.
+"""
+needs = ["start-watchdog"]
+# No timeout - watchdog runs until workflow ends
 
-[[main.steps]]
-id = "create-backend-worktree"
-executor = "shell"
-command = "git worktree add -b meow/backend .meow/worktrees/backend HEAD && echo .meow/worktrees/backend"
-needs = ["plan"]
-
-[main.steps.outputs]
-path = { source = "stdout" }
+# ... rest of parallel workflow ...
 
 [[main.steps]]
-id = "start-frontend"
-executor = "spawn"
-agent = "frontend"
-workdir = "{{create-frontend-worktree.outputs.path}}"
-needs = ["create-frontend-worktree"]
-
-[[main.steps]]
-id = "start-backend"
-executor = "spawn"
-agent = "backend"
-workdir = "{{create-backend-worktree.outputs.path}}"
-needs = ["create-backend-worktree"]
-
-[[main.steps]]
-id = "impl-frontend"
-executor = "agent"
-agent = "frontend"
-prompt = "Implement: {{plan.outputs.frontend_spec}}"
-needs = ["start-frontend"]
-
-[[main.steps]]
-id = "impl-backend"
-executor = "agent"
-agent = "backend"
-prompt = "Implement: {{plan.outputs.backend_spec}}"
-needs = ["start-backend"]
-
-[[main.steps]]
-id = "integrate"
-executor = "agent"
-agent = "planner"
-prompt = "Integrate frontend and backend, run full test suite."
-needs = ["impl-frontend", "impl-backend"]
-
-[[main.steps]]
-id = "cleanup-frontend"
+id = "cleanup-watchdog"
 executor = "kill"
-agent = "frontend"
-needs = ["integrate"]
-
-[[main.steps]]
-id = "cleanup-backend"
-executor = "kill"
-agent = "backend"
-needs = ["integrate"]
-
-[[main.steps]]
-id = "cleanup-planner"
-executor = "kill"
-agent = "planner"
-needs = ["cleanup-frontend", "cleanup-backend"]
+agent = "watchdog"
+needs = ["integration"]
 ```
 
 ---
@@ -2020,12 +2171,21 @@ If `meow done` fails validation:
 5. `meow prime` re-injects current prompt
 6. Agent continues naturally (Ralph Wiggum loop)
 
+### Agent Step Timeout
+
+If an agent step exceeds its `timeout`:
+1. Orchestrator sends C-c to agent's tmux session
+2. Waits 10 seconds for graceful stop
+3. Step marked `failed` with "Step timed out" error
+4. Workflow continues based on `on_error` (default: fail)
+
 ### Workflow Failure
 
 When a step fails and `on_error` is `fail`:
 1. Workflow status becomes `failed`
 2. No more steps are executed
-3. Human intervention required (fix and resume, or abandon)
+3. Cleanup runs (kills agents, runs cleanup script)
+4. Human intervention required (fix and resume, or abandon)
 
 ### Retry Support (Future)
 
@@ -2080,32 +2240,23 @@ This works but swallows all errors. The explicit check is safer.
 
 ### Worktree Management
 
-Worktrees are user-managed. Recommended patterns:
+Worktrees are user-managed. The cleanup hook handles teardown automatically:
 
-**Unique worktree per agent:**
-```yaml
-[[steps]]
-id = "create-worktree"
-executor = "shell"
-command = """
-WORKTREE=".meow/worktrees/{{agent}}"
-if [ ! -d "$WORKTREE" ]; then
-  git worktree add -b "meow/{{agent}}" "$WORKTREE" HEAD
-fi
-echo "$WORKTREE"
+```toml
+[main]
+cleanup = """
+git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 """
 ```
 
-**Cleanup on workflow completion:**
-```yaml
-[[steps]]
-id = "cleanup-worktree"
-executor = "shell"
-command = "git worktree remove .meow/worktrees/{{agent}} --force || true"
-needs = ["final-step"]
+For multi-agent workflows:
+```toml
+cleanup = """
+for agent in frontend backend coordinator; do
+    git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
+done
+"""
 ```
-
-**Important:** Always clean up worktrees in success paths. For failed workflows, manual cleanup may be needed.
 
 ### Template Organization
 
@@ -2163,6 +2314,27 @@ When agents finish at different times, idle agents wait. Design workflows so thi
 **Limit concurrent agents:**
 More agents = more tmux sessions = more resource usage. Start with 2-3 parallel agents and scale up based on need.
 
+### User-Space Monitoring
+
+For sophisticated stuck detection beyond simple timeouts, implement a **watchdog agent**:
+
+```toml
+[[steps]]
+id = "watchdog-patrol"
+executor = "agent"
+agent = "watchdog"
+prompt = """
+Monitor other agents. Every 5 minutes:
+1. Check workflow state for stuck steps
+2. Check git logs for progress
+3. Send C-c interrupt if agent seems stuck
+
+Use tmux send-keys -t meow-{{workflow_id}}-<agent> C-c to interrupt.
+"""
+```
+
+This pattern allows custom "stuck" definitions and intervention strategies without adding complexity to the orchestrator.
+
 ---
 
 ## Implementation Phases
@@ -2170,37 +2342,43 @@ More agents = more tmux sessions = more resource usage. Start with 2-3 parallel 
 ### Phase 1: Core Engine
 
 - [ ] Step model and status management
+- [ ] Step ID validation (no dots allowed)
 - [ ] Template parsing (module format)
 - [ ] `shell` executor
 - [ ] `agent` executor with prompt injection
 - [ ] Basic persistence (workflow YAML files)
-- [ ] IPC server (Unix socket)
+- [ ] IPC server (Unix socket, single-line JSON)
 - [ ] `meow run`, `meow prime`, `meow done` commands
 - [ ] Variable substitution
 
 ### Phase 2: Full Executors
 
-- [ ] `spawn` executor with tmux management
+- [ ] `spawn` executor with tmux management and session ID capture
 - [ ] `kill` executor
 - [ ] `expand` executor with template resolution
 - [ ] `branch` executor with condition evaluation
-- [ ] `gate` executor with `meow approve`/`meow reject`
+- [ ] `meow await-approval` command for human gates
+- [ ] `meow approve`/`meow reject` commands
 
 ### Phase 3: Robustness
 
 - [ ] Crash recovery (resume workflows)
 - [ ] Output validation (all types)
 - [ ] Error handling (on_error modes)
-- [ ] `completing` state handling
+- [ ] `completing` state handling with guards
 - [ ] Atomic file writes (write-then-rename)
 - [ ] Partial expansion recovery
 - [ ] Resource limits enforcement
 - [ ] Shell context escaping for variable substitution
+- [ ] Workflow cleanup hook
+- [ ] Signal handling (SIGINT/SIGTERM)
+- [ ] Agent step timeouts
 
 ### Phase 4: Multi-Agent
 
 - [ ] Parallel step execution
 - [ ] Multiple agents per workflow
+- [ ] `meow session-id` command
 - [ ] Session resume support (`resume_session`)
 
 ### Phase 5: Developer Experience
@@ -2218,7 +2396,8 @@ More agents = more tmux sessions = more resource usage. Start with 2-3 parallel 
 
 The orchestrator owns prompt injection because:
 - Single source of truth for "what's happening"
-- Cleaner step transitions (no race conditions)
+- Single writer to state file (no race conditions)
+- Cleaner step transitions (no concurrent modification)
 - Stop hook is just recovery, not primary mechanism
 - Enables future distributed orchestration
 
@@ -2250,7 +2429,7 @@ Worktrees are created via `shell` steps because:
 - Full user control over git operations
 - No hidden magic
 - Works with any git workflow
-- Cleanup is explicit
+- Cleanup is explicit (via cleanup hook)
 
 ### Why YAML for State?
 
@@ -2266,7 +2445,7 @@ Worktrees are created via `shell` steps because:
 - Established in the ecosystem
 - Distinct from state files (YAML)
 
-### Why Seven Executors?
+### Why Six Executors?
 
 This is the minimal set that enables all coordination patterns:
 
@@ -2278,8 +2457,24 @@ This is the minimal set that enables all coordination patterns:
 | Parallel | Multiple `agent` steps |
 | Agent lifecycle | `spawn`, `kill` |
 | Setup/teardown | `shell` |
-| Human approval | `gate` |
+| Human approval | `branch` + `meow await-approval` |
 | Composition | `expand` |
+
+Human gates were originally a separate executor, but they're just blocking conditions—`branch` with a command that waits for approval. Removing the dedicated `gate` executor simplifies the system and makes approval mechanisms user-customizable.
+
+### Why No Built-in Stuck Detection?
+
+Detecting "stuck" is hard:
+- How long is too long? Complex tasks take hours.
+- "No progress" requires understanding what progress means.
+- False positives are worse than false negatives.
+
+Instead, MEOW provides:
+- Simple `timeout` field for agent steps (handles hung tools)
+- Cleanup hook for guaranteed teardown
+- Watchdog agent pattern for sophisticated monitoring
+
+Users compose the monitoring behavior they need.
 
 ### How Parallel Agents Work
 
@@ -2311,6 +2506,13 @@ There are two ways prompts reach agents:
 2. **Stop hook recovery:** If Claude stops unexpectedly (not from `meow done`), the stop hook fires and calls `meow prime` to get the current prompt. This is a fallback mechanism.
 
 In normal operation, the stop hook rarely fires. It's insurance against edge cases.
+
+### Why Single-Line JSON for IPC?
+
+JSON allows embedded newlines in strings (`"line1\nline2"`), but newline-delimited protocols assume one message per line. By requiring single-line JSON (no pretty printing), we ensure:
+- Simple parsing with `readline()`
+- Embedded newlines are properly escaped
+- No ambiguity about message boundaries
 
 ---
 
