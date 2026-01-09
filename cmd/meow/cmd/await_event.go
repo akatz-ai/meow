@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/spf13/cobra"
@@ -77,7 +78,7 @@ func runAwaitEvent(cmd *cobra.Command, args []string) error {
 	client := ipc.NewClient(sockPath)
 	// Set a very long timeout for the connection itself
 	// The actual timeout is handled server-side
-	client.SetTimeout(25 * 60 * 60 * 1000000000) // 25 hours in nanoseconds
+	client.SetTimeout(25 * time.Hour)
 
 	// Send await request
 	response, err := client.AwaitEvent(eventType, filter, awaitEventTimeout)
