@@ -1,6 +1,7 @@
 package types
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -174,11 +175,8 @@ func TestAdapterConfigValidation(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errMsg)
-				} else if tt.errMsg != "" && err.Error() != tt.errMsg {
-					// Check if error contains the expected message
-					if err.Error()[:len(tt.errMsg)] != tt.errMsg[:min(len(err.Error()), len(tt.errMsg))] {
-						t.Errorf("expected error containing %q, got %q", tt.errMsg, err.Error())
-					}
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.errMsg, err.Error())
 				}
 			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
