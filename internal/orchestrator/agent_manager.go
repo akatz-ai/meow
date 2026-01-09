@@ -140,10 +140,6 @@ func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *t
 
 	agentID := step.Kill.Agent
 	graceful := step.Kill.Graceful
-	timeout := step.Kill.Timeout
-	if timeout == 0 {
-		timeout = 10 // Default 10 seconds
-	}
 
 	m.mu.RLock()
 	state, ok := m.agents[agentID]
@@ -158,11 +154,11 @@ func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *t
 	m.logger.Info("stopping agent", "agent", agentID, "session", sessionName, "graceful", graceful)
 
 	if graceful {
-		// Send C-c first
+		// Send C-c first to allow Claude to exit cleanly
 		if err := m.sendKeys(ctx, sessionName, "C-c"); err != nil {
 			m.logger.Warn("failed to send C-c", "error", err)
 		}
-		// Wait briefly
+		// Wait for graceful shutdown
 		time.Sleep(2 * time.Second)
 	}
 

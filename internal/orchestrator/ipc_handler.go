@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -15,8 +14,6 @@ type IPCHandler struct {
 	store  WorkflowStore
 	agents *TmuxAgentManager
 	logger *slog.Logger
-
-	mu sync.RWMutex
 }
 
 // NewIPCHandler creates a new IPC handler.
@@ -71,10 +68,10 @@ func (h *IPCHandler) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessag
 
 	// Validate step is in running state
 	if step.Status != types.StepStatusRunning {
-		h.logger.Warn("step not running", "step", msg.Step, "status", step.Status)
+		h.logger.Warn("step not running", "step", step.ID, "status", step.Status)
 		return &ipc.ErrorMessage{
 			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("step %s is not running (status: %s)", msg.Step, step.Status),
+			Message: fmt.Sprintf("step %s is not running (status: %s)", step.ID, step.Status),
 		}
 	}
 
@@ -83,7 +80,7 @@ func (h *IPCHandler) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessag
 		h.logger.Warn("agent mismatch", "expected", step.Agent.Agent, "got", msg.Agent)
 		return &ipc.ErrorMessage{
 			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("step %s is not assigned to agent %s", msg.Step, msg.Agent),
+			Message: fmt.Sprintf("step %s is not assigned to agent %s", step.ID, msg.Agent),
 		}
 	}
 
