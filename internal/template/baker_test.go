@@ -530,7 +530,7 @@ func TestBaker_ConditionWithInlineSteps(t *testing.T) {
 	}
 }
 
-// Tests for BakeWorkflow with code/start/stop step types
+// Tests for BakeWorkflow with legacy type field (now produces Steps)
 func TestBaker_BakeWorkflow_CodeStep(t *testing.T) {
 	workflow := &Workflow{
 		Name: "code-test",
@@ -551,22 +551,20 @@ func TestBaker_BakeWorkflow_CodeStep(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	if len(result.Beads) != 1 {
-		t.Fatalf("expected 1 bead, got %d", len(result.Beads))
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
 	}
 
-	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeCode {
-		t.Errorf("expected code type, got %s", bead.Type)
+	step := result.Steps[0]
+	// Legacy "code" type maps to ExecutorShell
+	if step.Executor != types.ExecutorShell {
+		t.Errorf("expected shell executor, got %s", step.Executor)
 	}
-	if bead.CodeSpec == nil {
-		t.Fatal("expected CodeSpec")
+	if step.Shell == nil {
+		t.Fatal("expected ShellConfig")
 	}
-	if bead.CodeSpec.Code != "echo 'hello world'" {
-		t.Errorf("expected code, got %q", bead.CodeSpec.Code)
-	}
-	if bead.Tier != types.TierOrchestrator {
-		t.Errorf("expected orchestrator tier for code, got %s", bead.Tier)
+	if step.Shell.Command != "echo 'hello world'" {
+		t.Errorf("expected command, got %q", step.Shell.Command)
 	}
 }
 
@@ -596,32 +594,34 @@ func TestBaker_BakeWorkflow_StartStopSteps(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	if len(result.Beads) != 2 {
-		t.Fatalf("expected 2 beads, got %d", len(result.Beads))
+	if len(result.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result.Steps))
 	}
 
-	// Check start bead
-	startBead := result.Beads[0]
-	if startBead.Type != types.BeadTypeStart {
-		t.Errorf("expected start type, got %s", startBead.Type)
+	// Check start step
+	startStep := result.Steps[0]
+	// Legacy "start" type maps to ExecutorSpawn
+	if startStep.Executor != types.ExecutorSpawn {
+		t.Errorf("expected spawn executor, got %s", startStep.Executor)
 	}
-	if startBead.StartSpec == nil {
-		t.Fatal("expected StartSpec")
+	if startStep.Spawn == nil {
+		t.Fatal("expected SpawnConfig")
 	}
-	if startBead.StartSpec.Agent != "claude-worker" {
-		t.Errorf("expected agent 'claude-worker', got %q", startBead.StartSpec.Agent)
+	if startStep.Spawn.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", startStep.Spawn.Agent)
 	}
 
-	// Check stop bead
-	stopBead := result.Beads[1]
-	if stopBead.Type != types.BeadTypeStop {
-		t.Errorf("expected stop type, got %s", stopBead.Type)
+	// Check stop step
+	stopStep := result.Steps[1]
+	// Legacy "stop" type maps to ExecutorKill
+	if stopStep.Executor != types.ExecutorKill {
+		t.Errorf("expected kill executor, got %s", stopStep.Executor)
 	}
-	if stopBead.StopSpec == nil {
-		t.Fatal("expected StopSpec")
+	if stopStep.Kill == nil {
+		t.Fatal("expected KillConfig")
 	}
-	if stopBead.StopSpec.Agent != "claude-worker" {
-		t.Errorf("expected agent 'claude-worker', got %q", stopBead.StopSpec.Agent)
+	if stopStep.Kill.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", stopStep.Kill.Agent)
 	}
 }
 
@@ -649,22 +649,25 @@ func TestBaker_BakeWorkflow_ExpandStep(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeExpand {
-		t.Errorf("expected expand type, got %s", bead.Type)
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
 	}
-	if bead.ExpandSpec == nil {
-		t.Fatal("expected ExpandSpec")
+
+	step := result.Steps[0]
+	// Legacy "expand" type maps to ExecutorExpand
+	if step.Executor != types.ExecutorExpand {
+		t.Errorf("expected expand executor, got %s", step.Executor)
 	}
-	if bead.ExpandSpec.Template != "implement" {
-		t.Errorf("expected template 'implement', got %q", bead.ExpandSpec.Template)
+	if step.Expand == nil {
+		t.Fatal("expected ExpandConfig")
 	}
-	if bead.ExpandSpec.Variables["task"] != "bd-42" {
-		t.Errorf("expected variable, got %v", bead.ExpandSpec.Variables)
+	if step.Expand.Template != "implement" {
+		t.Errorf("expected template 'implement', got %q", step.Expand.Template)
 	}
-	if bead.ExpandSpec.Assignee != "default-agent" {
-		t.Errorf("expected default assignee, got %q", bead.ExpandSpec.Assignee)
+	if step.Expand.Variables["task"] != "bd-42" {
+		t.Errorf("expected variable, got %v", step.Expand.Variables)
 	}
+	// Note: Assignee is no longer stored on ExpandConfig in new model
 }
 
 func TestBaker_BakeWorkflow_ConditionStep(t *testing.T) {
@@ -690,23 +693,28 @@ func TestBaker_BakeWorkflow_ConditionStep(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeCondition {
-		t.Errorf("expected condition type, got %s", bead.Type)
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
 	}
-	if bead.ConditionSpec == nil {
-		t.Fatal("expected ConditionSpec")
+
+	step := result.Steps[0]
+	// Legacy "condition" type maps to ExecutorBranch
+	if step.Executor != types.ExecutorBranch {
+		t.Errorf("expected branch executor, got %s", step.Executor)
 	}
-	if bead.ConditionSpec.Condition != "test -f /tmp/ready" {
-		t.Errorf("expected condition, got %q", bead.ConditionSpec.Condition)
+	if step.Branch == nil {
+		t.Fatal("expected BranchConfig")
 	}
-	if bead.ConditionSpec.Timeout != "5m" {
-		t.Errorf("expected timeout '5m', got %q", bead.ConditionSpec.Timeout)
+	if step.Branch.Condition != "test -f /tmp/ready" {
+		t.Errorf("expected condition, got %q", step.Branch.Condition)
 	}
-	if bead.ConditionSpec.OnTrue == nil || bead.ConditionSpec.OnTrue.Template != "proceed" {
+	if step.Branch.Timeout != "5m" {
+		t.Errorf("expected timeout '5m', got %q", step.Branch.Timeout)
+	}
+	if step.Branch.OnTrue == nil || step.Branch.OnTrue.Template != "proceed" {
 		t.Errorf("expected on_true template")
 	}
-	if bead.ConditionSpec.OnFalse == nil || bead.ConditionSpec.OnFalse.Template != "wait" {
+	if step.Branch.OnFalse == nil || step.Branch.OnFalse.Template != "wait" {
 		t.Errorf("expected on_false template")
 	}
 }
@@ -752,7 +760,7 @@ func TestBaker_BakeWorkflow_DefaultVariable(t *testing.T) {
 			"framework": {Default: "pytest"},
 		},
 		Steps: []*Step{
-			{ID: "step-1", Type: "task", Title: "Using {{framework}}"},
+			{ID: "step-1", Type: "task", Prompt: "Using {{framework}}"},
 		},
 	}
 
@@ -764,9 +772,17 @@ func TestBaker_BakeWorkflow_DefaultVariable(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.Title != "Using pytest" {
-		t.Errorf("expected default variable substitution, got %q", bead.Title)
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.Agent == nil {
+		t.Fatal("expected AgentConfig")
+	}
+	// Variable substitution should work in Prompt
+	if step.Agent.Prompt != "Using pytest" {
+		t.Errorf("expected default variable substitution, got %q", step.Agent.Prompt)
 	}
 }
 
@@ -777,7 +793,7 @@ func TestBaker_BakeWorkflow_VariableOverride(t *testing.T) {
 			"framework": {Default: "pytest"},
 		},
 		Steps: []*Step{
-			{ID: "step-1", Type: "task", Title: "Using {{framework}}"},
+			{ID: "step-1", Type: "task", Prompt: "Using {{framework}}"},
 		},
 	}
 
@@ -791,12 +807,21 @@ func TestBaker_BakeWorkflow_VariableOverride(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.Title != "Using jest" {
-		t.Errorf("expected override variable, got %q", bead.Title)
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.Agent == nil {
+		t.Fatal("expected AgentConfig")
+	}
+	if step.Agent.Prompt != "Using jest" {
+		t.Errorf("expected override variable, got %q", step.Agent.Prompt)
 	}
 }
 
+// NOTE: Ephemeral is a legacy bead concept - Steps don't track this.
+// This test verifies steps are created correctly even with ephemeral flag set.
 func TestBaker_BakeWorkflow_EphemeralStep(t *testing.T) {
 	workflow := &Workflow{
 		Name: "ephemeral-step-test",
@@ -813,12 +838,19 @@ func TestBaker_BakeWorkflow_EphemeralStep(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if !bead.IsEphemeral() {
-		t.Error("expected bead to be ephemeral")
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	// Step should be created - ephemeral flag is ignored in new model
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorAgent {
+		t.Errorf("expected agent executor, got %s", step.Executor)
 	}
 }
 
+// NOTE: Dependency validation is not done during baking in new model.
+// Dependencies are preserved as-is; validation happens at workflow load time.
 func TestBaker_BakeWorkflow_UnknownDependency(t *testing.T) {
 	workflow := &Workflow{
 		Name: "bad-dep-test",
@@ -830,12 +862,19 @@ func TestBaker_BakeWorkflow_UnknownDependency(t *testing.T) {
 	baker := NewBaker("wf-bad-dep-001")
 	baker.Now = fixedTime
 
-	_, err := baker.BakeWorkflow(workflow, nil)
-	if err == nil {
-		t.Fatal("expected error for unknown dependency")
+	// In new model, baking doesn't validate dependencies - they're preserved as-is
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow should not fail for unknown deps: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unknown dependency") {
-		t.Errorf("expected unknown dependency error, got: %v", err)
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	// Dependency should be preserved
+	if len(result.Steps[0].Needs) != 1 || result.Steps[0].Needs[0] != "nonexistent" {
+		t.Errorf("expected dependency to be preserved, got %v", result.Steps[0].Needs)
 	}
 }
 
@@ -980,26 +1019,26 @@ func TestBaker_BakeWorkflow_StartStopWithVariableAssignee(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	if len(result.Beads) != 2 {
-		t.Fatalf("expected 2 beads, got %d", len(result.Beads))
+	if len(result.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result.Steps))
 	}
 
-	// Check start bead - agent should be substituted value, not raw "{{agent}}"
-	startBead := result.Beads[0]
-	if startBead.StartSpec == nil {
-		t.Fatal("expected StartSpec")
+	// Check start step - agent should be substituted value, not raw "{{agent}}"
+	startStep := result.Steps[0]
+	if startStep.Spawn == nil {
+		t.Fatal("expected SpawnConfig")
 	}
-	if startBead.StartSpec.Agent != "claude-worker-42" {
-		t.Errorf("expected substituted agent 'claude-worker-42', got %q", startBead.StartSpec.Agent)
+	if startStep.Spawn.Agent != "claude-worker-42" {
+		t.Errorf("expected substituted agent 'claude-worker-42', got %q", startStep.Spawn.Agent)
 	}
 
-	// Check stop bead - agent should be substituted value, not raw "{{agent}}"
-	stopBead := result.Beads[1]
-	if stopBead.StopSpec == nil {
-		t.Fatal("expected StopSpec")
+	// Check stop step - agent should be substituted value, not raw "{{agent}}"
+	stopStep := result.Steps[1]
+	if stopStep.Kill == nil {
+		t.Fatal("expected KillConfig")
 	}
-	if stopBead.StopSpec.Agent != "claude-worker-42" {
-		t.Errorf("expected substituted agent 'claude-worker-42', got %q", stopBead.StopSpec.Agent)
+	if stopStep.Kill.Agent != "claude-worker-42" {
+		t.Errorf("expected substituted agent 'claude-worker-42', got %q", stopStep.Kill.Agent)
 	}
 }
 
@@ -1064,16 +1103,21 @@ func TestBaker_BakeWorkflow_CodeWithVariable(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.Type != types.BeadTypeCode {
-		t.Errorf("expected code type, got %s", bead.Type)
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
 	}
-	if bead.CodeSpec == nil {
-		t.Fatal("expected CodeSpec")
+
+	step := result.Steps[0]
+	// Legacy "code" type maps to ExecutorShell
+	if step.Executor != types.ExecutorShell {
+		t.Errorf("expected shell executor, got %s", step.Executor)
+	}
+	if step.Shell == nil {
+		t.Fatal("expected ShellConfig")
 	}
 	// Code should be substituted, not contain raw variable reference
-	if bead.CodeSpec.Code != "echo 'Running test: auth-unit-tests'" {
-		t.Errorf("expected substituted code, got %q", bead.CodeSpec.Code)
+	if step.Shell.Command != "echo 'Running test: auth-unit-tests'" {
+		t.Errorf("expected substituted code, got %q", step.Shell.Command)
 	}
 }
 
@@ -1105,13 +1149,17 @@ func TestBaker_BakeWorkflow_ConditionWithVariable(t *testing.T) {
 		t.Fatalf("BakeWorkflow failed: %v", err)
 	}
 
-	bead := result.Beads[0]
-	if bead.ConditionSpec == nil {
-		t.Fatal("expected ConditionSpec")
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.Branch == nil {
+		t.Fatal("expected BranchConfig")
 	}
 	// Condition should be substituted, not contain raw variable reference
-	if bead.ConditionSpec.Condition != "test -f /tmp/ready.flag" {
-		t.Errorf("expected substituted condition, got %q", bead.ConditionSpec.Condition)
+	if step.Branch.Condition != "test -f /tmp/ready.flag" {
+		t.Errorf("expected substituted condition, got %q", step.Branch.Condition)
 	}
 }
 
@@ -1203,5 +1251,586 @@ func TestBaker_BakeInline_WithCondition(t *testing.T) {
 	}
 	if bead.ConditionSpec.OnTrue == nil || bead.ConditionSpec.OnTrue.Template != "proceed" {
 		t.Errorf("expected on_true template 'proceed'")
+	}
+}
+
+// ============================================================================
+// NEW TESTS FOR STEP-BASED BAKER (pivot-303)
+// These tests define the expected behavior for the refactored baker that
+// produces types.Step instead of types.Bead.
+// ============================================================================
+
+// TestBakeWorkflow_ReturnsSteps verifies that BakeWorkflow now returns Steps
+func TestBakeWorkflow_ReturnsSteps(t *testing.T) {
+	workflow := &Workflow{
+		Name: "test-workflow",
+		Steps: []*Step{
+			{
+				ID:       "task-1",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Do something useful",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// Result should have Steps, not Beads
+	if result.Steps == nil {
+		t.Fatal("expected Steps in result, got nil")
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorAgent {
+		t.Errorf("expected agent executor, got %s", step.Executor)
+	}
+	if step.Status != types.StepStatusPending {
+		t.Errorf("expected pending status, got %s", step.Status)
+	}
+}
+
+// TestBakeWorkflow_ShellExecutor tests shell executor step creation
+func TestBakeWorkflow_ShellExecutor(t *testing.T) {
+	workflow := &Workflow{
+		Name: "shell-test",
+		Steps: []*Step{
+			{
+				ID:       "run-cmd",
+				Executor: ExecutorShell,
+				Command:  "echo 'hello world'",
+				Workdir:  "/tmp",
+				Env:      map[string]string{"FOO": "bar"},
+				OnError:  "continue",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-shell-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	if step.ID != "run-cmd" {
+		t.Errorf("expected step ID 'run-cmd', got %q", step.ID)
+	}
+	if step.Executor != types.ExecutorShell {
+		t.Errorf("expected shell executor, got %s", step.Executor)
+	}
+	if step.Shell == nil {
+		t.Fatal("expected ShellConfig, got nil")
+	}
+	if step.Shell.Command != "echo 'hello world'" {
+		t.Errorf("expected command, got %q", step.Shell.Command)
+	}
+	if step.Shell.Workdir != "/tmp" {
+		t.Errorf("expected workdir '/tmp', got %q", step.Shell.Workdir)
+	}
+	if step.Shell.Env["FOO"] != "bar" {
+		t.Errorf("expected env FOO=bar, got %v", step.Shell.Env)
+	}
+	if step.Shell.OnError != "continue" {
+		t.Errorf("expected on_error 'continue', got %q", step.Shell.OnError)
+	}
+}
+
+// TestBakeWorkflow_SpawnExecutor tests spawn executor step creation
+func TestBakeWorkflow_SpawnExecutor(t *testing.T) {
+	workflow := &Workflow{
+		Name: "spawn-test",
+		Steps: []*Step{
+			{
+				ID:            "start-agent",
+				Executor:      ExecutorSpawn,
+				Agent:         "claude-worker",
+				Workdir:       "/project",
+				Env:           map[string]string{"MEOW_WORKFLOW": "test"},
+				ResumeSession: "session-123",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-spawn-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorSpawn {
+		t.Errorf("expected spawn executor, got %s", step.Executor)
+	}
+	if step.Spawn == nil {
+		t.Fatal("expected SpawnConfig, got nil")
+	}
+	if step.Spawn.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", step.Spawn.Agent)
+	}
+	if step.Spawn.Workdir != "/project" {
+		t.Errorf("expected workdir '/project', got %q", step.Spawn.Workdir)
+	}
+	if step.Spawn.ResumeSession != "session-123" {
+		t.Errorf("expected resume_session 'session-123', got %q", step.Spawn.ResumeSession)
+	}
+}
+
+// TestBakeWorkflow_KillExecutor tests kill executor step creation
+func TestBakeWorkflow_KillExecutor(t *testing.T) {
+	graceful := true
+	workflow := &Workflow{
+		Name: "kill-test",
+		Steps: []*Step{
+			{
+				ID:       "stop-agent",
+				Executor: ExecutorKill,
+				Agent:    "claude-worker",
+				Graceful: &graceful,
+				Timeout:  "30s",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-kill-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorKill {
+		t.Errorf("expected kill executor, got %s", step.Executor)
+	}
+	if step.Kill == nil {
+		t.Fatal("expected KillConfig, got nil")
+	}
+	if step.Kill.Agent != "claude-worker" {
+		t.Errorf("expected agent 'claude-worker', got %q", step.Kill.Agent)
+	}
+	if !step.Kill.Graceful {
+		t.Error("expected graceful=true")
+	}
+}
+
+// TestBakeWorkflow_ExpandExecutor tests expand executor step creation
+func TestBakeWorkflow_ExpandExecutor(t *testing.T) {
+	workflow := &Workflow{
+		Name: "expand-test",
+		Steps: []*Step{
+			{
+				ID:        "do-expand",
+				Executor:  ExecutorExpand,
+				Template:  "sub-workflow",
+				Variables: map[string]string{"task": "build"},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-expand-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorExpand {
+		t.Errorf("expected expand executor, got %s", step.Executor)
+	}
+	if step.Expand == nil {
+		t.Fatal("expected ExpandConfig, got nil")
+	}
+	if step.Expand.Template != "sub-workflow" {
+		t.Errorf("expected template 'sub-workflow', got %q", step.Expand.Template)
+	}
+	if step.Expand.Variables["task"] != "build" {
+		t.Errorf("expected variable task=build, got %v", step.Expand.Variables)
+	}
+}
+
+// TestBakeWorkflow_BranchExecutor tests branch executor step creation
+func TestBakeWorkflow_BranchExecutor(t *testing.T) {
+	workflow := &Workflow{
+		Name: "branch-test",
+		Steps: []*Step{
+			{
+				ID:        "check-flag",
+				Executor:  ExecutorBranch,
+				Condition: "test -f /tmp/ready",
+				OnTrue:    &ExpansionTarget{Template: "proceed"},
+				OnFalse:   &ExpansionTarget{Template: "wait"},
+				Timeout:   "5m",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-branch-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorBranch {
+		t.Errorf("expected branch executor, got %s", step.Executor)
+	}
+	if step.Branch == nil {
+		t.Fatal("expected BranchConfig, got nil")
+	}
+	if step.Branch.Condition != "test -f /tmp/ready" {
+		t.Errorf("expected condition, got %q", step.Branch.Condition)
+	}
+	if step.Branch.OnTrue == nil || step.Branch.OnTrue.Template != "proceed" {
+		t.Errorf("expected on_true template 'proceed'")
+	}
+	if step.Branch.OnFalse == nil || step.Branch.OnFalse.Template != "wait" {
+		t.Errorf("expected on_false template 'wait'")
+	}
+	if step.Branch.Timeout != "5m" {
+		t.Errorf("expected timeout '5m', got %q", step.Branch.Timeout)
+	}
+}
+
+// TestBakeWorkflow_AgentExecutor tests agent executor step creation
+func TestBakeWorkflow_AgentExecutor(t *testing.T) {
+	workflow := &Workflow{
+		Name: "agent-test",
+		Steps: []*Step{
+			{
+				ID:       "do-work",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Implement the feature",
+				Mode:     "autonomous",
+				Timeout:  "1h",
+				Outputs: map[string]AgentOutputDef{
+					"result": {Required: true, Type: "string", Description: "The result"},
+				},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-agent-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	step := result.Steps[0]
+	if step.Executor != types.ExecutorAgent {
+		t.Errorf("expected agent executor, got %s", step.Executor)
+	}
+	if step.Agent == nil {
+		t.Fatal("expected AgentConfig, got nil")
+	}
+	if step.Agent.Agent != "claude" {
+		t.Errorf("expected agent 'claude', got %q", step.Agent.Agent)
+	}
+	if step.Agent.Prompt != "Implement the feature" {
+		t.Errorf("expected prompt, got %q", step.Agent.Prompt)
+	}
+	if step.Agent.Mode != "autonomous" {
+		t.Errorf("expected mode 'autonomous', got %q", step.Agent.Mode)
+	}
+	if step.Agent.Timeout != "1h" {
+		t.Errorf("expected timeout '1h', got %q", step.Agent.Timeout)
+	}
+	if step.Agent.Outputs == nil {
+		t.Fatal("expected outputs")
+	}
+	if step.Agent.Outputs["result"].Required != true {
+		t.Error("expected result output to be required")
+	}
+}
+
+// TestBakeWorkflow_Dependencies tests that step dependencies are preserved
+func TestBakeWorkflow_Dependencies(t *testing.T) {
+	workflow := &Workflow{
+		Name: "deps-test",
+		Steps: []*Step{
+			{
+				ID:       "first",
+				Executor: ExecutorShell,
+				Command:  "echo first",
+			},
+			{
+				ID:       "second",
+				Executor: ExecutorShell,
+				Command:  "echo second",
+				Needs:    []string{"first"},
+			},
+			{
+				ID:       "third",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Do third",
+				Needs:    []string{"first", "second"},
+			},
+		},
+	}
+
+	baker := NewBaker("wf-deps-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(result.Steps))
+	}
+
+	// Find steps by ID
+	stepByID := make(map[string]*types.Step)
+	for _, s := range result.Steps {
+		stepByID[s.ID] = s
+	}
+
+	first := stepByID["first"]
+	second := stepByID["second"]
+	third := stepByID["third"]
+
+	if first == nil || second == nil || third == nil {
+		t.Fatal("missing expected steps")
+	}
+
+	if len(first.Needs) != 0 {
+		t.Errorf("first should have no deps, got %v", first.Needs)
+	}
+	if len(second.Needs) != 1 || second.Needs[0] != "first" {
+		t.Errorf("second should depend on first, got %v", second.Needs)
+	}
+	if len(third.Needs) != 2 {
+		t.Errorf("third should have 2 deps, got %v", third.Needs)
+	}
+}
+
+// TestBakeWorkflow_VariableSubstitution tests variable substitution in step fields
+func TestBakeWorkflow_VariableSubstitution(t *testing.T) {
+	workflow := &Workflow{
+		Name: "var-test",
+		Variables: map[string]*Var{
+			"target": {Required: true},
+			"agent":  {Default: "claude"},
+		},
+		Steps: []*Step{
+			{
+				ID:       "task",
+				Executor: ExecutorAgent,
+				Agent:    "{{agent}}",
+				Prompt:   "Work on {{target}}",
+			},
+			{
+				ID:       "check",
+				Executor: ExecutorShell,
+				Command:  "test -f {{target}}.done",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-var-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, map[string]string{
+		"target": "feature-x",
+	})
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	if len(result.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result.Steps))
+	}
+
+	// Find the agent step
+	var agentStep *types.Step
+	for _, s := range result.Steps {
+		if s.ID == "task" {
+			agentStep = s
+			break
+		}
+	}
+
+	if agentStep == nil {
+		t.Fatal("agent step not found")
+	}
+	if agentStep.Agent.Agent != "claude" {
+		t.Errorf("expected agent 'claude', got %q", agentStep.Agent.Agent)
+	}
+	if agentStep.Agent.Prompt != "Work on feature-x" {
+		t.Errorf("expected substituted prompt, got %q", agentStep.Agent.Prompt)
+	}
+
+	// Find the shell step
+	var shellStep *types.Step
+	for _, s := range result.Steps {
+		if s.ID == "check" {
+			shellStep = s
+			break
+		}
+	}
+
+	if shellStep == nil {
+		t.Fatal("shell step not found")
+	}
+	if shellStep.Shell.Command != "test -f feature-x.done" {
+		t.Errorf("expected substituted command, got %q", shellStep.Shell.Command)
+	}
+}
+
+// TestBakeWorkflow_NoBeads verifies the old Beads field is no longer used
+func TestBakeWorkflow_NoBeads(t *testing.T) {
+	workflow := &Workflow{
+		Name: "no-beads-test",
+		Steps: []*Step{
+			{
+				ID:       "task",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Do work",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-no-beads-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// Beads should be nil or empty (no longer populated)
+	if len(result.Beads) != 0 {
+		t.Errorf("expected no Beads, got %d", len(result.Beads))
+	}
+
+	// Steps should be populated instead
+	if len(result.Steps) != 1 {
+		t.Errorf("expected 1 Step, got %d", len(result.Steps))
+	}
+}
+
+// TestBakeWorkflow_LegacyTypeMapping tests that legacy type field maps to executor
+func TestBakeWorkflow_LegacyTypeMapping(t *testing.T) {
+	tests := []struct {
+		legacyType       string
+		expectedExecutor types.ExecutorType
+	}{
+		{"task", types.ExecutorAgent},
+		{"collaborative", types.ExecutorAgent},
+		{"code", types.ExecutorShell},
+		{"condition", types.ExecutorBranch},
+		{"start", types.ExecutorSpawn},
+		{"stop", types.ExecutorKill},
+		{"expand", types.ExecutorExpand},
+		{"gate", types.ExecutorBranch}, // Gates become branch with await-approval
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.legacyType, func(t *testing.T) {
+			step := &Step{
+				ID:   "test",
+				Type: tt.legacyType,
+			}
+			// Add required fields based on type
+			switch tt.legacyType {
+			case "code":
+				step.Code = "echo test"
+			case "condition":
+				step.Condition = "test -f /tmp/x"
+			case "start", "stop":
+				step.Assignee = "claude"
+			case "expand":
+				step.Template = "sub"
+			case "gate":
+				step.Instructions = "Approve this"
+			case "task", "collaborative":
+				step.Instructions = "Do work"
+			}
+
+			workflow := &Workflow{
+				Name:  "legacy-test",
+				Steps: []*Step{step},
+			}
+
+			baker := NewBaker("wf-legacy-001")
+			baker.Now = fixedTime
+
+			result, err := baker.BakeWorkflow(workflow, nil)
+			if err != nil {
+				t.Fatalf("BakeWorkflow failed: %v", err)
+			}
+
+			if len(result.Steps) != 1 {
+				t.Fatalf("expected 1 step, got %d", len(result.Steps))
+			}
+
+			if result.Steps[0].Executor != tt.expectedExecutor {
+				t.Errorf("expected executor %s for type %q, got %s",
+					tt.expectedExecutor, tt.legacyType, result.Steps[0].Executor)
+			}
+		})
+	}
+}
+
+// TestBakeWorkflow_StepValidation tests that created steps are valid
+func TestBakeWorkflow_StepValidation(t *testing.T) {
+	workflow := &Workflow{
+		Name: "validation-test",
+		Steps: []*Step{
+			{
+				ID:       "shell-step",
+				Executor: ExecutorShell,
+				Command:  "echo test",
+			},
+			{
+				ID:       "agent-step",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Do work",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-valid-001")
+	baker.Now = fixedTime
+
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// All steps should pass validation
+	for _, step := range result.Steps {
+		if err := step.Validate(); err != nil {
+			t.Errorf("step %s failed validation: %v", step.ID, err)
+		}
 	}
 }

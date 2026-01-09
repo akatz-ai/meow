@@ -37,10 +37,11 @@ func NewBaker(workflowID string) *Baker {
 	}
 }
 
-// BakeResult contains the beads generated from baking a template.
+// BakeResult contains the steps generated from baking a template.
 type BakeResult struct {
-	Beads      []*types.Bead
-	StepToID   map[string]string // step ID -> bead ID mapping
+	Steps      []*types.Step     // New: Steps for the workflow-centric model
+	Beads      []*types.Bead     // Deprecated: Legacy beads (used by Bake, not BakeWorkflow)
+	StepToID   map[string]string // step ID -> bead ID mapping (legacy)
 	WorkflowID string            // Unique workflow instance ID
 }
 
@@ -97,7 +98,8 @@ func (b *Baker) Bake(tmpl *Template) (*BakeResult, error) {
 	}, nil
 }
 
-// BakeWorkflow transforms a module-format workflow into beads with tier detection.
+// BakeWorkflow transforms a module-format workflow into types.Step objects.
+// This is the new workflow-centric model - returns Steps, not Beads.
 func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeResult, error) {
 	if workflow == nil {
 		return nil, fmt.Errorf("workflow is nil")
@@ -131,28 +133,410 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 	b.VarContext.SetBuiltin("workflow_id", b.WorkflowID)
 	b.VarContext.SetBuiltin("molecule_id", b.WorkflowID)
 
-	// Generate step ID to bead ID mapping
-	stepToID := make(map[string]string)
-	for _, step := range workflow.Steps {
-		beadID := b.generateBeadID(step.ID)
-		stepToID[step.ID] = beadID
-	}
-
-	// Process steps (order doesn't matter for baking - Needs field handles runtime ordering)
-	var beads []*types.Bead
-	for _, step := range workflow.Steps {
-		bead, err := b.workflowStepToBead(step, stepToID, workflow)
+	// Process steps - create types.Step objects
+	var steps []*types.Step
+	for _, templateStep := range workflow.Steps {
+		step, err := b.templateStepToStep(templateStep)
 		if err != nil {
-			return nil, fmt.Errorf("bake step %q: %w", step.ID, err)
+			return nil, fmt.Errorf("bake step %q: %w", templateStep.ID, err)
 		}
-		beads = append(beads, bead)
+		steps = append(steps, step)
 	}
 
 	return &BakeResult{
-		Beads:      beads,
-		StepToID:   stepToID,
+		Steps:      steps,
 		WorkflowID: b.WorkflowID,
 	}, nil
+}
+
+// templateStepToStep converts a template Step to a types.Step.
+// This is the core transformation for the workflow-centric model.
+func (b *Baker) templateStepToStep(ts *Step) (*types.Step, error) {
+	// Set step-specific builtins BEFORE substitution
+	b.VarContext.SetBuiltin("step_id", ts.ID)
+
+	// Determine executor type (from executor field or legacy type field)
+	executor := b.determineExecutor(ts)
+
+	// Create base step
+	step := &types.Step{
+		ID:       ts.ID,
+		Executor: executor,
+		Status:   types.StepStatusPending,
+		Needs:    ts.Needs, // Dependencies use step IDs directly
+	}
+
+	// Substitute variables and set executor-specific config
+	if err := b.setStepConfig(step, ts); err != nil {
+		return nil, err
+	}
+
+	return step, nil
+}
+
+// determineExecutor determines the executor type from template step fields.
+// Supports both new executor field and legacy type field mapping.
+func (b *Baker) determineExecutor(ts *Step) types.ExecutorType {
+	// New executor field takes precedence
+	if ts.Executor != "" {
+		return types.ExecutorType(ts.Executor)
+	}
+
+	// Map legacy type field to executor
+	switch ts.Type {
+	case "task", "collaborative", "":
+		return types.ExecutorAgent
+	case "code":
+		return types.ExecutorShell
+	case "condition":
+		return types.ExecutorBranch
+	case "start":
+		return types.ExecutorSpawn
+	case "stop":
+		return types.ExecutorKill
+	case "expand":
+		return types.ExecutorExpand
+	case "gate":
+		// Gates become branch with await-approval condition
+		return types.ExecutorBranch
+	default:
+		return types.ExecutorAgent
+	}
+}
+
+// setStepConfig sets the executor-specific configuration on the step.
+func (b *Baker) setStepConfig(step *types.Step, ts *Step) error {
+	switch step.Executor {
+	case types.ExecutorShell:
+		return b.setShellConfig(step, ts)
+	case types.ExecutorSpawn:
+		return b.setSpawnConfig(step, ts)
+	case types.ExecutorKill:
+		return b.setKillConfig(step, ts)
+	case types.ExecutorExpand:
+		return b.setExpandConfig(step, ts)
+	case types.ExecutorBranch:
+		return b.setBranchConfig(step, ts)
+	case types.ExecutorAgent:
+		return b.setAgentConfig(step, ts)
+	default:
+		return fmt.Errorf("unknown executor type: %s", step.Executor)
+	}
+}
+
+// setShellConfig sets ShellConfig for shell executor steps.
+func (b *Baker) setShellConfig(step *types.Step, ts *Step) error {
+	// Get command from new field or legacy Code field
+	command := ts.Command
+	if command == "" {
+		command = ts.Code
+	}
+
+	// Substitute variables
+	var err error
+	command, err = b.VarContext.Substitute(command)
+	if err != nil {
+		return fmt.Errorf("substitute command: %w", err)
+	}
+
+	workdir := ts.Workdir
+	if workdir != "" {
+		workdir, err = b.VarContext.Substitute(workdir)
+		if err != nil {
+			return fmt.Errorf("substitute workdir: %w", err)
+		}
+	}
+
+	// Substitute env values
+	env := make(map[string]string)
+	for k, v := range ts.Env {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute env %s: %w", k, err)
+		}
+		env[k] = subV
+	}
+
+	// Convert shell outputs to types format
+	var outputs map[string]types.OutputSource
+	if len(ts.ShellOutputs) > 0 {
+		outputs = make(map[string]types.OutputSource)
+		for k, v := range ts.ShellOutputs {
+			outputs[k] = types.OutputSource{Source: v.Source}
+		}
+	}
+
+	step.Shell = &types.ShellConfig{
+		Command: command,
+		Workdir: workdir,
+		Env:     env,
+		OnError: ts.OnError,
+		Outputs: outputs,
+	}
+	return nil
+}
+
+// setSpawnConfig sets SpawnConfig for spawn executor steps.
+func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
+	// Get agent from new field or legacy Assignee field
+	agent := ts.Agent
+	if agent == "" {
+		agent = ts.Assignee
+	}
+
+	var err error
+	agent, err = b.VarContext.Substitute(agent)
+	if err != nil {
+		return fmt.Errorf("substitute agent: %w", err)
+	}
+
+	workdir := ts.Workdir
+	if workdir != "" {
+		workdir, err = b.VarContext.Substitute(workdir)
+		if err != nil {
+			return fmt.Errorf("substitute workdir: %w", err)
+		}
+	}
+
+	// Substitute env values
+	env := make(map[string]string)
+	for k, v := range ts.Env {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute env %s: %w", k, err)
+		}
+		env[k] = subV
+	}
+
+	step.Spawn = &types.SpawnConfig{
+		Agent:         agent,
+		Workdir:       workdir,
+		Env:           env,
+		ResumeSession: ts.ResumeSession,
+	}
+	return nil
+}
+
+// setKillConfig sets KillConfig for kill executor steps.
+func (b *Baker) setKillConfig(step *types.Step, ts *Step) error {
+	// Get agent from new field or legacy Assignee field
+	agent := ts.Agent
+	if agent == "" {
+		agent = ts.Assignee
+	}
+
+	var err error
+	agent, err = b.VarContext.Substitute(agent)
+	if err != nil {
+		return fmt.Errorf("substitute agent: %w", err)
+	}
+
+	graceful := true
+	if ts.Graceful != nil {
+		graceful = *ts.Graceful
+	}
+
+	// Parse timeout if provided (Timeout field is a string like "30s")
+	timeout := 10 // default
+	// Note: timeout parsing would go here if we want to convert string to int
+
+	step.Kill = &types.KillConfig{
+		Agent:    agent,
+		Graceful: graceful,
+		Timeout:  timeout,
+	}
+	return nil
+}
+
+// setExpandConfig sets ExpandConfig for expand executor steps.
+func (b *Baker) setExpandConfig(step *types.Step, ts *Step) error {
+	template := ts.Template
+	var err error
+	template, err = b.VarContext.Substitute(template)
+	if err != nil {
+		return fmt.Errorf("substitute template: %w", err)
+	}
+
+	// Substitute variable values
+	variables := make(map[string]string)
+	for k, v := range ts.Variables {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute variable %s: %w", k, err)
+		}
+		variables[k] = subV
+	}
+
+	step.Expand = &types.ExpandConfig{
+		Template:  template,
+		Variables: variables,
+	}
+	return nil
+}
+
+// setBranchConfig sets BranchConfig for branch executor steps.
+func (b *Baker) setBranchConfig(step *types.Step, ts *Step) error {
+	condition := ts.Condition
+	var err error
+
+	// Handle legacy gate type - convert to await-approval condition
+	if ts.Type == "gate" {
+		condition = fmt.Sprintf("meow await-approval %s", step.ID)
+	} else if condition != "" {
+		condition, err = b.VarContext.Substitute(condition)
+		if err != nil {
+			return fmt.Errorf("substitute condition: %w", err)
+		}
+	}
+
+	step.Branch = &types.BranchConfig{
+		Condition: condition,
+		Timeout:   ts.Timeout,
+	}
+
+	// Convert expansion targets
+	if ts.OnTrue != nil {
+		step.Branch.OnTrue, err = b.expansionTargetToTypesBranch(ts.OnTrue)
+		if err != nil {
+			return fmt.Errorf("convert on_true: %w", err)
+		}
+	}
+	if ts.OnFalse != nil {
+		step.Branch.OnFalse, err = b.expansionTargetToTypesBranch(ts.OnFalse)
+		if err != nil {
+			return fmt.Errorf("convert on_false: %w", err)
+		}
+	}
+	if ts.OnTimeout != nil {
+		step.Branch.OnTimeout, err = b.expansionTargetToTypesBranch(ts.OnTimeout)
+		if err != nil {
+			return fmt.Errorf("convert on_timeout: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// expansionTargetToTypesBranch converts template ExpansionTarget to types.BranchTarget.
+func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.BranchTarget, error) {
+	if et == nil {
+		return nil, nil
+	}
+
+	template := et.Template
+	var err error
+	if template != "" {
+		template, err = b.VarContext.Substitute(template)
+		if err != nil {
+			return nil, fmt.Errorf("substitute template: %w", err)
+		}
+	}
+
+	// Substitute variable values
+	variables := make(map[string]string)
+	for k, v := range et.Variables {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return nil, fmt.Errorf("substitute variable %s: %w", k, err)
+		}
+		variables[k] = subV
+	}
+
+	target := &types.BranchTarget{
+		Template:  template,
+		Variables: variables,
+	}
+
+	// Convert inline steps
+	if len(et.Inline) > 0 {
+		for _, inlineStep := range et.Inline {
+			typesInlineStep := types.InlineStep{
+				ID:       inlineStep.ID,
+				Executor: types.ExecutorType(inlineStep.Executor),
+				Prompt:   inlineStep.Instructions, // Legacy field mapping
+				Agent:    inlineStep.Assignee,     // Legacy field mapping
+				Needs:    inlineStep.Needs,
+			}
+
+			// Use new fields if available
+			if inlineStep.Executor != "" {
+				typesInlineStep.Executor = types.ExecutorType(inlineStep.Executor)
+			} else {
+				// Map legacy type
+				switch inlineStep.Type {
+				case "task", "collaborative", "":
+					typesInlineStep.Executor = types.ExecutorAgent
+				case "code":
+					typesInlineStep.Executor = types.ExecutorShell
+				default:
+					typesInlineStep.Executor = types.ExecutorAgent
+				}
+			}
+
+			target.Inline = append(target.Inline, typesInlineStep)
+		}
+	}
+
+	return target, nil
+}
+
+// setAgentConfig sets AgentConfig for agent executor steps.
+func (b *Baker) setAgentConfig(step *types.Step, ts *Step) error {
+	// Get agent from new field or legacy Assignee field
+	agent := ts.Agent
+	if agent == "" {
+		agent = ts.Assignee
+	}
+	if agent == "" {
+		agent = b.Assignee // Default from baker
+	}
+
+	var err error
+	if agent != "" {
+		agent, err = b.VarContext.Substitute(agent)
+		if err != nil {
+			return fmt.Errorf("substitute agent: %w", err)
+		}
+	}
+
+	// Get prompt from new field or legacy Instructions field
+	prompt := ts.Prompt
+	if prompt == "" {
+		prompt = ts.Instructions
+	}
+	if prompt != "" {
+		prompt, err = b.VarContext.Substitute(prompt)
+		if err != nil {
+			return fmt.Errorf("substitute prompt: %w", err)
+		}
+	}
+
+	mode := ts.Mode
+	if mode == "" {
+		mode = "autonomous" // Default
+	}
+
+	// Convert outputs
+	var outputs map[string]types.AgentOutputDef
+	if len(ts.Outputs) > 0 {
+		outputs = make(map[string]types.AgentOutputDef)
+		for name, def := range ts.Outputs {
+			outputs[name] = types.AgentOutputDef{
+				Required:    def.Required,
+				Type:        def.Type,
+				Description: def.Description,
+			}
+		}
+	}
+
+	step.Agent = &types.AgentConfig{
+		Agent:   agent,
+		Prompt:  prompt,
+		Mode:    mode,
+		Outputs: outputs,
+		Timeout: ts.Timeout,
+	}
+	return nil
 }
 
 // workflowStepToBead converts a module-format workflow step to a bead with tier detection.
