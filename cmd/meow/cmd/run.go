@@ -2,31 +2,25 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/agent"
-	"github.com/meow-stack/meow-machine/internal/config"
-	"github.com/meow-stack/meow-machine/internal/executor"
-	"github.com/meow-stack/meow-machine/internal/logging"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/types"
 	"github.com/spf13/cobra"
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run <template>",
 	Short: "Run a workflow from a template",
-	Long: `Start a workflow by baking a template into beads and running the orchestrator.
+	Long: `Start a workflow by baking a template into steps and running the orchestrator.
 
-The template is loaded from .meow/templates/<name>.toml and expanded into
-beads in the .beads directory. The orchestrator then executes the workflow.`,
+The template is loaded and baked into steps which are persisted in
+.meow/workflows/<id>.yaml. The orchestrator then executes the workflow.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRun,
 }
@@ -45,11 +39,6 @@ func init() {
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
-	// For run command, we need .beads directory (not necessarily .meow)
-	if err := checkBeadsDir(); err != nil {
-		return err
-	}
-
 	templatePath := args[0]
 	ctx := context.Background()
 
@@ -57,6 +46,12 @@ func runRun(cmd *cobra.Command, args []string) error {
 	dir, err := getWorkDir()
 	if err != nil {
 		return err
+	}
+
+	// Ensure .meow/workflows directory exists
+	workflowsDir := filepath.Join(dir, ".meow", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
+		return fmt.Errorf("creating workflows dir: %w", err)
 	}
 
 	// If template path is not absolute, resolve it
@@ -86,8 +81,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get workflow (use flag or default to "main")
-	workflow := module.GetWorkflow(runWorkflow)
-	if workflow == nil {
+	templateWorkflow := module.GetWorkflow(runWorkflow)
+	if templateWorkflow == nil {
 		// List available workflows for better error message
 		var available []string
 		for name := range module.Workflows {
@@ -97,119 +92,66 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate a unique workflow ID
-	workflowID := fmt.Sprintf("meow-%d", time.Now().UnixNano())
+	workflowID := fmt.Sprintf("wf-%d", time.Now().UnixNano())
 
 	// Create baker
 	baker := template.NewBaker(workflowID)
 
-	// Bake the workflow into beads
-	result, err := baker.BakeWorkflow(workflow, vars)
+	// Bake the workflow into steps
+	result, err := baker.BakeWorkflow(templateWorkflow, vars)
 	if err != nil {
 		return fmt.Errorf("baking workflow: %w", err)
 	}
 
 	if runDry {
-		fmt.Printf("Would create %d beads from template: %s (workflow: %s)\n", len(result.Beads), templatePath, runWorkflow)
+		fmt.Printf("Would create workflow with %d steps from template: %s (workflow: %s)\n", len(result.Steps), templatePath, runWorkflow)
 		fmt.Printf("Workflow ID: %s\n", result.WorkflowID)
 		fmt.Println()
-		for _, bead := range result.Beads {
-			fmt.Printf("  %s [%s] %s\n", bead.ID, bead.Type, bead.Title)
-			if len(bead.Needs) > 0 {
-				fmt.Printf("    needs: %v\n", bead.Needs)
+		for _, step := range result.Steps {
+			fmt.Printf("  %s [%s]\n", step.ID, step.Executor)
+			if len(step.Needs) > 0 {
+				fmt.Printf("    needs: %v\n", step.Needs)
 			}
 		}
 		return nil
 	}
 
-	// Load bead store
-	beadsDir := filepath.Join(dir, ".beads")
-	store := orchestrator.NewFileBeadStore(beadsDir)
-	if err := store.Load(ctx); err != nil {
-		return fmt.Errorf("loading beads: %w", err)
+	// Create a Workflow object
+	wf := types.NewWorkflow(workflowID, templatePath, vars)
+
+	// Add all steps to the workflow
+	for _, step := range result.Steps {
+		if err := wf.AddStep(step); err != nil {
+			return fmt.Errorf("adding step %s: %w", step.ID, err)
+		}
 	}
 
-	// Write beads to store
-	for _, bead := range result.Beads {
-		if err := store.Create(ctx, bead); err != nil {
-			return fmt.Errorf("creating bead %s: %w", bead.ID, err)
-		}
+	// Create workflow store
+	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	if err != nil {
+		return fmt.Errorf("opening workflow store: %w", err)
+	}
+	defer store.Close()
+
+	// Persist the workflow
+	if err := store.Create(ctx, wf); err != nil {
+		return fmt.Errorf("creating workflow: %w", err)
 	}
 
 	// Output success
-	fmt.Printf("Created %d beads from template: %s\n", len(result.Beads), filepath.Base(templatePath))
+	fmt.Printf("Created workflow with %d steps from template: %s\n", len(result.Steps), filepath.Base(templatePath))
 	fmt.Printf("Workflow ID: %s\n", result.WorkflowID)
 	if verbose {
-		fmt.Println("\nBeads created:")
-		for _, bead := range result.Beads {
-			fmt.Printf("  %s [%s] %s\n", bead.ID, bead.Type, bead.Title)
+		fmt.Println("\nSteps created:")
+		for _, step := range result.Steps {
+			fmt.Printf("  %s [%s]\n", step.ID, step.Executor)
 		}
 	}
 
-	// Start the orchestrator to process the beads
-	fmt.Println("\nStarting orchestrator...")
+	// TODO: Run the orchestrator once it's refactored to use WorkflowStore and Steps
+	// For now, just display information about the workflow
+	fmt.Printf("\nWorkflow saved to: %s\n", filepath.Join(workflowsDir, workflowID+".yaml"))
+	fmt.Println("Note: Orchestrator execution is pending orchestrator refactor to workflow-centric model.")
 
-	// Load configuration
-	cfg, err := config.LoadFromDir(dir)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	// Create logger
-	logger, logCloser, err := logging.NewFromConfig(cfg, dir)
-	if err != nil {
-		// Fall back to default logger
-		logger = logging.NewDefault()
-	}
-	if logCloser != nil {
-		defer logCloser.Close()
-	}
-
-	// Create agent manager
-	agentMgr := agent.NewTmuxManager()
-
-	// Create template expander
-	expander := orchestrator.NewFileTemplateExpander(dir, store)
-
-	// Create code executor
-	codeExec := executor.NewShellExecutor()
-
-	// Create orchestrator
-	orch := orchestrator.New(cfg, store, agentMgr, expander, codeExec, logger)
-
-	// Start or resume orchestrator
-	stateDir := filepath.Join(dir, ".meow", "state")
-	startCfg := &orchestrator.StartupConfig{
-		WorkflowID: result.WorkflowID,
-		StateDir:   stateDir,
-	}
-	if err := orch.StartOrResume(ctx, startCfg); err != nil {
-		return fmt.Errorf("starting orchestrator: %w", err)
-	}
-	defer orch.ReleaseLock()
-
-	// Set up signal handling for graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	// Create a context that cancels on signal
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go func() {
-		sig := <-sigCh
-		fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
-		cancel()
-	}()
-
-	// Run the orchestrator loop
-	if err := orch.Run(runCtx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			fmt.Println("Orchestrator stopped.")
-			return nil
-		}
-		return fmt.Errorf("orchestrator error: %w", err)
-	}
-
-	fmt.Println("Workflow completed successfully.")
 	return nil
 }
