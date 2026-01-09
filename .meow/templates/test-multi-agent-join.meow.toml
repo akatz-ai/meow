@@ -1,0 +1,127 @@
+# Test: Multi-Agent Join Pattern
+#
+# Tests the workflow pattern of:
+# 1. Multiple agents work in parallel
+# 2. A downstream step waits for ALL of them to complete
+# 3. That step can access outputs from all agents
+#
+# Usage:
+#   meow run .meow/templates/test-multi-agent-join.meow.toml
+
+[main]
+name = "test-multi-agent-join"
+description = "Test multiple agents joining at a sync point"
+
+# Phase 1: Spawn all agents (parallel)
+[[main.steps]]
+id = "spawn-alpha"
+executor = "spawn"
+description = "Start agent alpha"
+agent = "alpha"
+
+[[main.steps]]
+id = "spawn-beta"
+executor = "spawn"
+description = "Start agent beta"
+agent = "beta"
+
+[[main.steps]]
+id = "spawn-gamma"
+executor = "spawn"
+description = "Start agent gamma"
+agent = "gamma"
+
+# Phase 2: Each agent does independent work (parallel)
+[[main.steps]]
+id = "work-alpha"
+executor = "agent"
+description = "Alpha counts internal/ files"
+needs = ["spawn-alpha"]
+agent = "alpha"
+prompt = """
+You are ALPHA. Count .go files in internal/ and write to /tmp/meow-alpha.txt:
+  find internal -name "*.go" | wc -l > /tmp/meow-alpha.txt
+Report: "ALPHA: Found X files"
+When done: meow done
+"""
+
+[[main.steps]]
+id = "work-beta"
+executor = "agent"
+description = "Beta counts cmd/ files"
+needs = ["spawn-beta"]
+agent = "beta"
+prompt = """
+You are BETA. Count .go files in cmd/ and write to /tmp/meow-beta.txt:
+  find cmd -name "*.go" | wc -l > /tmp/meow-beta.txt
+Report: "BETA: Found X files"
+When done: meow done
+"""
+
+[[main.steps]]
+id = "work-gamma"
+executor = "agent"
+description = "Gamma counts docs/ files"
+needs = ["spawn-gamma"]
+agent = "gamma"
+prompt = """
+You are GAMMA. Count .md files in docs/ and write to /tmp/meow-gamma.txt:
+  find docs -name "*.md" | wc -l > /tmp/meow-gamma.txt
+Report: "GAMMA: Found X files"
+When done: meow done
+"""
+
+# Phase 3: Kill all agents (parallel, after their work)
+[[main.steps]]
+id = "kill-alpha"
+executor = "kill"
+description = "Stop alpha"
+needs = ["work-alpha"]
+agent = "alpha"
+graceful = true
+
+[[main.steps]]
+id = "kill-beta"
+executor = "kill"
+description = "Stop beta"
+needs = ["work-beta"]
+agent = "beta"
+graceful = true
+
+[[main.steps]]
+id = "kill-gamma"
+executor = "kill"
+description = "Stop gamma"
+needs = ["work-gamma"]
+agent = "gamma"
+graceful = true
+
+# Phase 4: Join step - waits for ALL work to complete
+[[main.steps]]
+id = "aggregate-results"
+executor = "shell"
+description = "Combine results from all agents"
+needs = ["kill-alpha", "kill-beta", "kill-gamma"]
+command = """
+echo "=== Aggregating Results from All Agents ==="
+
+ALPHA=$(cat /tmp/meow-alpha.txt 2>/dev/null || echo "missing")
+BETA=$(cat /tmp/meow-beta.txt 2>/dev/null || echo "missing")
+GAMMA=$(cat /tmp/meow-gamma.txt 2>/dev/null || echo "missing")
+
+echo "Alpha (internal/*.go): $ALPHA"
+echo "Beta (cmd/*.go): $BETA"
+echo "Gamma (docs/*.md): $GAMMA"
+
+# Cleanup
+rm -f /tmp/meow-alpha.txt /tmp/meow-beta.txt /tmp/meow-gamma.txt
+
+if [ "$ALPHA" != "missing" ] && [ "$BETA" != "missing" ] && [ "$GAMMA" != "missing" ]; then
+    echo ""
+    echo "SUCCESS: All agents completed and produced output!"
+else
+    echo ""
+    echo "FAILED: Some agents did not produce output"
+    exit 1
+fi
+"""

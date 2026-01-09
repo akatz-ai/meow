@@ -1,0 +1,67 @@
+# Test: Agent Output Chain
+#
+# Tests the workflow pattern of:
+# 1. Agent completes with outputs (--output flag)
+# 2. Downstream shell step uses those outputs
+#
+# Usage:
+#   meow run .meow/templates/test-output-chain.meow.toml
+
+[main]
+name = "test-output-chain"
+description = "Test agent outputs flowing to downstream steps"
+
+# Step 1: Spawn agent
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+description = "Start agent"
+agent = "output-producer"
+
+# Step 2: Agent does work and produces output
+[[main.steps]]
+id = "produce-output"
+executor = "agent"
+description = "Agent produces outputs"
+needs = ["spawn-agent"]
+agent = "output-producer"
+prompt = """
+You are testing output production. Your task:
+
+1. Count the number of .go files in cmd/ directory
+2. Write the count to /tmp/meow-test-output.txt
+
+Example:
+  find cmd -name "*.go" | wc -l > /tmp/meow-test-output.txt
+
+3. When done, run:
+   meow done --output count=$(cat /tmp/meow-test-output.txt)
+
+This tests that outputs can be passed from agent steps.
+"""
+
+# Step 3: Kill agent
+[[main.steps]]
+id = "kill-agent"
+executor = "kill"
+description = "Stop the agent"
+needs = ["produce-output"]
+agent = "output-producer"
+graceful = true
+
+# Step 4: Verify output was produced
+[[main.steps]]
+id = "verify-output"
+executor = "shell"
+description = "Verify the output file exists"
+needs = ["kill-agent"]
+command = """
+if [ -f /tmp/meow-test-output.txt ]; then
+    COUNT=$(cat /tmp/meow-test-output.txt)
+    echo "SUCCESS: Agent produced output: $COUNT"
+    rm /tmp/meow-test-output.txt
+else
+    echo "FAILED: Output file not found"
+    exit 1
+fi
+"""

@@ -1,0 +1,101 @@
+# Test: Worktree Creation and Agent Spawning
+#
+# Tests the workflow pattern of:
+# 1. Create a git worktree on a new branch
+# 2. Spawn an agent in that worktree
+# 3. Agent verifies it's in the correct directory
+# 4. Cleanup: kill agent, remove worktree
+#
+# Usage:
+#   meow run .meow/templates/test-worktree.meow.toml
+
+[main]
+name = "test-worktree"
+description = "Test worktree creation and agent spawning"
+
+# Step 1: Create a test branch and worktree
+[[main.steps]]
+id = "create-worktree"
+executor = "shell"
+description = "Create git worktree for test"
+command = """
+BRANCH="test-worktree-$(date +%s)"
+WORKTREE_PATH="/tmp/meow-test-worktree"
+
+# Clean up any existing test worktree
+rm -rf "$WORKTREE_PATH" 2>/dev/null || true
+git worktree remove "$WORKTREE_PATH" --force 2>/dev/null || true
+
+# Create new branch and worktree
+git worktree add -b "$BRANCH" "$WORKTREE_PATH"
+
+echo "BRANCH=$BRANCH"
+echo "WORKTREE_PATH=$WORKTREE_PATH"
+"""
+
+# Step 2: Spawn agent in the worktree
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+description = "Start agent in worktree"
+needs = ["create-worktree"]
+agent = "worktree-tester"
+workdir = "/tmp/meow-test-worktree"
+
+# Step 3: Agent verifies location and does simple task
+[[main.steps]]
+id = "verify-location"
+executor = "agent"
+description = "Agent verifies it's in the worktree"
+needs = ["spawn-agent"]
+agent = "worktree-tester"
+prompt = """
+You are testing worktree functionality. Do these checks:
+
+1. Run: pwd
+   - Verify you're in /tmp/meow-test-worktree
+
+2. Run: git branch --show-current
+   - Should show a branch starting with "test-worktree-"
+
+3. Run: git status
+   - Should show a clean working tree
+
+4. Create a test file: echo "test content" > test-file.txt
+
+5. Report your findings briefly.
+
+When done, run: meow done
+"""
+
+# Step 4: Kill the agent
+[[main.steps]]
+id = "kill-agent"
+executor = "kill"
+description = "Stop the agent"
+needs = ["verify-location"]
+agent = "worktree-tester"
+graceful = true
+
+# Step 5: Cleanup worktree
+[[main.steps]]
+id = "cleanup-worktree"
+executor = "shell"
+description = "Remove test worktree and branch"
+needs = ["kill-agent"]
+command = """
+WORKTREE_PATH="/tmp/meow-test-worktree"
+
+# Get the branch name before removing
+BRANCH=$(git -C "$WORKTREE_PATH" branch --show-current 2>/dev/null || echo "unknown")
+
+# Remove worktree
+git worktree remove "$WORKTREE_PATH" --force 2>/dev/null || rm -rf "$WORKTREE_PATH"
+
+# Delete the test branch
+git branch -D "$BRANCH" 2>/dev/null || true
+
+echo "Cleaned up worktree at $WORKTREE_PATH"
+echo "Deleted branch $BRANCH"
+"""
+on_error = "continue"

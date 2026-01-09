@@ -1,0 +1,154 @@
+# Test: Git Merge Operations
+#
+# Tests the workflow pattern of:
+# 1. Create multiple worktrees on different branches
+# 2. Make changes in each
+# 3. Merge them together
+# 4. Cleanup
+#
+# Usage:
+#   meow run .meow/templates/test-git-merge.meow.toml
+
+[main]
+name = "test-git-merge"
+description = "Test git branch and merge operations"
+
+# Step 1: Setup - create integration branch and worktrees
+[[main.steps]]
+id = "setup-branches"
+executor = "shell"
+description = "Create test branches and worktrees"
+command = """
+TIMESTAMP=$(date +%s)
+BRANCH_A="test-merge-a-$TIMESTAMP"
+BRANCH_B="test-merge-b-$TIMESTAMP"
+BRANCH_INT="test-merge-int-$TIMESTAMP"
+WT_A="/tmp/meow-merge-a"
+WT_B="/tmp/meow-merge-b"
+WT_INT="/tmp/meow-merge-int"
+
+# Cleanup any existing
+for wt in "$WT_A" "$WT_B" "$WT_INT"; do
+    git worktree remove "$wt" --force 2>/dev/null || rm -rf "$wt"
+done
+
+# Create worktrees
+git worktree add -b "$BRANCH_INT" "$WT_INT"
+git worktree add -b "$BRANCH_A" "$WT_A"
+git worktree add -b "$BRANCH_B" "$WT_B"
+
+echo "Created worktrees:"
+echo "  Integration: $WT_INT ($BRANCH_INT)"
+echo "  Branch A: $WT_A ($BRANCH_A)"
+echo "  Branch B: $WT_B ($BRANCH_B)"
+
+# Save branch names for later steps
+echo "$BRANCH_A" > /tmp/meow-merge-branch-a.txt
+echo "$BRANCH_B" > /tmp/meow-merge-branch-b.txt
+echo "$BRANCH_INT" > /tmp/meow-merge-branch-int.txt
+"""
+
+# Step 2: Make changes in branch A
+[[main.steps]]
+id = "changes-a"
+executor = "shell"
+description = "Make changes in branch A"
+needs = ["setup-branches"]
+command = """
+cd /tmp/meow-merge-a
+echo "Change from branch A" > /tmp/meow-merge-a/test-a.txt
+git add test-a.txt
+git commit -m "Add test-a.txt from branch A"
+echo "Committed change in branch A"
+"""
+
+# Step 3: Make changes in branch B (parallel with A)
+[[main.steps]]
+id = "changes-b"
+executor = "shell"
+description = "Make changes in branch B"
+needs = ["setup-branches"]
+command = """
+cd /tmp/meow-merge-b
+echo "Change from branch B" > /tmp/meow-merge-b/test-b.txt
+git add test-b.txt
+git commit -m "Add test-b.txt from branch B"
+echo "Committed change in branch B"
+"""
+
+# Step 4: Merge A into integration
+[[main.steps]]
+id = "merge-a"
+executor = "shell"
+description = "Merge branch A into integration"
+needs = ["changes-a"]
+command = """
+cd /tmp/meow-merge-int
+BRANCH_A=$(cat /tmp/meow-merge-branch-a.txt)
+git merge "$BRANCH_A" -m "Merge branch A"
+echo "Merged $BRANCH_A into integration"
+"""
+
+# Step 5: Merge B into integration (after A, to avoid conflicts)
+[[main.steps]]
+id = "merge-b"
+executor = "shell"
+description = "Merge branch B into integration"
+needs = ["merge-a", "changes-b"]
+command = """
+cd /tmp/meow-merge-int
+BRANCH_B=$(cat /tmp/meow-merge-branch-b.txt)
+git merge "$BRANCH_B" -m "Merge branch B"
+echo "Merged $BRANCH_B into integration"
+"""
+
+# Step 6: Verify merged results
+[[main.steps]]
+id = "verify-merge"
+executor = "shell"
+description = "Verify all changes merged"
+needs = ["merge-b"]
+command = """
+cd /tmp/meow-merge-int
+
+echo "=== Verifying Merged Content ==="
+
+if [ -f test-a.txt ] && [ -f test-b.txt ]; then
+    echo "test-a.txt: $(cat test-a.txt)"
+    echo "test-b.txt: $(cat test-b.txt)"
+    echo ""
+    echo "SUCCESS: Both files present in integration branch!"
+else
+    echo "FAILED: Missing files after merge"
+    ls -la
+    exit 1
+fi
+"""
+
+# Step 7: Cleanup
+[[main.steps]]
+id = "cleanup"
+executor = "shell"
+description = "Remove worktrees and branches"
+needs = ["verify-merge"]
+command = """
+BRANCH_A=$(cat /tmp/meow-merge-branch-a.txt)
+BRANCH_B=$(cat /tmp/meow-merge-branch-b.txt)
+BRANCH_INT=$(cat /tmp/meow-merge-branch-int.txt)
+
+# Remove worktrees
+git worktree remove /tmp/meow-merge-a --force 2>/dev/null || rm -rf /tmp/meow-merge-a
+git worktree remove /tmp/meow-merge-b --force 2>/dev/null || rm -rf /tmp/meow-merge-b
+git worktree remove /tmp/meow-merge-int --force 2>/dev/null || rm -rf /tmp/meow-merge-int
+
+# Delete branches
+git branch -D "$BRANCH_A" 2>/dev/null || true
+git branch -D "$BRANCH_B" 2>/dev/null || true
+git branch -D "$BRANCH_INT" 2>/dev/null || true
+
+# Cleanup temp files
+rm -f /tmp/meow-merge-branch-*.txt
+
+echo "Cleanup complete"
+"""
+on_error = "continue"

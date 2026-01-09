@@ -65,6 +65,10 @@ type Orchestrator struct {
 	// Active workflow ID (for single-workflow mode)
 	workflowID string
 
+	// Mutex to protect workflow state during concurrent operations
+	// (e.g., async kill steps and IPC handlers modifying the same workflow)
+	wfMu sync.Mutex
+
 	// Shutdown coordination
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -195,6 +199,17 @@ func (o *Orchestrator) tick(ctx context.Context) error {
 
 // processWorkflow processes a single workflow, dispatching all ready steps.
 func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) error {
+	// Lock to coordinate with async handlers (handleStepDone, handleKill goroutines)
+	o.wfMu.Lock()
+	defer o.wfMu.Unlock()
+
+	// Re-read workflow to get latest state (async operations may have updated it)
+	freshWf, err := o.store.Get(ctx, wf.ID)
+	if err != nil {
+		return fmt.Errorf("re-reading workflow: %w", err)
+	}
+	wf = freshWf
+
 	// Check timeouts for running agent steps
 	o.checkStepTimeouts(ctx, wf)
 
@@ -287,6 +302,10 @@ func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
 
 // handleStepDone processes a meow done message from an agent.
 func (o *Orchestrator) handleStepDone(ctx context.Context, msg *ipc.StepDoneMessage) error {
+	// Lock to prevent race with async kill operations
+	o.wfMu.Lock()
+	defer o.wfMu.Unlock()
+
 	wf, err := o.store.Get(ctx, msg.Workflow)
 	if err != nil {
 		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
@@ -526,22 +545,47 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 		return fmt.Errorf("kill executor not implemented: %w", ErrNotImplemented)
 	}
 
+	// Capture IDs for the goroutine (don't capture pointers that may be stale)
+	workflowID := wf.ID
+	stepID := step.ID
+
 	// Run kill asynchronously to allow parallel kills
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
 
-		if err := o.agents.Stop(ctx, wf, step); err != nil {
-			o.logger.Error("kill step failed", "step", step.ID, "error", err)
-			step.Fail(&types.StepError{Message: err.Error()})
+		// The actual stop operation doesn't need the lock
+		stopErr := o.agents.Stop(ctx, wf, step)
+
+		// Lock when modifying workflow state
+		o.wfMu.Lock()
+		defer o.wfMu.Unlock()
+
+		// Re-fetch workflow to get latest state (avoid overwriting other changes)
+		freshWf, err := o.store.Get(ctx, workflowID)
+		if err != nil {
+			o.logger.Error("re-fetching workflow after kill", "error", err)
+			return
+		}
+
+		// Find the step in the fresh workflow
+		freshStep, ok := freshWf.GetStep(stepID)
+		if !ok {
+			o.logger.Error("step not found after kill", "step", stepID)
+			return
+		}
+
+		if stopErr != nil {
+			o.logger.Error("kill step failed", "step", stepID, "error", stopErr)
+			freshStep.Fail(&types.StepError{Message: stopErr.Error()})
 		} else {
-			if err := step.Complete(nil); err != nil {
-				o.logger.Error("completing kill step", "step", step.ID, "error", err)
+			if err := freshStep.Complete(nil); err != nil {
+				o.logger.Error("completing kill step", "step", stepID, "error", err)
 			}
 		}
 
 		// Save workflow state after step completes
-		if err := o.store.Save(ctx, wf); err != nil {
+		if err := o.store.Save(ctx, freshWf); err != nil {
 			o.logger.Error("saving workflow after kill", "error", err)
 		}
 	}()
