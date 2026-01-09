@@ -38,7 +38,19 @@ executor = "agent"
 description = "Agent reviews changes and writes commit message"
 needs = ["spawn-agent"]
 agent = "commit-helper"
-prompt = "Review git status, stage appropriate files (skip .meow/workflows/), write commit message to /tmp/meow-commit-msg.txt, then run: meow done"
+prompt = """
+You are working in a MEOW workflow. Your task is to create a git commit.
+
+Steps:
+1. Run `git status` to see what files have changed
+2. Run `git diff` to review the actual changes
+3. Stage appropriate files with `git add` (skip .meow/workflows/ directory)
+4. Write a clear commit message to /tmp/meow-commit-msg.txt
+   - Use conventional commits format (feat/fix/refactor/docs/etc)
+   - First line should be a short summary (<72 chars)
+   - Add body if needed for complex changes
+5. Signal completion by running: meow done
+"""
 
 # Step 4: Create the commit
 [[main.steps]]

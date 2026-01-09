@@ -190,6 +190,7 @@ func (m *TmuxAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 }
 
 // InjectPrompt sends ESC + prompt to agent's tmux session.
+// Uses tmux load-buffer + paste-buffer for proper multiline handling.
 func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string) error {
 	m.mu.RLock()
 	state, ok := m.agents[agentID]
@@ -200,7 +201,7 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	}
 
 	sessionName := state.tmuxSession
-	m.logger.Debug("injecting prompt", "agent", agentID, "session", sessionName)
+	m.logger.Debug("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
 
 	// Send Escape first to ensure we're in command mode
 	if err := m.sendKeys(ctx, sessionName, "Escape"); err != nil {
@@ -210,9 +211,15 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	// Small delay to ensure Escape is processed
 	time.Sleep(100 * time.Millisecond)
 
-	// Send the prompt text
-	if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
-		return fmt.Errorf("sending prompt: %w", err)
+	// Use paste-buffer for multiline prompts, send-keys for simple ones
+	if strings.Contains(prompt, "\n") {
+		if err := m.pasteText(ctx, sessionName, prompt); err != nil {
+			return fmt.Errorf("pasting prompt: %w", err)
+		}
+	} else {
+		if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
+			return fmt.Errorf("sending prompt: %w", err)
+		}
 	}
 
 	// Send Enter to submit
@@ -318,5 +325,55 @@ func (m *TmuxAgentManager) sendKeys(ctx context.Context, session string, keys st
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("tmux send-keys failed: %w (stderr: %s)", err, stderr.String())
 	}
+	return nil
+}
+
+// pasteText uses tmux load-buffer + paste-buffer for proper multiline text handling.
+// This avoids issues with send-keys where multiline text shows as "[Pasted text #N +M lines]"
+// but doesn't actually get submitted.
+func (m *TmuxAgentManager) pasteText(ctx context.Context, session string, text string) error {
+	// Create temp file with the prompt text
+	tmpFile, err := os.CreateTemp("", "meow-prompt-*.txt")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up temp file
+
+	// Write prompt to temp file
+	if _, err := tmpFile.WriteString(text); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("writing to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Use a unique buffer name to avoid conflicts
+	bufferName := fmt.Sprintf("meow-%d", time.Now().UnixNano())
+
+	// Load file contents into tmux buffer
+	loadCmd := exec.CommandContext(ctx, "tmux", "load-buffer", "-b", bufferName, tmpPath)
+	var stderr bytes.Buffer
+	loadCmd.Stderr = &stderr
+	if err := loadCmd.Run(); err != nil {
+		return fmt.Errorf("tmux load-buffer failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	// Paste buffer into session (using -p flag for bracketed paste mode)
+	pasteCmd := exec.CommandContext(ctx, "tmux", "paste-buffer", "-b", bufferName, "-t", session, "-p")
+	stderr.Reset()
+	pasteCmd.Stderr = &stderr
+	if err := pasteCmd.Run(); err != nil {
+		// Clean up buffer before returning error
+		_ = exec.CommandContext(ctx, "tmux", "delete-buffer", "-b", bufferName).Run()
+		return fmt.Errorf("tmux paste-buffer failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	// Clean up the buffer
+	deleteCmd := exec.CommandContext(ctx, "tmux", "delete-buffer", "-b", bufferName)
+	if err := deleteCmd.Run(); err != nil {
+		m.logger.Debug("failed to delete buffer", "buffer", bufferName, "error", err)
+		// Not fatal, buffer will be garbage collected by tmux
+	}
+
 	return nil
 }
