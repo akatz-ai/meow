@@ -1,0 +1,67 @@
+# Git Commit Helper
+# A workflow that uses shell + agent to intelligently create a git commit.
+#
+# Flow:
+# 1. Shell: Show current git status/diff
+# 2. Spawn agent
+# 3. Agent: Review changes, stage files, write commit message to file
+# 4. Shell: Create the commit using the message
+# 5. Shell: Show the result
+# 6. Kill agent
+#
+# Usage:
+#   meow run .meow/templates/git-commit.meow.toml
+
+[main]
+name = "git-commit-helper"
+description = "Use Claude to write a commit message for staged changes"
+
+# Step 1: Show current state
+[[main.steps]]
+id = "show-status"
+executor = "shell"
+description = "Display git status and diff"
+command = "echo '=== Git Status ===' && git status --short && echo '' && echo '=== Staged Diff ===' && git diff --cached --stat && echo '' && echo '=== Unstaged Diff ===' && git diff --stat"
+
+# Step 2: Spawn the agent
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+description = "Start Claude agent"
+needs = ["show-status"]
+agent = "commit-helper"
+
+# Step 3: Agent reviews and prepares commit
+[[main.steps]]
+id = "prepare-commit"
+executor = "agent"
+description = "Agent reviews changes and writes commit message"
+needs = ["spawn-agent"]
+agent = "commit-helper"
+prompt = "Review git status, stage appropriate files (skip .meow/workflows/), write commit message to /tmp/meow-commit-msg.txt, then run: meow done"
+
+# Step 4: Create the commit
+[[main.steps]]
+id = "create-commit"
+executor = "shell"
+description = "Run git commit with the prepared message"
+needs = ["prepare-commit"]
+command = "cat /tmp/meow-commit-msg.txt && echo '---' && git commit -F /tmp/meow-commit-msg.txt"
+on_error = "continue"
+
+# Step 5: Show result
+[[main.steps]]
+id = "show-result"
+executor = "shell"
+description = "Display the commit that was created"
+needs = ["create-commit"]
+command = "echo '=== Commit Created ===' && git log -1 --format='%h %s%n%n%b' 2>/dev/null || echo 'No commit was created (nothing staged or commit failed)'"
+
+# Step 6: Cleanup
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+description = "Stop the agent"
+needs = ["show-result"]
+agent = "commit-helper"
+graceful = true

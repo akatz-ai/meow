@@ -13,18 +13,20 @@
 3. [Executors](#executors)
 4. [Data Flow Between Steps](#data-flow-between-steps)
 5. [Template System](#template-system)
-6. [Orchestrator Architecture](#orchestrator-architecture)
-7. [Agent Interaction Model](#agent-interaction-model)
-8. [IPC and Communication](#ipc-and-communication)
-9. [Persistence and Crash Recovery](#persistence-and-crash-recovery)
-10. [Workflow Cleanup](#workflow-cleanup)
-11. [Resource Limits](#resource-limits)
-12. [CLI Commands](#cli-commands)
-13. [Multi-Agent Coordination](#multi-agent-coordination)
-14. [Complete Examples](#complete-examples)
-15. [Error Handling](#error-handling)
-16. [Best Practices](#best-practices)
-17. [Implementation Phases](#implementation-phases)
+6. [Agent Adapters](#agent-adapters)
+7. [Events](#events)
+8. [Orchestrator Architecture](#orchestrator-architecture)
+9. [Agent Interaction Model](#agent-interaction-model)
+10. [IPC and Communication](#ipc-and-communication)
+11. [Persistence and Crash Recovery](#persistence-and-crash-recovery)
+12. [Workflow Cleanup](#workflow-cleanup)
+13. [Resource Limits](#resource-limits)
+14. [CLI Commands](#cli-commands)
+15. [Multi-Agent Coordination](#multi-agent-coordination)
+16. [Complete Examples](#complete-examples)
+17. [Error Handling](#error-handling)
+18. [Best Practices](#best-practices)
+19. [Implementation Phases](#implementation-phases)
 
 ---
 
@@ -67,12 +69,32 @@ MEOW makes **zero assumptions** about how users track work:
 
 The **workflow template** encodes how to interact with external systems. MEOW just executes the workflow. Users can create workflows that have no concept of task tracking at all.
 
+### Agent Agnosticism
+
+MEOW makes **zero assumptions** about which AI agent you use:
+
+| Agent | How MEOW Handles It |
+|-------|---------------------|
+| Claude Code | Adapter provides start command, prompt injection, hooks |
+| Aider | Adapter provides start command, prompt injection |
+| Cursor Agent | Adapter provides start command, event translation |
+| Custom Agent | User writes adapter config |
+
+The **adapter system** encapsulates agent-specific behavior. MEOW core only knows about generic operations: start a process in tmux, inject text, kill the session. How those translate to a specific agent's interface is the adapter's job.
+
+This means:
+- No "Claude" references in MEOW core
+- No agent-specific CLI commands in core
+- Adapters are configuration + optional scripts (not compiled plugins)
+- Users can create adapters for any agent that runs in a terminal
+
 ### No Special Cases
 
 MEOW does **not** include:
 - Context management (use Claude's auto-compact or explicit `branch` checks)
 - Work item tracking integration (pure data flow via variables)
 - Special types for external systems (generic types only)
+- Agent-specific logic in core (use adapters)
 
 If you need context threshold checks, add a `branch` step with a shell script that detects context usage. If you need to link to external work items, pass IDs as regular string variables.
 
@@ -246,12 +268,13 @@ env:                       # Optional
 
 ### `spawn` — Start Agent Process
 
-Start an agent in a tmux session. The working directory is typically created by a prior `shell` step.
+Start an agent in a tmux session. The working directory is typically created by a prior `shell` step. The `adapter` field determines which agent type to start (defaults to project/global config).
 
 ```yaml
 id: "start-worker"
 executor: "spawn"
 agent: "worker-1"
+adapter: "claude"                                    # Which adapter to use
 workdir: "{{create-worktree.outputs.worktree_path}}"  # From prior shell step
 env:
   TASK_ID: "{{task_id}}"
@@ -261,9 +284,10 @@ resume_session: "{{checkpoint.outputs.session_id}}"  # Optional
 
 **Fields:**
 - `agent` (required): Agent identifier
+- `adapter` (optional): Adapter name (defaults to config; see [Agent Adapters](#agent-adapters))
 - `workdir` (optional): Working directory for the agent (defaults to current directory)
 - `env` (optional): Additional environment variables (beyond orchestrator defaults)
-- `resume_session` (optional): Claude session ID to resume
+- `resume_session` (optional): Session ID to resume (adapter-specific)
 
 **Orchestrator-Injected Environment:**
 The orchestrator always sets these environment variables in the tmux session:
@@ -275,28 +299,28 @@ The orchestrator always sets these environment variables in the tmux session:
 User-provided `env` vars are merged with orchestrator defaults. **Orchestrator variables take precedence**—if a user specifies `MEOW_AGENT` in their `env` block, it will be overwritten. All `MEOW_*` environment variables are reserved.
 
 **Orchestrator Behavior:**
-1. Create tmux session `meow-{workflow_id}-{agent}`
-2. Set working directory
-3. Set environment variables
-4. Start Claude (with `--resume {session_id}` if `resume_session` provided)
-5. Wait for Claude ready prompt
-6. Capture Claude's session ID and store in workflow state
-7. Inject first step's prompt directly via `tmux send-keys`
-8. Mark step `done`
+1. Load adapter configuration (from step, workflow, or global config)
+2. Create tmux session `meow-{workflow_id}-{agent}`
+3. Set working directory
+4. Set environment variables (user + adapter + orchestrator-reserved)
+5. Run adapter's start command (with resume flag if `resume_session` provided)
+6. Wait for adapter's startup delay
+7. Mark step `done`
 
 **Note:** Worktrees are user-managed. Create them with `shell` steps, pass the path here. The orchestrator doesn't manage worktrees automatically.
 
-**Session ID Tracking:**
-The orchestrator captures Claude's session ID at startup (from Claude's output) and stores it in the workflow state:
+**Agent State Tracking:**
+The orchestrator tracks agent state in the workflow file:
 ```yaml
 agents:
   worker-1:
+    adapter: claude
     tmux_session: meow-wf-abc123-worker-1
-    claude_session: sess-xyz789  # Captured at spawn
     workdir: /data/projects/myapp/.meow/worktrees/worker-1
+    session_id: sess-xyz789  # Adapter-specific, for resume
 ```
 
-This enables the `meow session-id` command and the `resume_session` field for parent-child workflow patterns.
+This enables session resume for parent-child workflow patterns.
 
 ---
 
@@ -798,6 +822,380 @@ meow run work-loop.meow.toml#tdd       # Runs [tdd] explicitly
 
 ---
 
+## Agent Adapters
+
+Adapters encapsulate agent-specific behavior, keeping MEOW core agent-agnostic. An adapter defines how to start, stop, inject prompts into, and receive events from a specific agent type.
+
+### Adapter Structure
+
+Adapters are directories containing configuration and optional scripts:
+
+```
+~/.meow/adapters/
+└── claude/
+    ├── adapter.toml        # Required: configuration
+    ├── setup.sh            # Optional: one-time setup script
+    ├── event-translator.sh # Optional: translates agent events to MEOW events
+    └── README.md           # Optional: documentation
+```
+
+### Adapter Configuration
+
+The `adapter.toml` file defines adapter behavior:
+
+```toml
+# ~/.meow/adapters/claude/adapter.toml
+
+[adapter]
+name = "claude"
+description = "Claude Code CLI agent"
+
+# How to start the agent in tmux
+[spawn]
+command = "claude --dangerously-skip-permissions"
+resume_command = "claude --dangerously-skip-permissions --resume {{session_id}}"
+startup_delay = "3s"
+
+# Additional environment variables for the agent
+[environment]
+TMUX = ""  # Prevent Claude from detecting outer tmux
+
+# How to inject prompts
+[prompt_injection]
+pre_keys = ["Escape"]      # Keys to send before prompt
+pre_delay = "100ms"        # Delay after pre_keys
+method = "literal"         # "literal" or "keys"
+post_keys = ["Enter"]      # Keys to send after prompt
+
+# How to gracefully stop
+[graceful_stop]
+keys = ["C-c"]
+wait = "2s"
+
+# Event translation (for agent-specific event systems)
+[events]
+translator = "./event-translator.sh"
+
+# What to put in .claude/settings.json for event support
+[events.agent_config]
+Stop = "{{adapter_dir}}/event-translator.sh Stop"
+PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
+PostToolUse = "{{adapter_dir}}/event-translator.sh PostToolUse $TOOL_NAME"
+```
+
+### Event Translator Script
+
+The event translator converts agent-specific events to generic MEOW events:
+
+```bash
+#!/bin/bash
+# ~/.meow/adapters/claude/event-translator.sh
+# Translates Claude Code hooks to MEOW events
+
+HOOK_TYPE="$1"
+shift
+
+case "$HOOK_TYPE" in
+  Stop)
+    meow event agent-stopped
+    ;;
+  PreToolUse)
+    meow event tool-starting --data tool="$1"
+    ;;
+  PostToolUse)
+    meow event tool-completed --data tool="$1"
+    ;;
+  *)
+    meow event unknown --data type="$HOOK_TYPE"
+    ;;
+esac
+```
+
+### Setup Script
+
+The optional `setup.sh` helps configure the agent for MEOW integration:
+
+```bash
+#!/bin/bash
+# ~/.meow/adapters/claude/setup.sh
+# Sets up Claude Code for MEOW event integration in a worktree
+
+WORKTREE="$1"
+ADAPTER_DIR="$(dirname "$0")"
+
+if [ -z "$WORKTREE" ]; then
+  echo "Usage: setup.sh <worktree-path>"
+  exit 1
+fi
+
+mkdir -p "$WORKTREE/.claude"
+
+cat > "$WORKTREE/.claude/settings.json" << EOF
+{
+  "hooks": {
+    "Stop": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh Stop"}],
+    "PreToolUse": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh PreToolUse \$TOOL_NAME"}],
+    "PostToolUse": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh PostToolUse \$TOOL_NAME"}]
+  }
+}
+EOF
+
+echo "Claude hooks configured in $WORKTREE/.claude/settings.json"
+```
+
+### Using Adapters in Workflows
+
+Reference adapters in `spawn` steps:
+
+```toml
+[[steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+adapter = "claude"        # Use the claude adapter
+workdir = "{{worktree}}"
+```
+
+If `adapter` is omitted, the default from config is used.
+
+### Adapter Resolution Order
+
+1. Step-level: `adapter` field in spawn step
+2. Workflow-level: `default_adapter` in template variables
+3. Project-level: `.meow/config.toml` `[agents] default_adapter`
+4. Global-level: `~/.meow/config.toml` `[agents] default_adapter`
+5. Built-in default: `claude`
+
+### Installing Adapters
+
+```bash
+# Install from git repository
+meow adapter install github.com/meow-stack/adapter-claude
+
+# Install from local directory
+meow adapter install ./my-adapter
+
+# List installed adapters
+meow adapter list
+
+# Show adapter details
+meow adapter show claude
+
+# Remove adapter
+meow adapter remove claude
+```
+
+### Creating Custom Adapters
+
+To create an adapter for a new agent type:
+
+1. Create adapter directory: `mkdir -p ~/.meow/adapters/my-agent`
+2. Create `adapter.toml` with spawn/injection configuration
+3. Optionally create `setup.sh` for one-time configuration
+4. Optionally create `event-translator.sh` if the agent supports events
+
+See the [claude adapter](https://github.com/meow-stack/adapter-claude) for a complete example.
+
+### Trust Model
+
+Adapters can contain shell scripts, just like templates. The trust model is consistent:
+
+| Component | User Must Trust |
+|-----------|-----------------|
+| MEOW core | Yes (it's the tool) |
+| Templates | Yes (contains shell commands) |
+| Adapters | Yes (contains shell scripts) |
+| The agent itself | Yes (it runs on your system) |
+
+**Users should review adapter code before installing**, just as they would review any script they download from the internet. Adapters from untrusted sources could contain malicious code.
+
+```bash
+# Review before installing
+git clone github.com/someone/adapter-something
+cat adapter-something/setup.sh
+cat adapter-something/event-translator.sh
+meow adapter install ./adapter-something
+```
+
+---
+
+## Events
+
+Events are the generic mechanism for agents to communicate with the orchestrator. Unlike step completion (`meow done`), events are fire-and-forget signals that can trigger workflow logic.
+
+### Event Primitives
+
+MEOW core provides two commands for events:
+
+```bash
+# Emit an event (typically called by adapter event translators)
+meow event <event-type> [--data key=value ...]
+
+# Wait for an event (used in branch conditions)
+meow await-event <event-type> [--filter key=value ...] [--timeout duration]
+```
+
+### Event Types
+
+Event types are strings. MEOW suggests these conventions but doesn't enforce them:
+
+| Event Type | Meaning | Typical Data |
+|------------|---------|--------------|
+| `agent-stopped` | Agent reached prompt unexpectedly | - |
+| `tool-starting` | Agent about to call a tool | `tool`, `args` |
+| `tool-completed` | Agent finished calling a tool | `tool`, `result` |
+| `error` | Agent encountered an error | `message` |
+| `progress` | Agent reporting progress | `message`, `percent` |
+
+Users can define any event types they need.
+
+### Event Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           EVENT FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Agent (Claude)        Adapter Script         Orchestrator       Workflow   │
+│  ──────────────        ──────────────         ────────────       ────────   │
+│       │                      │                     │                │       │
+│  Calls Write tool            │                     │                │       │
+│       │                      │                     │                │       │
+│  PostToolUse hook fires      │                     │                │       │
+│       │                      │                     │                │       │
+│       └─────────────────────►│                     │                │       │
+│         Runs event-translator.sh                   │                │       │
+│                              │                     │                │       │
+│                              │  meow event         │                │       │
+│                              │  tool-completed     │                │       │
+│                              │  --data tool=Write  │                │       │
+│                              │─────────────────────►                │       │
+│                              │                     │                │       │
+│                              │                     │ Routes event   │       │
+│                              │                     │ to waiters     │       │
+│                              │                     │────────────────►       │
+│                              │                     │                │       │
+│                              │                     │         await-event    │
+│                              │                     │         unblocks       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Using Events in Workflows
+
+Events enable reactive workflow patterns. Common use: monitoring agent behavior.
+
+**Pattern: Alert on Tool Calls**
+
+```toml
+# Monitor all Write tool calls during a task
+
+[[steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+adapter = "claude"
+workdir = "{{worktree}}"
+
+[[steps]]
+id = "main-task"
+executor = "agent"
+agent = "worker"
+prompt = "Implement feature X"
+needs = ["spawn"]
+
+# Event monitoring runs in parallel with main-task
+[[steps]]
+id = "start-monitoring"
+executor = "expand"
+template = ".event-monitor-loop"
+variables = { agent = "worker" }
+needs = ["spawn"]
+
+[[steps]]
+id = "cleanup"
+executor = "kill"
+agent = "worker"
+needs = ["main-task"]
+
+
+# Event monitoring loop (internal template)
+[event-monitor-loop]
+internal = true
+
+[event-monitor-loop.variables]
+agent = { required = true }
+
+[[event-monitor-loop.steps]]
+id = "wait-for-event"
+executor = "branch"
+condition = "meow await-event tool-completed --filter agent={{agent}} --timeout 30s"
+
+[event-monitor-loop.steps.on_true]
+template = ".handle-event-and-continue"
+variables = { agent = "{{agent}}" }
+
+[event-monitor-loop.steps.on_false]
+# Timeout - check if main task is done
+template = ".check-continue"
+variables = { agent = "{{agent}}" }
+
+
+[handle-event-and-continue]
+internal = true
+
+[[handle-event-and-continue.steps]]
+id = "log-event"
+executor = "shell"
+command = "echo '[EVENT] Tool completed for {{agent}}' >> .meow/events.log"
+
+[[handle-event-and-continue.steps]]
+id = "check-done"
+executor = "branch"
+condition = "meow step-status main-task --is-not done"
+needs = ["log-event"]
+
+[handle-event-and-continue.steps.on_true]
+# Main task still running, keep monitoring
+template = ".event-monitor-loop"
+variables = { agent = "{{agent}}" }
+
+# on_false: main task done, stop monitoring
+```
+
+### Event IPC Message
+
+Events are sent via the standard IPC socket:
+
+```json
+{"type":"event","workflow":"wf-abc","agent":"worker-1","event_type":"tool-completed","data":{"tool":"Write","file":"src/main.ts"}}
+```
+
+The orchestrator acknowledges receipt:
+```json
+{"type":"ack","success":true}
+```
+
+### Events vs. Step Completion
+
+| Aspect | `meow done` | `meow event` |
+|--------|-------------|--------------|
+| Purpose | Signal step completion | Signal something happened |
+| Workflow effect | Marks step done, triggers next | Routes to await-event waiters |
+| Blocking | Waits for validation response | Fire-and-forget |
+| Outputs | Validated against step schema | Arbitrary key-value data |
+| Frequency | Once per step | Any number of times |
+
+### Events Are Optional
+
+Events are an **enhancement**, not a requirement. Workflows work fine without them:
+
+- If adapter doesn't support events → no events fire → `await-event` times out → workflow continues
+- If events aren't configured → same behavior
+- Events add observability and reactive patterns, but core orchestration doesn't depend on them
+
+---
+
 ## Orchestrator Architecture
 
 ### Orchestrator-Centric Design
@@ -1247,6 +1645,31 @@ Messages are **single-line, newline-delimited JSON**. Each message must be seria
 {"type":"approval","gate_id":"review-gate","approved":false,"reason":"Missing tests"}
 ```
 
+**Event signal (meow event → orchestrator):**
+```json
+{"type":"event","workflow":"wf-abc123","agent":"worker-1","event_type":"tool-completed","data":{"tool":"Write","file":"src/main.ts"}}
+```
+
+**Response:**
+```json
+{"type":"ack","success":true}
+```
+
+**Await event (meow await-event → orchestrator):**
+```json
+{"type":"await_event","event_type":"tool-completed","filter":{"agent":"worker-1"},"timeout_ms":30000}
+```
+
+**Response (event received):**
+```json
+{"type":"event_received","event_type":"tool-completed","data":{"tool":"Write","file":"src/main.ts"}}
+```
+
+**Response (timeout):**
+```json
+{"type":"timeout","message":"No matching event within 30s"}
+```
+
 ### Future: Distributed Systems
 
 The same protocol could run over HTTP/gRPC for distributed orchestration. The socket is an implementation detail that can be swapped.
@@ -1610,6 +2033,46 @@ meow reject wf-abc123 gate-id --reason "Needs error handling"
 # Block until approval/rejection (used in branch conditions)
 meow await-approval gate-id
 meow await-approval gate-id --timeout 24h
+```
+
+### Events
+
+```bash
+# Emit an event (typically called by adapter event translators)
+meow event <event-type> [--data key=value ...]
+meow event tool-completed --data tool=Write --data file=src/main.ts
+meow event progress --data percent=50 --data message="Halfway done"
+
+# Wait for an event (used in branch conditions)
+meow await-event <event-type> [--filter key=value ...] [--timeout duration]
+meow await-event tool-completed --filter tool=Write --timeout 5m
+meow await-event agent-stopped --timeout 30s
+
+# Query step status (for event loops to check if main task is done)
+meow step-status <step-id>
+meow step-status main-task --is done      # Exit 0 if done, 1 otherwise
+meow step-status main-task --is-not done  # Exit 0 if NOT done, 1 otherwise
+```
+
+### Adapter Management
+
+```bash
+# Install an adapter
+meow adapter install github.com/meow-stack/adapter-claude
+meow adapter install ./local-adapter-dir
+
+# List installed adapters
+meow adapter list
+
+# Show adapter details
+meow adapter show claude
+meow adapter show claude --config   # Show adapter.toml contents
+
+# Run adapter setup script (one-time per worktree)
+meow adapter setup claude /path/to/worktree
+
+# Remove an adapter
+meow adapter remove claude
 ```
 
 ### Debugging
@@ -2381,7 +2844,25 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 - [ ] `meow session-id` command
 - [ ] Session resume support (`resume_session`)
 
-### Phase 5: Developer Experience
+### Phase 5: Agent Adapters
+
+- [ ] Adapter configuration format (`adapter.toml`)
+- [ ] Adapter loading and resolution
+- [ ] `adapter` field in spawn steps
+- [ ] `meow adapter install/list/show/remove` commands
+- [ ] Built-in claude adapter
+- [ ] Adapter setup script execution
+
+### Phase 6: Events
+
+- [ ] Event IPC message handling
+- [ ] `meow event` command
+- [ ] `meow await-event` command with timeout
+- [ ] Event routing to waiters
+- [ ] `meow step-status` command for event loops
+- [ ] Event translator script pattern documentation
+
+### Phase 7: Developer Experience
 
 - [ ] `meow run --resume` for workflow continuation
 - [ ] Template validation command
@@ -2415,6 +2896,44 @@ Context management is Claude's concern, not MEOW's:
 - Users can enable Claude's auto-compact
 - Users can add explicit `branch` steps with context-checking scripts
 - MEOW stays focused on coordination, not LLM internals
+
+### Why Adapters?
+
+MEOW needs to be agent-agnostic—it should work with Claude Code, Aider, Cursor, or any future AI agent that runs in a terminal. Agent-specific concerns include:
+
+- **Start command**: Different flags, options, permissions
+- **Prompt injection**: Different keystroke sequences
+- **Graceful shutdown**: Different interrupt handling
+- **Session resume**: Different mechanisms for continuing work
+- **Event systems**: Hooks, callbacks, watchers (varies by agent)
+
+Without adapters, these would be hardcoded in MEOW core, creating tight coupling and limiting extensibility. Adapters allow:
+
+- Users to add support for new agents without modifying MEOW
+- Different configurations for the same agent (e.g., claude with different models)
+- Agent-specific setup scripts without polluting core
+- Clean separation of concerns
+
+The adapter format is intentionally simple—TOML config plus optional shell scripts—because:
+- Shell scripts are auditable (users can read them before installing)
+- No compiled plugins or binary blobs that could hide malicious code
+- Same trust model as templates (both contain shell code)
+- Easy to create and share
+
+### Why Events?
+
+Events provide a generic mechanism for agents to signal the orchestrator without completing a step. Use cases:
+
+- **Monitoring**: React to tool calls, errors, or progress
+- **Reactive workflows**: Trigger actions based on agent behavior
+- **Watchdog patterns**: Alert on specific conditions
+
+Events are explicitly **optional and fire-and-forget** because:
+- Core orchestration shouldn't depend on agent-specific event systems
+- Workflows must work even if events aren't configured
+- Event handling adds complexity; not all workflows need it
+
+The event system is built on existing primitives (`branch` + `await-event`), not a new executor, keeping the core minimal.
 
 ### Why Generic Output Types Only?
 
