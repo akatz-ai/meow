@@ -204,11 +204,18 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	sessionName := state.tmuxSession
 	m.logger.Info("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
 
+	// Cancel any copy mode first - this prevents "not in a mode" errors
+	// when the agent has scrolled back to read output
+	m.cancelCopyMode(ctx, sessionName)
+
 	// Wait for Claude to be ready (check for prompt indicator)
 	if err := m.waitForClaudeReady(ctx, sessionName, 10*time.Second); err != nil {
 		m.logger.Warn("Claude may not be ready", "error", err)
 		// Continue anyway - it might still work
 	}
+
+	// Cancel copy mode again in case Claude entered it while we were waiting
+	m.cancelCopyMode(ctx, sessionName)
 
 	// Send text in literal mode (-l flag handles special chars and newlines)
 	if err := m.sendKeysLiteral(ctx, sessionName, prompt); err != nil {
@@ -391,4 +398,16 @@ func (m *TmuxAgentManager) capturePane(ctx context.Context, session string, line
 		return nil, nil
 	}
 	return strings.Split(output, "\n"), nil
+}
+
+// cancelCopyMode cancels any active copy mode in the tmux pane.
+// This is needed before sending keys because tmux will reject send-keys -l
+// with "not in a mode" error if the pane is in copy mode (scrollback).
+func (m *TmuxAgentManager) cancelCopyMode(ctx context.Context, session string) {
+	// Send escape to exit any mode, followed by q to exit copy mode
+	// These are no-ops if not in copy mode
+	exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "Escape").Run()
+	time.Sleep(50 * time.Millisecond)
+	exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "q").Run()
+	time.Sleep(50 * time.Millisecond)
 }

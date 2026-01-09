@@ -1,0 +1,98 @@
+# Test: Multi-Step Agent Workflow
+#
+# Tests the workflow pattern of:
+# 1. Agent receives first prompt, completes with meow done
+# 2. Same agent receives second prompt, completes with meow done
+# 3. Stop hook (meow prime) injects prompts automatically
+#
+# Usage:
+#   meow run .meow/templates/test-multi-step-agent.meow.toml
+
+[main]
+name = "test-multi-step-agent"
+description = "Test sequential prompts to the same agent"
+
+# Step 1: Spawn the agent
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+description = "Start the agent"
+agent = "stepper"
+
+# Step 2: First task - simple file creation
+[[main.steps]]
+id = "task-one"
+executor = "agent"
+description = "First task: create a file"
+needs = ["spawn-agent"]
+agent = "stepper"
+prompt = """
+You are testing MULTI-STEP workflows. This is STEP 1 of 2.
+
+Your task:
+1. Create a file /tmp/meow-step1.txt with content "Step 1 completed"
+2. Run: echo "Step 1 completed" > /tmp/meow-step1.txt
+
+When done, signal completion:
+  meow done --output step=1
+
+Do NOT wait for user input. Complete this task immediately.
+"""
+
+# Step 3: Second task - uses output from first
+[[main.steps]]
+id = "task-two"
+executor = "agent"
+description = "Second task: verify and extend"
+needs = ["task-one"]
+agent = "stepper"
+prompt = """
+You are testing MULTI-STEP workflows. This is STEP 2 of 2.
+
+Your task:
+1. Verify /tmp/meow-step1.txt exists and contains "Step 1 completed"
+2. Create /tmp/meow-step2.txt with content "Step 2 completed"
+3. Run: cat /tmp/meow-step1.txt && echo "Step 2 completed" > /tmp/meow-step2.txt
+
+When done, signal completion:
+  meow done --output step=2
+
+Do NOT wait for user input. Complete this task immediately.
+"""
+
+# Step 4: Kill the agent
+[[main.steps]]
+id = "kill-agent"
+executor = "kill"
+description = "Stop the agent"
+needs = ["task-two"]
+agent = "stepper"
+graceful = true
+
+# Step 5: Verify both steps completed
+[[main.steps]]
+id = "verify-steps"
+executor = "shell"
+description = "Verify both step files exist"
+needs = ["kill-agent"]
+command = """
+echo "=== Verifying Multi-Step Completion ==="
+
+STEP1=$(cat /tmp/meow-step1.txt 2>/dev/null || echo "missing")
+STEP2=$(cat /tmp/meow-step2.txt 2>/dev/null || echo "missing")
+
+echo "Step 1 output: $STEP1"
+echo "Step 2 output: $STEP2"
+
+# Cleanup
+rm -f /tmp/meow-step1.txt /tmp/meow-step2.txt
+
+if [ "$STEP1" = "Step 1 completed" ] && [ "$STEP2" = "Step 2 completed" ]; then
+    echo ""
+    echo "SUCCESS: Both steps completed in sequence!"
+else
+    echo ""
+    echo "FAILED: One or both steps did not complete correctly"
+    exit 1
+fi
+"""
