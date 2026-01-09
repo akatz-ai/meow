@@ -122,6 +122,25 @@ type SessionIDMessage struct {
 	SessionID string      `json:"session_id"`
 }
 
+// --- Message Interface ---
+
+// Message is the interface implemented by all IPC messages.
+type Message interface {
+	// MessageType returns the type identifier for this message.
+	MessageType() MessageType
+}
+
+// Implement Message interface for all message types
+
+func (m *StepDoneMessage) MessageType() MessageType    { return MsgStepDone }
+func (m *GetPromptMessage) MessageType() MessageType   { return MsgGetPrompt }
+func (m *GetSessionIDMessage) MessageType() MessageType { return MsgGetSessionID }
+func (m *ApprovalMessage) MessageType() MessageType    { return MsgApproval }
+func (m *AckMessage) MessageType() MessageType         { return MsgAck }
+func (m *ErrorMessage) MessageType() MessageType       { return MsgError }
+func (m *PromptMessage) MessageType() MessageType      { return MsgPrompt }
+func (m *SessionIDMessage) MessageType() MessageType   { return MsgSessionID }
+
 // --- Parsing Helpers ---
 
 // RawMessage is used for initial parsing to determine message type.
@@ -131,13 +150,13 @@ type RawMessage struct {
 
 // ParseMessage parses a JSON message and returns the appropriate typed message.
 // Returns an error if the message type is unknown or JSON is malformed.
-func ParseMessage(data []byte) (any, error) {
+func ParseMessage(data []byte) (Message, error) {
 	var raw RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	var msg any
+	var msg Message
 	switch raw.Type {
 	case MsgStepDone:
 		msg = &StepDoneMessage{}
