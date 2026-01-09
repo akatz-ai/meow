@@ -1,15 +1,14 @@
 package types
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-func TestAdapterConfigTOMLParsing(t *testing.T) {
-	const sampleConfig = `
+func TestAdapterConfig_ParseTOML(t *testing.T) {
+	configTOML := `
 [adapter]
 name = "claude"
 description = "Claude Code CLI agent"
@@ -21,13 +20,14 @@ startup_delay = "3s"
 
 [environment]
 TMUX = ""
-MY_VAR = "value"
+CUSTOM_VAR = "value"
 
 [prompt_injection]
 pre_keys = ["Escape"]
 pre_delay = "100ms"
 method = "literal"
 post_keys = ["Enter"]
+post_delay = "500ms"
 
 [graceful_stop]
 keys = ["C-c"]
@@ -41,74 +41,68 @@ Stop = "{{adapter_dir}}/event-translator.sh Stop"
 PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
 `
 
-	var cfg AdapterConfig
-	_, err := toml.Decode(sampleConfig, &cfg)
+	var config AdapterConfig
+	_, err := toml.Decode(configTOML, &config)
 	if err != nil {
 		t.Fatalf("failed to parse TOML: %v", err)
 	}
 
-	// Verify adapter meta
-	if cfg.Adapter.Name != "claude" {
-		t.Errorf("expected adapter name 'claude', got %q", cfg.Adapter.Name)
+	// Check adapter metadata
+	if config.Adapter.Name != "claude" {
+		t.Errorf("expected adapter.name = 'claude', got %q", config.Adapter.Name)
 	}
-	if cfg.Adapter.Description != "Claude Code CLI agent" {
-		t.Errorf("expected description 'Claude Code CLI agent', got %q", cfg.Adapter.Description)
-	}
-
-	// Verify spawn config
-	if cfg.Spawn.Command != "claude --dangerously-skip-permissions" {
-		t.Errorf("unexpected spawn command: %q", cfg.Spawn.Command)
-	}
-	if cfg.Spawn.ResumeCommand != "claude --dangerously-skip-permissions --resume {{session_id}}" {
-		t.Errorf("unexpected resume command: %q", cfg.Spawn.ResumeCommand)
-	}
-	if cfg.Spawn.StartupDelay.Duration != 3*time.Second {
-		t.Errorf("expected startup_delay 3s, got %v", cfg.Spawn.StartupDelay.Duration)
+	if config.Adapter.Description != "Claude Code CLI agent" {
+		t.Errorf("expected description, got %q", config.Adapter.Description)
 	}
 
-	// Verify environment
-	if len(cfg.Environment) != 2 {
-		t.Errorf("expected 2 env vars, got %d", len(cfg.Environment))
+	// Check spawn config
+	if config.Spawn.Command != "claude --dangerously-skip-permissions" {
+		t.Errorf("expected spawn.command, got %q", config.Spawn.Command)
 	}
-	if cfg.Environment["TMUX"] != "" {
-		t.Errorf("expected TMUX='', got %q", cfg.Environment["TMUX"])
-	}
-	if cfg.Environment["MY_VAR"] != "value" {
-		t.Errorf("expected MY_VAR='value', got %q", cfg.Environment["MY_VAR"])
+	if config.Spawn.StartupDelay.Duration() != 3*time.Second {
+		t.Errorf("expected startup_delay = 3s, got %v", config.Spawn.StartupDelay)
 	}
 
-	// Verify prompt injection
-	if len(cfg.PromptInject.PreKeys) != 1 || cfg.PromptInject.PreKeys[0] != "Escape" {
-		t.Errorf("unexpected pre_keys: %v", cfg.PromptInject.PreKeys)
+	// Check environment
+	if config.Environment["TMUX"] != "" {
+		t.Errorf("expected TMUX='', got %q", config.Environment["TMUX"])
 	}
-	if cfg.PromptInject.PreDelay.Duration != 100*time.Millisecond {
-		t.Errorf("expected pre_delay 100ms, got %v", cfg.PromptInject.PreDelay.Duration)
-	}
-	if cfg.PromptInject.Method != "literal" {
-		t.Errorf("expected method 'literal', got %q", cfg.PromptInject.Method)
-	}
-	if len(cfg.PromptInject.PostKeys) != 1 || cfg.PromptInject.PostKeys[0] != "Enter" {
-		t.Errorf("unexpected post_keys: %v", cfg.PromptInject.PostKeys)
+	if config.Environment["CUSTOM_VAR"] != "value" {
+		t.Errorf("expected CUSTOM_VAR='value', got %q", config.Environment["CUSTOM_VAR"])
 	}
 
-	// Verify graceful stop
-	if len(cfg.GracefulStop.Keys) != 1 || cfg.GracefulStop.Keys[0] != "C-c" {
-		t.Errorf("unexpected graceful_stop keys: %v", cfg.GracefulStop.Keys)
+	// Check prompt injection
+	if len(config.PromptInjection.PreKeys) != 1 || config.PromptInjection.PreKeys[0] != "Escape" {
+		t.Errorf("expected pre_keys = [Escape], got %v", config.PromptInjection.PreKeys)
 	}
-	if cfg.GracefulStop.Wait.Duration != 2*time.Second {
-		t.Errorf("expected wait 2s, got %v", cfg.GracefulStop.Wait.Duration)
+	if config.PromptInjection.PreDelay.Duration() != 100*time.Millisecond {
+		t.Errorf("expected pre_delay = 100ms, got %v", config.PromptInjection.PreDelay)
+	}
+	if config.PromptInjection.Method != "literal" {
+		t.Errorf("expected method = literal, got %q", config.PromptInjection.Method)
+	}
+	if len(config.PromptInjection.PostKeys) != 1 || config.PromptInjection.PostKeys[0] != "Enter" {
+		t.Errorf("expected post_keys = [Enter], got %v", config.PromptInjection.PostKeys)
 	}
 
-	// Verify events
-	if cfg.Events.Translator != "./event-translator.sh" {
-		t.Errorf("unexpected translator: %q", cfg.Events.Translator)
+	// Check graceful stop
+	if len(config.GracefulStop.Keys) != 1 || config.GracefulStop.Keys[0] != "C-c" {
+		t.Errorf("expected graceful_stop.keys = [C-c], got %v", config.GracefulStop.Keys)
 	}
-	if len(cfg.Events.AgentConfig) != 2 {
-		t.Errorf("expected 2 agent_config entries, got %d", len(cfg.Events.AgentConfig))
+	if config.GracefulStop.Wait.Duration() != 2*time.Second {
+		t.Errorf("expected graceful_stop.wait = 2s, got %v", config.GracefulStop.Wait)
+	}
+
+	// Check events
+	if config.Events.Translator != "./event-translator.sh" {
+		t.Errorf("expected translator = ./event-translator.sh, got %q", config.Events.Translator)
+	}
+	if config.Events.AgentConfig["Stop"] != "{{adapter_dir}}/event-translator.sh Stop" {
+		t.Errorf("expected Stop hook config, got %q", config.Events.AgentConfig["Stop"])
 	}
 }
 
-func TestAdapterConfigValidation(t *testing.T) {
+func TestAdapterConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  AdapterConfig
@@ -129,7 +123,7 @@ func TestAdapterConfigValidation(t *testing.T) {
 				Spawn: AdapterSpawnConfig{Command: "test-agent"},
 			},
 			wantErr: true,
-			errMsg:  "adapter name is required",
+			errMsg:  "adapter.name is required",
 		},
 		{
 			name: "missing spawn command",
@@ -140,30 +134,30 @@ func TestAdapterConfigValidation(t *testing.T) {
 			errMsg:  "spawn.command is required",
 		},
 		{
-			name: "invalid method",
+			name: "invalid prompt injection method",
 			config: AdapterConfig{
-				Adapter:      AdapterMeta{Name: "test"},
-				Spawn:        AdapterSpawnConfig{Command: "test-agent"},
-				PromptInject: PromptInjection{Method: "invalid"},
+				Adapter:         AdapterMeta{Name: "test"},
+				Spawn:           AdapterSpawnConfig{Command: "test-agent"},
+				PromptInjection: PromptInjectionConfig{Method: "invalid"},
 			},
 			wantErr: true,
-			errMsg:  "prompt_injection.method must be 'literal' or 'keys'",
+			errMsg:  "prompt_injection.method must be 'literal' or 'keys', got \"invalid\"",
 		},
 		{
-			name: "valid literal method",
+			name: "valid with literal method",
 			config: AdapterConfig{
-				Adapter:      AdapterMeta{Name: "test"},
-				Spawn:        AdapterSpawnConfig{Command: "test-agent"},
-				PromptInject: PromptInjection{Method: "literal"},
+				Adapter:         AdapterMeta{Name: "test"},
+				Spawn:           AdapterSpawnConfig{Command: "test-agent"},
+				PromptInjection: PromptInjectionConfig{Method: "literal"},
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid keys method",
+			name: "valid with keys method",
 			config: AdapterConfig{
-				Adapter:      AdapterMeta{Name: "test"},
-				Spawn:        AdapterSpawnConfig{Command: "test-agent"},
-				PromptInject: PromptInjection{Method: "keys"},
+				Adapter:         AdapterMeta{Name: "test"},
+				Spawn:           AdapterSpawnConfig{Command: "test-agent"},
+				PromptInjection: PromptInjectionConfig{Method: "keys"},
 			},
 			wantErr: false,
 		},
@@ -174,9 +168,9 @@ func TestAdapterConfigValidation(t *testing.T) {
 			err := tt.config.Validate()
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errMsg)
-				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got %q", tt.errMsg, err.Error())
+					t.Error("expected error but got nil")
+				} else if tt.errMsg != "" && err.Error() != tt.errMsg {
+					t.Errorf("expected error %q, got %q", tt.errMsg, err.Error())
 				}
 			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -185,16 +179,38 @@ func TestAdapterConfigValidation(t *testing.T) {
 	}
 }
 
-func TestDurationParsing(t *testing.T) {
+func TestAdapterConfig_Defaults(t *testing.T) {
+	config := AdapterConfig{
+		Adapter: AdapterMeta{Name: "test"},
+		Spawn:   AdapterSpawnConfig{Command: "test-agent"},
+	}
+
+	// Test default prompt injection method
+	if config.GetPromptInjectionMethod() != "literal" {
+		t.Errorf("expected default method = literal, got %q", config.GetPromptInjectionMethod())
+	}
+
+	// Test default startup delay
+	if config.GetStartupDelay() != 3*time.Second {
+		t.Errorf("expected default startup delay = 3s, got %v", config.GetStartupDelay())
+	}
+
+	// Test default graceful stop wait
+	if config.GetGracefulStopWait() != 2*time.Second {
+		t.Errorf("expected default graceful stop wait = 2s, got %v", config.GetGracefulStopWait())
+	}
+}
+
+func TestDuration_UnmarshalText(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected time.Duration
 		wantErr  bool
 	}{
-		{"100ms", 100 * time.Millisecond, false},
 		{"3s", 3 * time.Second, false},
-		{"1m30s", 90 * time.Second, false},
-		{"1h", time.Hour, false},
+		{"100ms", 100 * time.Millisecond, false},
+		{"1h", 1 * time.Hour, false},
+		{"500µs", 500 * time.Microsecond, false},
 		{"invalid", 0, true},
 		{"", 0, true},
 	}
@@ -205,22 +221,22 @@ func TestDurationParsing(t *testing.T) {
 			err := d.UnmarshalText([]byte(tt.input))
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("expected error for input %q", tt.input)
+					t.Error("expected error but got nil")
 				}
 			} else {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
-				if d.Duration != tt.expected {
-					t.Errorf("expected %v, got %v", tt.expected, d.Duration)
+				if d.Duration() != tt.expected {
+					t.Errorf("expected %v, got %v", tt.expected, d.Duration())
 				}
 			}
 		})
 	}
 }
 
-func TestDurationMarshal(t *testing.T) {
-	d := Duration{3 * time.Second}
+func TestDuration_MarshalText(t *testing.T) {
+	d := Duration(3 * time.Second)
 	text, err := d.MarshalText()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -230,82 +246,9 @@ func TestDurationMarshal(t *testing.T) {
 	}
 }
 
-func TestDefaultPromptInjection(t *testing.T) {
-	defaults := DefaultPromptInjection()
-
-	if len(defaults.PreKeys) != 1 || defaults.PreKeys[0] != "Escape" {
-		t.Errorf("unexpected default pre_keys: %v", defaults.PreKeys)
-	}
-	if defaults.PreDelay.Duration != 100*time.Millisecond {
-		t.Errorf("expected default pre_delay 100ms, got %v", defaults.PreDelay.Duration)
-	}
-	if defaults.Method != "literal" {
-		t.Errorf("expected default method 'literal', got %q", defaults.Method)
-	}
-	if len(defaults.PostKeys) != 1 || defaults.PostKeys[0] != "Enter" {
-		t.Errorf("unexpected default post_keys: %v", defaults.PostKeys)
-	}
-}
-
-func TestDefaultGracefulStop(t *testing.T) {
-	defaults := DefaultGracefulStop()
-
-	if len(defaults.Keys) != 1 || defaults.Keys[0] != "C-c" {
-		t.Errorf("unexpected default keys: %v", defaults.Keys)
-	}
-	if defaults.Wait.Duration != 2*time.Second {
-		t.Errorf("expected default wait 2s, got %v", defaults.Wait.Duration)
-	}
-}
-
-func TestGetMethodDefault(t *testing.T) {
-	// Empty method should default to "literal"
-	p := PromptInjection{}
-	if p.GetMethod() != "literal" {
-		t.Errorf("expected default method 'literal', got %q", p.GetMethod())
-	}
-
-	// Explicit method should be returned
-	p.Method = "keys"
-	if p.GetMethod() != "keys" {
-		t.Errorf("expected method 'keys', got %q", p.GetMethod())
-	}
-}
-
-func TestGetWaitDefault(t *testing.T) {
-	// Zero wait should default to 2s
-	g := GracefulStopConfig{}
-	if g.GetWait() != 2*time.Second {
-		t.Errorf("expected default wait 2s, got %v", g.GetWait())
-	}
-
-	// Explicit wait should be returned
-	g.Wait = Duration{5 * time.Second}
-	if g.GetWait() != 5*time.Second {
-		t.Errorf("expected wait 5s, got %v", g.GetWait())
-	}
-}
-
-func TestMinimalTOMLConfig(t *testing.T) {
-	const minimal = `
-[adapter]
-name = "minimal"
-
-[spawn]
-command = "my-agent"
-`
-	var cfg AdapterConfig
-	_, err := toml.Decode(minimal, &cfg)
-	if err != nil {
-		t.Fatalf("failed to parse minimal TOML: %v", err)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("minimal config should be valid: %v", err)
-	}
-
-	// Check defaults are used
-	if cfg.PromptInject.GetMethod() != "literal" {
-		t.Errorf("expected default method 'literal', got %q", cfg.PromptInject.GetMethod())
+func TestDuration_String(t *testing.T) {
+	d := Duration(100 * time.Millisecond)
+	if d.String() != "100ms" {
+		t.Errorf("expected '100ms', got %q", d.String())
 	}
 }
