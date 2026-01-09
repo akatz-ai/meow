@@ -38,6 +38,10 @@ const (
 
 // AgentConfig holds agent-related settings.
 type AgentConfig struct {
+	// DefaultAdapter specifies the default adapter to use when spawning agents.
+	// Resolution order: step-level > workflow-level > project-level > global-level > built-in default ("claude").
+	DefaultAdapter string `toml:"default_adapter"`
+
 	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks
 	// when spawning agents. Default: true (agents get hooks for Ralph Wiggum loop).
 	// Set to false to disable automatic hook injection.
@@ -114,7 +118,8 @@ func Default() *Config {
 			File:   ".meow/state/meow.log",
 		},
 		Agent: AgentConfig{
-			SetupHooks: true, // Enable Ralph Wiggum loop by default for agents
+			DefaultAdapter: "claude",  // Built-in default adapter
+			SetupHooks:     true,      // Enable Ralph Wiggum loop by default for agents
 		},
 	}
 }
@@ -139,25 +144,31 @@ func Load(path string) (*Config, error) {
 }
 
 // LoadFromDir loads configuration from the standard locations in a directory.
-// Priority: .meow/config.toml > ~/.config/meow/config.toml > defaults
+// Applies in order: defaults -> ~/.meow/config.toml -> .meow/config.toml
+// Later configs override earlier ones (project-level takes precedence).
 func LoadFromDir(dir string) (*Config, error) {
-	// Try project-local config
-	projectConfig := filepath.Join(dir, ".meow", "config.toml")
-	if _, err := os.Stat(projectConfig); err == nil {
-		return Load(projectConfig)
-	}
+	cfg := Default()
 
-	// Try user global config
+	// Load global config first (if exists)
 	home, err := os.UserHomeDir()
 	if err == nil {
-		userConfig := filepath.Join(home, ".config", "meow", "config.toml")
-		if _, err := os.Stat(userConfig); err == nil {
-			return Load(userConfig)
+		globalConfig := filepath.Join(home, ".meow", "config.toml")
+		if data, err := os.ReadFile(globalConfig); err == nil {
+			if _, err := toml.Decode(string(data), cfg); err != nil {
+				return nil, fmt.Errorf("parsing global config: %w", err)
+			}
 		}
 	}
 
-	// Use defaults
-	return Default(), nil
+	// Load project config (overrides global)
+	projectConfig := filepath.Join(dir, ".meow", "config.toml")
+	if data, err := os.ReadFile(projectConfig); err == nil {
+		if _, err := toml.Decode(string(data), cfg); err != nil {
+			return nil, fmt.Errorf("parsing project config: %w", err)
+		}
+	}
+
+	return cfg, nil
 }
 
 // Validate checks that the configuration is valid.
