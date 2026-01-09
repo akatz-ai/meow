@@ -588,11 +588,14 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Workflow, step
 		return fmt.Errorf("agent executor not implemented: %w", ErrNotImplemented)
 	}
 
-	// Build prompt for agent
-	prompt := step.Agent.Prompt
+	// Build prompt for agent using the helper from executor_agent.go
+	result, stepErr := StartAgentStep(step)
+	if stepErr != nil {
+		return fmt.Errorf("building agent prompt: %s", stepErr.Message)
+	}
 
 	// Inject prompt to agent's tmux session
-	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, prompt); err != nil {
+	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, result.Prompt); err != nil {
 		return fmt.Errorf("injecting prompt: %w", err)
 	}
 

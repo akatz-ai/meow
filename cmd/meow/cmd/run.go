@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/config"
+	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/template"
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -173,8 +174,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create shell runner
 	shellRunner := orchestrator.NewDefaultShellRunner()
 
-	// Create orchestrator (agents and expander are nil for shell-only demo)
-	orch := orchestrator.New(cfg, store, nil, shellRunner, nil, logger)
+	// Create agent manager for tmux sessions
+	agentManager := orchestrator.NewTmuxAgentManager(dir, logger)
+
+	// Create orchestrator with agent support
+	orch := orchestrator.New(cfg, store, agentManager, shellRunner, nil, logger)
 	orch.SetWorkflowID(workflowID)
 
 	// Set up signal handling for graceful shutdown
@@ -189,7 +193,20 @@ func runRun(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	// Create IPC handler
+	ipcHandler := orchestrator.NewIPCHandler(store, agentManager, logger)
+
+	// Start IPC server
+	ipcServer := ipc.NewServer(workflowID, ipcHandler, logger)
+	if err := ipcServer.StartAsync(ctx); err != nil {
+		return fmt.Errorf("starting IPC server: %w", err)
+	}
+	defer ipcServer.Shutdown()
+
 	fmt.Printf("\nRunning workflow...\n")
+	if verbose {
+		fmt.Printf("IPC socket: %s\n", ipcServer.Path())
+	}
 
 	// Run the orchestrator
 	if err := orch.Run(ctx); err != nil {

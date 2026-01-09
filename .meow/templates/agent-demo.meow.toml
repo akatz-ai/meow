@@ -1,0 +1,53 @@
+# Agent Demo Template
+# A simple workflow that demonstrates agent orchestration with Claude.
+#
+# This template:
+# 1. Spawns a Claude agent in a tmux session
+# 2. Assigns a simple task to the agent
+# 3. Waits for the agent to complete with `meow done`
+# 4. Kills the tmux session
+#
+# Usage:
+#   meow run .meow/templates/agent-demo.meow.toml
+#   meow run .meow/templates/agent-demo.meow.toml --var task="Write a haiku about coding"
+
+[main]
+name = "agent-demo"
+description = "A simple agent orchestration demo"
+
+[main.variables]
+task = { default = "List the files in the current directory and tell me what you see.", description = "The task for the agent" }
+
+# Step 1: Spawn the Claude agent
+[[main.steps]]
+id = "spawn-claude"
+executor = "spawn"
+description = "Start Claude agent in tmux"
+agent = "claude-1"
+
+# Step 2: Give the agent a task
+[[main.steps]]
+id = "do-task"
+executor = "agent"
+description = "Agent performs the task"
+needs = ["spawn-claude"]
+agent = "claude-1"
+prompt = """
+You are working in a MEOW workflow. Your task is:
+
+{{task}}
+
+When you have completed this task, signal completion by running:
+  meow done
+
+This will notify the orchestrator that you're finished.
+"""
+
+# Step 3: Kill the agent session
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+description = "Stop the Claude agent"
+needs = ["do-task"]
+agent = "claude-1"
+graceful = true

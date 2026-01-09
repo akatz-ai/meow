@@ -83,6 +83,9 @@ func (w *Workflow) AddStep(step *Step) error {
 
 // RegisterAgent adds or updates agent state.
 func (w *Workflow) RegisterAgent(id string, info *AgentInfo) {
+	if w.Agents == nil {
+		w.Agents = make(map[string]*AgentInfo)
+	}
 	w.Agents[id] = info
 }
 
