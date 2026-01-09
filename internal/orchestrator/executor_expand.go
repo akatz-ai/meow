@@ -33,8 +33,8 @@ func DefaultExpansionLimits() *ExpansionLimits {
 	}
 }
 
-// ExpandResult contains the results of template expansion.
-type ExpandResult struct {
+// ExecuteExpandResult contains the results of template expansion.
+type ExecuteExpandResult struct {
 	ExpandedSteps []*types.Step // The newly created steps
 	StepIDs       []string      // IDs of the expanded steps
 }
@@ -56,7 +56,7 @@ func ExecuteExpand(
 	variables map[string]string,
 	depth int,
 	limits *ExpansionLimits,
-) (*ExpandResult, *types.StepError) {
+) (*ExecuteExpandResult, *types.StepError) {
 	if step.Expand == nil {
 		return nil, &types.StepError{Message: "expand step missing config"}
 	}
@@ -90,7 +90,7 @@ func ExecuteExpand(
 
 	if len(templateSteps) == 0 {
 		// Empty template is valid - no steps to expand
-		return &ExpandResult{
+		return &ExecuteExpandResult{
 			ExpandedSteps: nil,
 			StepIDs:       nil,
 		}, nil
@@ -112,7 +112,7 @@ func ExecuteExpand(
 	}
 
 	// Expand each template step
-	result := &ExpandResult{
+	result := &ExecuteExpandResult{
 		ExpandedSteps: make([]*types.Step, 0, len(templateSteps)),
 		StepIDs:       make([]string, 0, len(templateSteps)),
 	}

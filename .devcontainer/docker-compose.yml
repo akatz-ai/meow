@@ -1,0 +1,103 @@
+# =============================================================================
+# Meow Machine - Development Container
+# =============================================================================
+#
+# This devcontainer uses a configurable base image. To use your own base:
+#
+#   1. Copy .env.example to .env
+#   2. Set BASE_IMAGE to your image (e.g., dev-container:latest)
+#   3. Optionally set HOME_VOLUME to reuse an existing volume
+#   4. Run: docker compose up -d
+#
+# Volume Behavior:
+#   - Empty/new volume: Base image's dotfiles are copied in
+#   - Existing volume: Volume contents preserved (your configs stay)
+#
+# =============================================================================
+
+services:
+  dev:
+    # Use BASE_IMAGE from .env, or fall back to ubuntu:25.10
+    # Developers should set this to their personal dev-container image
+    image: ${BASE_IMAGE:-ubuntu:25.10}
+
+    container_name: meow-machine-dev
+    hostname: meow-machine-dev
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # =========================================================================
+    # Volume Mounts
+    # =========================================================================
+    volumes:
+      # Project source code
+      - ..:/workspace:cached
+
+      # Named volume for home directory (persists tools, configs)
+      # Set HOME_VOLUME to reuse existing volume (e.g., acfs-setup_acfs-home)
+      - ${HOME_VOLUME:-meow-home}:/home/ubuntu
+
+      # SSH keys (read-only) - for git operations
+      - ${SSH_DIR:-~/.ssh}:/home/ubuntu/.ssh:ro
+
+      # Docker socket - uncomment if needed for docker-in-docker
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    # =========================================================================
+    # Environment
+    # =========================================================================
+    environment:
+      - TERM=xterm-256color
+      - COLORTERM=truecolor
+      - LANG=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+      - EDITOR=nvim
+      - TZ=${TZ:-America/New_York}
+
+    # =========================================================================
+    # Ports
+    # =========================================================================
+    ports:
+      - "${PORT_8080:-8080}:8080"
+      - "${PORT_3000:-3000}:3000"
+
+    # =========================================================================
+    # Resources
+    # =========================================================================
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-4}'
+          memory: ${MEM_LIMIT:-8G}
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+    # =========================================================================
+    # Working Directory
+    # =========================================================================
+    working_dir: /workspace
+
+    # =========================================================================
+    # Command
+    # =========================================================================
+    command: sleep infinity
+
+    networks:
+      - meow-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  meow-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  meow-home:
+    external: ${HOME_VOLUME_EXTERNAL:-false}

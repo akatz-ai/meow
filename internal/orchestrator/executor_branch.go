@@ -137,7 +137,7 @@ func expandBranchTarget(
 	variables map[string]string,
 	depth int,
 	limits *ExpansionLimits,
-) (*ExpandResult, *types.StepError) {
+) (*ExecuteExpandResult, *types.StepError) {
 	// Merge target variables with workflow variables
 	mergedVars := make(map[string]string)
 	for k, v := range variables {
@@ -166,12 +166,12 @@ func expandBranchTarget(
 	}
 
 	// Empty target (valid - just continue without adding steps)
-	return &ExpandResult{}, nil
+	return &ExecuteExpandResult{}, nil
 }
 
 // expandInlineSteps converts inline step definitions to Step objects.
-func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[string]string) (*ExpandResult, *types.StepError) {
-	result := &ExpandResult{
+func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[string]string) (*ExecuteExpandResult, *types.StepError) {
+	result := &ExecuteExpandResult{
 		ExpandedSteps: make([]*types.Step, 0, len(inline)),
 		StepIDs:       make([]string, 0, len(inline)),
 	}

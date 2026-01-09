@@ -1,0 +1,53 @@
+# Core MEOW Functionality Test
+# Tests: code beads with output capture, conditions, task creation
+#
+# This doesn't spawn Claude - it tests the orchestrator primitives directly.
+
+[main]
+name = "core-test"
+description = "Test core MEOW primitives without agent spawning"
+ephemeral = true
+
+[main.variables]
+test_name = { default = "basic", description = "Name for this test run" }
+
+# Step 1: Code bead that captures output
+[[main.steps]]
+id = "setup"
+type = "code"
+title = "Setup test: {{test_name}}"
+code = """
+echo "Test run: {{test_name}}"
+echo "Started at: $(date)"
+echo "success"
+"""
+
+# Step 2: Condition that checks the output
+[[main.steps]]
+id = "check-setup"
+type = "condition"
+title = "Verify setup succeeded"
+needs = ["setup"]
+condition = "test -f /tmp/meow-test-marker || exit 1"
+
+[main.steps.on_true]
+inline = []
+
+[main.steps.on_false]
+inline = [
+    { id = "create-marker", type = "code", title = "Create marker file", code = "touch /tmp/meow-test-marker && echo 'Marker created'" }
+]
+
+# Step 3: Another code bead to verify everything
+[[main.steps]]
+id = "final-check"
+type = "code"
+title = "Final verification"
+needs = ["check-setup"]
+code = """
+echo "=== MEOW Core Test Complete ==="
+echo "Test: {{test_name}}"
+echo "Marker exists: $(test -f /tmp/meow-test-marker && echo 'yes' || echo 'no')"
+echo "Timestamp: $(date)"
+rm -f /tmp/meow-test-marker
+"""

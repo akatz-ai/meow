@@ -1,0 +1,5 @@
+# Local environment configuration
+.env
+
+# Don't commit personal base image references
+*.local

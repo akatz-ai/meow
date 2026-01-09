@@ -29,3 +29,4 @@ vendor/
 
 # MEOW state (generated at runtime)
 .meow/state/
+.meow/worktrees/
