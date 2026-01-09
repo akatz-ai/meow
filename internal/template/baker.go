@@ -418,8 +418,12 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 	switch bead.Type {
 	case types.BeadTypeTask:
 		// Set task output specifications if defined
-		if step.Outputs != nil {
-			bead.TaskOutputs = taskOutputSpecToTypes(step.Outputs)
+		// Use LegacyOutputs for backwards compatibility, or convert new Outputs format
+		if step.LegacyOutputs != nil {
+			bead.TaskOutputs = taskOutputSpecToTypes(step.LegacyOutputs)
+		} else if len(step.Outputs) > 0 {
+			// Convert new format to legacy format for beads
+			bead.TaskOutputs = agentOutputsToTaskOutputSpec(step.Outputs)
 		}
 		return nil
 
@@ -554,6 +558,31 @@ func taskOutputSpecToTypes(spec *TaskOutputSpec) *types.TaskOutputSpec {
 			Type:        types.TaskOutputType(def.Type),
 			Description: def.Description,
 		})
+	}
+
+	return result
+}
+
+// agentOutputsToTaskOutputSpec converts new-format agent outputs to legacy TaskOutputSpec.
+// This is a transitional helper - will be removed when baker is refactored.
+func agentOutputsToTaskOutputSpec(outputs map[string]AgentOutputDef) *types.TaskOutputSpec {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	result := &types.TaskOutputSpec{}
+
+	for name, def := range outputs {
+		taskDef := types.TaskOutputDef{
+			Name:        name,
+			Type:        types.TaskOutputType(def.Type),
+			Description: def.Description,
+		}
+		if def.Required {
+			result.Required = append(result.Required, taskDef)
+		} else {
+			result.Optional = append(result.Optional, taskDef)
+		}
 	}
 
 	return result

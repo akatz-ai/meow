@@ -831,3 +831,497 @@ description = "First"
 		t.Errorf("expected description, got %q", v.Description)
 	}
 }
+
+// ============================================================================
+// Executor Type Tests
+// ============================================================================
+
+func TestExecutorType_Valid(t *testing.T) {
+	tests := []struct {
+		executor ExecutorType
+		valid    bool
+	}{
+		{ExecutorShell, true},
+		{ExecutorSpawn, true},
+		{ExecutorKill, true},
+		{ExecutorExpand, true},
+		{ExecutorBranch, true},
+		{ExecutorAgent, true},
+		{ExecutorGate, true},
+		{"", true},           // Empty allowed for backwards compatibility
+		{"invalid", false},
+		{"task", false},      // Old type, not valid executor
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.executor), func(t *testing.T) {
+			if got := tc.executor.Valid(); got != tc.valid {
+				t.Errorf("ExecutorType(%q).Valid() = %v, want %v", tc.executor, got, tc.valid)
+			}
+		})
+	}
+}
+
+func TestExecutorType_IsOrchestrator(t *testing.T) {
+	orchestratorExecutors := []ExecutorType{
+		ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch,
+	}
+	externalExecutors := []ExecutorType{
+		ExecutorAgent, ExecutorGate, "",
+	}
+
+	for _, e := range orchestratorExecutors {
+		if !e.IsOrchestrator() {
+			t.Errorf("expected %q to be orchestrator executor", e)
+		}
+	}
+	for _, e := range externalExecutors {
+		if e.IsOrchestrator() {
+			t.Errorf("expected %q to NOT be orchestrator executor", e)
+		}
+	}
+}
+
+func TestStep_Validate_Shell(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid shell step",
+			step: Step{
+				ID:       "run-tests",
+				Executor: ExecutorShell,
+				Command:  "npm test",
+			},
+			wantErr: "",
+		},
+		{
+			name: "shell without command",
+			step: Step{
+				ID:       "missing-cmd",
+				Executor: ExecutorShell,
+			},
+			wantErr: "shell executor requires command",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Spawn(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid spawn step",
+			step: Step{
+				ID:       "start-worker",
+				Executor: ExecutorSpawn,
+				Agent:    "worker-1",
+			},
+			wantErr: "",
+		},
+		{
+			name: "spawn without agent",
+			step: Step{
+				ID:       "missing-agent",
+				Executor: ExecutorSpawn,
+			},
+			wantErr: "spawn executor requires agent",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Kill(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid kill step",
+			step: Step{
+				ID:       "stop-worker",
+				Executor: ExecutorKill,
+				Agent:    "worker-1",
+			},
+			wantErr: "",
+		},
+		{
+			name: "kill without agent",
+			step: Step{
+				ID:       "missing-agent",
+				Executor: ExecutorKill,
+			},
+			wantErr: "kill executor requires agent",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Expand(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid expand step",
+			step: Step{
+				ID:       "do-impl",
+				Executor: ExecutorExpand,
+				Template: ".tdd",
+			},
+			wantErr: "",
+		},
+		{
+			name: "expand without template",
+			step: Step{
+				ID:       "missing-template",
+				Executor: ExecutorExpand,
+			},
+			wantErr: "expand executor requires template",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Branch(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid branch step",
+			step: Step{
+				ID:        "check-tests",
+				Executor:  ExecutorBranch,
+				Condition: "npm test",
+			},
+			wantErr: "",
+		},
+		{
+			name: "branch without condition",
+			step: Step{
+				ID:       "missing-condition",
+				Executor: ExecutorBranch,
+			},
+			wantErr: "branch executor requires condition",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Agent(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid agent step",
+			step: Step{
+				ID:       "implement",
+				Executor: ExecutorAgent,
+				Agent:    "worker-1",
+				Prompt:   "Implement the feature",
+			},
+			wantErr: "",
+		},
+		{
+			name: "agent without agent field",
+			step: Step{
+				ID:       "missing-agent",
+				Executor: ExecutorAgent,
+				Prompt:   "Do something",
+			},
+			wantErr: "agent executor requires agent",
+		},
+		{
+			name: "agent without prompt",
+			step: Step{
+				ID:       "missing-prompt",
+				Executor: ExecutorAgent,
+				Agent:    "worker-1",
+			},
+			wantErr: "agent executor requires prompt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Gate(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid gate step",
+			step: Step{
+				ID:       "review-gate",
+				Executor: ExecutorGate,
+				Prompt:   "Review the implementation",
+			},
+			wantErr: "",
+		},
+		{
+			name: "gate without prompt",
+			step: Step{
+				ID:       "missing-prompt",
+				Executor: ExecutorGate,
+			},
+			wantErr: "gate executor requires prompt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_Mode(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "autonomous mode",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorAgent,
+				Agent:    "worker",
+				Prompt:   "Do work",
+				Mode:     "autonomous",
+			},
+			wantErr: "",
+		},
+		{
+			name: "interactive mode",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorAgent,
+				Agent:    "worker",
+				Prompt:   "Do work",
+				Mode:     "interactive",
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid mode",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorAgent,
+				Agent:    "worker",
+				Prompt:   "Do work",
+				Mode:     "invalid",
+			},
+			wantErr: "invalid mode",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_OnError(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "continue on_error",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorShell,
+				Command:  "npm test",
+				OnError:  "continue",
+			},
+			wantErr: "",
+		},
+		{
+			name: "fail on_error",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorShell,
+				Command:  "npm test",
+				OnError:  "fail",
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid on_error",
+			step: Step{
+				ID:       "test",
+				Executor: ExecutorShell,
+				Command:  "npm test",
+				OnError:  "invalid",
+			},
+			wantErr: "invalid on_error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStep_Validate_EmptyExecutor(t *testing.T) {
+	// Empty executor is allowed for backwards compatibility
+	step := Step{
+		ID:           "legacy-step",
+		Type:         "task", // Using legacy type field
+		Instructions: "Do something",
+	}
+	err := step.Validate()
+	if err != nil {
+		t.Errorf("expected empty executor to be valid (backwards compatibility), got: %v", err)
+	}
+}
+
+func TestStep_Validate_MissingID(t *testing.T) {
+	step := Step{
+		Executor: ExecutorShell,
+		Command:  "npm test",
+	}
+	err := step.Validate()
+	if err == nil || !strings.Contains(err.Error(), "id is required") {
+		t.Errorf("expected error about missing id, got: %v", err)
+	}
+}
+
+func TestStep_Validate_InvalidExecutor(t *testing.T) {
+	step := Step{
+		ID:       "test",
+		Executor: "notreal",
+	}
+	err := step.Validate()
+	if err == nil || !strings.Contains(err.Error(), "invalid executor") {
+		t.Errorf("expected error about invalid executor, got: %v", err)
+	}
+}

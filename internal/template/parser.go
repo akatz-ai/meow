@@ -50,27 +50,207 @@ type Var struct {
 	Enum        []string `toml:"enum,omitempty"`        // Allowed values
 }
 
+// ExecutorType represents the type of executor for a step.
+type ExecutorType string
+
+const (
+	ExecutorShell  ExecutorType = "shell"
+	ExecutorSpawn  ExecutorType = "spawn"
+	ExecutorKill   ExecutorType = "kill"
+	ExecutorExpand ExecutorType = "expand"
+	ExecutorBranch ExecutorType = "branch"
+	ExecutorAgent  ExecutorType = "agent"
+	ExecutorGate   ExecutorType = "gate"
+)
+
+// Valid returns true if the executor type is valid.
+func (e ExecutorType) Valid() bool {
+	switch e {
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorAgent, ExecutorGate:
+		return true
+	case "": // Allow empty for backwards compatibility during transition
+		return true
+	}
+	return false
+}
+
+// IsOrchestrator returns true if the executor runs internally (not waiting for external completion).
+func (e ExecutorType) IsOrchestrator() bool {
+	switch e {
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch:
+		return true
+	}
+	return false
+}
+
+// OutputSource defines where to capture output from for shell executor.
+type OutputSource struct {
+	Source string `toml:"source"` // stdout | stderr | exit_code | file:/path
+}
+
+// AgentOutputDef defines an expected output from an agent step.
+type AgentOutputDef struct {
+	Required    bool   `toml:"required"`
+	Type        string `toml:"type"` // string | number | boolean | json | file_path
+	Description string `toml:"description,omitempty"`
+}
+
 // Step represents a single step in a template.
 type Step struct {
-	ID           string            `toml:"id"`
-	Title        string            `toml:"title,omitempty"`        // Human-readable title (module format)
-	Description  string            `toml:"description,omitempty"`
-	Type         string            `toml:"type,omitempty"`         // task, collaborative, gate, condition, etc.
-	Assignee     string            `toml:"assignee,omitempty"`     // Agent ID for task/collaborative/start/stop
-	Needs        []string          `toml:"needs,omitempty"`        // Dependencies
-	Condition    string            `toml:"condition,omitempty"`    // Shell condition for condition beads
-	Code         string            `toml:"code,omitempty"`         // Shell code for code beads
-	Instructions string            `toml:"instructions,omitempty"` // For task beads
-	Action       string            `toml:"action,omitempty"`       // notify, etc.
-	Validation   string            `toml:"validation,omitempty"`   // Post-step validation
-	Template     string            `toml:"template,omitempty"`     // Child template reference
-	Variables    map[string]string `toml:"variables,omitempty"`    // Variables for child template
-	Ephemeral    bool              `toml:"ephemeral,omitempty"`    // Auto-cleanup after workflow
-	OnTrue       *ExpansionTarget  `toml:"on_true,omitempty"`      // Condition branch
-	OnFalse      *ExpansionTarget  `toml:"on_false,omitempty"`     // Condition branch
-	OnTimeout    *ExpansionTarget  `toml:"on_timeout,omitempty"`   // Condition timeout branch
-	Timeout      string            `toml:"timeout,omitempty"`      // Timeout duration
-	Outputs      *TaskOutputSpec   `toml:"outputs,omitempty"`      // Task output specifications
+	ID       string       `toml:"id"`
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent | gate
+
+	// Shared fields
+	Needs   []string          `toml:"needs,omitempty"` // Step IDs that must complete first
+	Timeout string            `toml:"timeout,omitempty"`
+
+	// Agent executor fields
+	Agent  string                    `toml:"agent,omitempty"`  // Agent identifier (also used by spawn, kill)
+	Prompt string                    `toml:"prompt,omitempty"` // Instructions for agent (also used by gate)
+	Mode   string                    `toml:"mode,omitempty"`   // autonomous | interactive
+
+	// Shell executor fields
+	Command string                   `toml:"command,omitempty"` // Shell command to execute
+	Workdir string                   `toml:"workdir,omitempty"` // Working directory (also used by spawn)
+	Env     map[string]string        `toml:"env,omitempty"`     // Environment variables (also used by spawn)
+	OnError string                   `toml:"on_error,omitempty"` // continue | fail (default: fail)
+
+	// Shell output capture
+	ShellOutputs map[string]OutputSource `toml:"shell_outputs,omitempty"` // For shell executor stdout/stderr/file capture
+
+	// Spawn executor fields (uses Agent, Workdir, Env)
+	ResumeSession string `toml:"resume_session,omitempty"` // Claude session ID to resume
+
+	// Kill executor fields (uses Agent)
+	Graceful *bool `toml:"graceful,omitempty"` // Send SIGTERM first (default: true)
+	// Timeout already defined above
+
+	// Expand executor fields
+	Template  string            `toml:"template,omitempty"`  // Template reference
+	Variables map[string]string `toml:"variables,omitempty"` // Variables for template
+
+	// Branch executor fields
+	Condition string           `toml:"condition,omitempty"`   // Shell command (exit 0 = true)
+	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`     // Expand if condition true
+	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`    // Expand if condition false
+	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"`  // Expand if condition times out
+
+	// Agent output definitions (for agent executor)
+	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
+
+	// === Legacy fields (for backwards compatibility during transition) ===
+	// These will be removed once all templates are migrated
+
+	Type         string          `toml:"type,omitempty"`         // DEPRECATED: use executor
+	Title        string          `toml:"title,omitempty"`        // Human-readable title
+	Description  string          `toml:"description,omitempty"`  // Step description
+	Instructions string          `toml:"instructions,omitempty"` // DEPRECATED: use prompt
+	Assignee     string          `toml:"assignee,omitempty"`     // DEPRECATED: use agent
+	Code         string          `toml:"code,omitempty"`         // DEPRECATED: use command
+	Action       string          `toml:"action,omitempty"`       // Legacy action field
+	Validation   string          `toml:"validation,omitempty"`   // Legacy validation field
+	Ephemeral    bool            `toml:"ephemeral,omitempty"`    // Legacy ephemeral flag
+	LegacyOutputs *TaskOutputSpec `toml:"task_outputs,omitempty"` // DEPRECATED: use outputs
+}
+
+// Validate checks that the step has required fields for its executor type.
+func (s *Step) Validate() error {
+	if s.ID == "" {
+		return fmt.Errorf("step id is required")
+	}
+
+	if !s.Executor.Valid() {
+		return fmt.Errorf("invalid executor: %q", s.Executor)
+	}
+
+	// If no executor specified, allow for backwards compatibility
+	if s.Executor == "" {
+		return nil
+	}
+
+	switch s.Executor {
+	case ExecutorShell:
+		if s.Command == "" {
+			return fmt.Errorf("shell executor requires command")
+		}
+	case ExecutorSpawn:
+		if s.Agent == "" {
+			return fmt.Errorf("spawn executor requires agent")
+		}
+	case ExecutorKill:
+		if s.Agent == "" {
+			return fmt.Errorf("kill executor requires agent")
+		}
+	case ExecutorExpand:
+		if s.Template == "" {
+			return fmt.Errorf("expand executor requires template")
+		}
+	case ExecutorBranch:
+		if s.Condition == "" {
+			return fmt.Errorf("branch executor requires condition")
+		}
+	case ExecutorAgent:
+		if s.Agent == "" {
+			return fmt.Errorf("agent executor requires agent")
+		}
+		if s.Prompt == "" {
+			return fmt.Errorf("agent executor requires prompt")
+		}
+	case ExecutorGate:
+		if s.Prompt == "" {
+			return fmt.Errorf("gate executor requires prompt")
+		}
+	}
+
+	// Validate mode if specified
+	if s.Mode != "" && s.Mode != "autonomous" && s.Mode != "interactive" {
+		return fmt.Errorf("invalid mode %q: must be autonomous or interactive", s.Mode)
+	}
+
+	// Validate on_error if specified
+	if s.OnError != "" && s.OnError != "continue" && s.OnError != "fail" {
+		return fmt.Errorf("invalid on_error %q: must be continue or fail", s.OnError)
+	}
+
+	return nil
+}
+
+// ToStep converts an InlineStep to a Step.
+func (is *InlineStep) ToStep() *Step {
+	return &Step{
+		ID:            is.ID,
+		Executor:      is.Executor,
+		Needs:         is.Needs,
+		Timeout:       is.Timeout,
+		Agent:         is.Agent,
+		Prompt:        is.Prompt,
+		Mode:          is.Mode,
+		Command:       is.Command,
+		Workdir:       is.Workdir,
+		Env:           is.Env,
+		OnError:       is.OnError,
+		ShellOutputs:  is.ShellOutputs,
+		ResumeSession: is.ResumeSession,
+		Graceful:      is.Graceful,
+		Template:      is.Template,
+		Variables:     is.Variables,
+		Condition:     is.Condition,
+		OnTrue:        is.OnTrue,
+		OnFalse:       is.OnFalse,
+		OnTimeout:     is.OnTimeout,
+		Outputs:       is.Outputs,
+		// Legacy fields
+		Type:          is.Type,
+		Title:         is.Title,
+		Description:   is.Description,
+		Instructions:  is.Instructions,
+		Assignee:      is.Assignee,
+		Code:          is.Code,
+		Action:        is.Action,
+		Validation:    is.Validation,
+		Ephemeral:     is.Ephemeral,
+		LegacyOutputs: is.LegacyOutputs,
+	}
 }
 
 // TaskOutputSpec defines the expected outputs from a task step.
@@ -96,25 +276,55 @@ type ExpansionTarget struct {
 // InlineStep represents an inline step definition within an expansion target.
 // It mirrors the Step struct to ensure all fields are preserved when parsing inline steps.
 type InlineStep struct {
-	ID           string            `toml:"id"`
-	Title        string            `toml:"title,omitempty"`        // Human-readable title
-	Type         string            `toml:"type,omitempty"`         // task, collaborative, gate, condition, code, etc.
-	Description  string            `toml:"description,omitempty"`
-	Instructions string            `toml:"instructions,omitempty"`
-	Assignee     string            `toml:"assignee,omitempty"`
-	Needs        []string          `toml:"needs,omitempty"`
-	Condition    string            `toml:"condition,omitempty"`    // Shell condition for condition beads
-	Code         string            `toml:"code,omitempty"`         // Shell code for code beads
-	Template     string            `toml:"template,omitempty"`     // Child template reference
-	Variables    map[string]string `toml:"variables,omitempty"`    // Variables for child template
-	Ephemeral    bool              `toml:"ephemeral,omitempty"`    // Auto-cleanup after workflow
-	OnTrue       *ExpansionTarget  `toml:"on_true,omitempty"`      // Condition branch
-	OnFalse      *ExpansionTarget  `toml:"on_false,omitempty"`     // Condition branch
-	OnTimeout    *ExpansionTarget  `toml:"on_timeout,omitempty"`   // Condition timeout branch
-	Timeout      string            `toml:"timeout,omitempty"`      // Timeout duration
-	Outputs      *TaskOutputSpec   `toml:"outputs,omitempty"`      // Task output specifications
-	Action       string            `toml:"action,omitempty"`       // notify, etc.
-	Validation   string            `toml:"validation,omitempty"`   // Post-step validation
+	ID       string       `toml:"id"`
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent | gate
+
+	// Shared fields
+	Needs   []string `toml:"needs,omitempty"`
+	Timeout string   `toml:"timeout,omitempty"`
+
+	// Agent executor fields
+	Agent  string `toml:"agent,omitempty"`
+	Prompt string `toml:"prompt,omitempty"`
+	Mode   string `toml:"mode,omitempty"`
+
+	// Shell executor fields
+	Command      string                      `toml:"command,omitempty"`
+	Workdir      string                      `toml:"workdir,omitempty"`
+	Env          map[string]string           `toml:"env,omitempty"`
+	OnError      string                      `toml:"on_error,omitempty"`
+	ShellOutputs map[string]OutputSource     `toml:"shell_outputs,omitempty"`
+
+	// Spawn executor fields
+	ResumeSession string `toml:"resume_session,omitempty"`
+
+	// Kill executor fields
+	Graceful *bool `toml:"graceful,omitempty"`
+
+	// Expand executor fields
+	Template  string            `toml:"template,omitempty"`
+	Variables map[string]string `toml:"variables,omitempty"`
+
+	// Branch executor fields
+	Condition string           `toml:"condition,omitempty"`
+	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`
+	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`
+	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"`
+
+	// Agent outputs
+	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
+
+	// === Legacy fields ===
+	Type         string          `toml:"type,omitempty"`
+	Title        string          `toml:"title,omitempty"`
+	Description  string          `toml:"description,omitempty"`
+	Instructions string          `toml:"instructions,omitempty"`
+	Assignee     string          `toml:"assignee,omitempty"`
+	Code         string          `toml:"code,omitempty"`
+	Action       string          `toml:"action,omitempty"`
+	Validation   string          `toml:"validation,omitempty"`
+	Ephemeral    bool            `toml:"ephemeral,omitempty"`
+	LegacyOutputs *TaskOutputSpec `toml:"task_outputs,omitempty"`
 }
 
 // ParseFile parses a TOML template file from the given path.

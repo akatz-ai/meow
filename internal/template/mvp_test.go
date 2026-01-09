@@ -832,29 +832,31 @@ description = "Additional notes"
 	main := module.GetWorkflow("main")
 	step := main.Steps[0]
 
-	if step.Outputs == nil {
-		t.Fatal("expected outputs to be parsed")
+	// This test uses legacy output format (required/optional arrays)
+	// which now parses into LegacyOutputs instead of Outputs
+	if step.LegacyOutputs == nil {
+		t.Fatal("expected legacy outputs to be parsed")
 	}
-	if len(step.Outputs.Required) != 2 {
-		t.Fatalf("expected 2 required outputs, got %d", len(step.Outputs.Required))
+	if len(step.LegacyOutputs.Required) != 2 {
+		t.Fatalf("expected 2 required outputs, got %d", len(step.LegacyOutputs.Required))
 	}
-	if step.Outputs.Required[0].Name != "work_bead" {
-		t.Errorf("expected first required output name 'work_bead', got %q", step.Outputs.Required[0].Name)
+	if step.LegacyOutputs.Required[0].Name != "work_bead" {
+		t.Errorf("expected first required output name 'work_bead', got %q", step.LegacyOutputs.Required[0].Name)
 	}
-	if step.Outputs.Required[0].Type != "bead_id" {
-		t.Errorf("expected first required output type 'bead_id', got %q", step.Outputs.Required[0].Type)
+	if step.LegacyOutputs.Required[0].Type != "bead_id" {
+		t.Errorf("expected first required output type 'bead_id', got %q", step.LegacyOutputs.Required[0].Type)
 	}
-	if step.Outputs.Required[0].Description != "The bead to implement" {
-		t.Errorf("expected first required output description, got %q", step.Outputs.Required[0].Description)
+	if step.LegacyOutputs.Required[0].Description != "The bead to implement" {
+		t.Errorf("expected first required output description, got %q", step.LegacyOutputs.Required[0].Description)
 	}
-	if step.Outputs.Required[1].Name != "reason" {
-		t.Errorf("expected second required output name 'reason', got %q", step.Outputs.Required[1].Name)
+	if step.LegacyOutputs.Required[1].Name != "reason" {
+		t.Errorf("expected second required output name 'reason', got %q", step.LegacyOutputs.Required[1].Name)
 	}
-	if len(step.Outputs.Optional) != 1 {
-		t.Fatalf("expected 1 optional output, got %d", len(step.Outputs.Optional))
+	if len(step.LegacyOutputs.Optional) != 1 {
+		t.Fatalf("expected 1 optional output, got %d", len(step.LegacyOutputs.Optional))
 	}
-	if step.Outputs.Optional[0].Name != "notes" {
-		t.Errorf("expected optional output name 'notes', got %q", step.Outputs.Optional[0].Name)
+	if step.LegacyOutputs.Optional[0].Name != "notes" {
+		t.Errorf("expected optional output name 'notes', got %q", step.LegacyOutputs.Optional[0].Name)
 	}
 }
 
