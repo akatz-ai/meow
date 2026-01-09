@@ -1,0 +1,325 @@
+# ============================================================================
+# MEOW Workflow: Single Agent Task Runner
+# ============================================================================
+#
+# Full single-agent workflow with parameterized task input:
+#   1. Create worktree
+#   2. Spawn agent -> work (from input prompt) -> self-review -> verify-clean -> kill
+#   3. Spawn merge agent -> review changes -> merge to main -> kill
+#
+# Usage:
+#   meow run .meow/templates/single-agent-task.meow.toml \
+#     --var task_prompt="Your task description here" \
+#     --var agent_name="my-agent" \
+#     --var track_name="my-track"
+#
+# Or with a file:
+#   meow run .meow/templates/single-agent-task.meow.toml \
+#     --var-file task_prompt=path/to/prompt.md
+#
+# ============================================================================
+
+[main]
+name = "single-agent-task"
+description = "Parameterized single-agent workflow with full lifecycle"
+
+[main.variables]
+agent_name = { default = "work-agent", description = "Name for the work agent" }
+track_name = { default = "work", description = "Human-readable track name" }
+task_prompt = { required = true, description = "The task prompt for the agent" }
+
+cleanup = """
+echo "Cleaning up worktree..."
+git worktree remove .meow/worktrees/{{track_name}}-track --force 2>/dev/null || true
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Create Worktree
+# ============================================================================
+
+[[main.steps]]
+id = "create-worktree"
+executor = "shell"
+description = "Create worktree for {{track_name}} agent"
+command = """
+set -e
+WORKTREE=".meow/worktrees/{{track_name}}-track"
+BRANCH="{{track_name}}-track-$(date +%s)"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/{{track_name}}-track/.meow-branch" }
+
+# ============================================================================
+# PHASE 2: Work Agent Lifecycle
+# ============================================================================
+
+# Step 2.1: Spawn the work agent
+[[main.steps]]
+id = "spawn-work-agent"
+executor = "spawn"
+agent = "{{agent_name}}"
+workdir = "{{create-worktree.outputs.path}}"
+needs = ["create-worktree"]
+
+# Step 2.2: Main work - execute the provided task
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["spawn-work-agent"]
+prompt = """
+# {{track_name}} Agent Task
+
+## Your Assignment
+
+{{task_prompt}}
+
+## Workflow Guidelines
+
+1. Read any referenced files or specs before starting implementation
+2. Write tests first when appropriate (TDD approach)
+3. Implement the minimum code needed
+4. Commit your changes with clear messages
+5. If you discover related work needed, note it but do NOT implement it
+
+## When Done
+
+After completing your assigned task, run:
+
+```
+meow done
+```
+"""
+
+# Step 2.3: Self-review with fresh eyes
+[[main.steps]]
+id = "review"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["work"]
+prompt = """
+# Self-Review: {{track_name}} Track
+
+Take a step back and carefully reread your most recent code changes with fresh eyes.
+
+## Review Checklist
+
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Check for confusing patterns** - would another developer understand this?
+5. **Verify test coverage** - do tests actually test the important behavior?
+6. **Check imports** - any unused imports? Missing imports that will cause build failures?
+
+## Actions
+
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
+
+## When Done
+
+After reviewing and fixing any issues found, run:
+
+```
+meow done
+```
+"""
+
+# Step 2.4: Verify all changes are committed
+[[main.steps]]
+id = "verify-clean"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["review"]
+prompt = """
+# Final Commit Check: {{track_name}} Track
+
+Ensure ALL your changes are committed before this track completes.
+
+## Steps
+
+1. Run `git status` to check for any uncommitted changes
+2. If there are uncommitted changes:
+   - Stage them: `git add -A`
+   - Commit with message: "chore: final changes for {{track_name}} track"
+3. Run `git status` again to verify working directory is clean
+4. Run `git log --oneline -5` to show recent commits
+
+## Important
+
+Do NOT proceed until `git status` shows a clean working directory.
+
+When your working directory is clean, run:
+
+```
+meow done
+```
+"""
+
+# Step 2.5: Kill the work agent
+[[main.steps]]
+id = "kill-work-agent"
+executor = "kill"
+agent = "{{agent_name}}"
+needs = ["verify-clean"]
+graceful = true
+
+# Step 2.6: Completion marker
+[[main.steps]]
+id = "work-track-done"
+executor = "shell"
+command = "echo '{{track_name}} track complete - agent work finished'"
+needs = ["kill-work-agent"]
+
+# ============================================================================
+# PHASE 3: Merge Agent Lifecycle
+# ============================================================================
+
+# Step 3.1: Spawn merge agent
+[[main.steps]]
+id = "spawn-merge-agent"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{create-worktree.outputs.path}}"
+needs = ["work-track-done"]
+
+# Step 3.2: Review all changes
+[[main.steps]]
+id = "merge-review"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn-merge-agent"]
+prompt = """
+# Review Agent: {{track_name}} Track
+
+You are the reviewer. Your job is to verify the implementation work before merging to main.
+
+## Your Tasks
+
+### 1. Review All Changes
+
+Run these commands to understand what was implemented:
+
+```bash
+git log --oneline main..HEAD
+git diff --stat main..HEAD
+```
+
+### 2. Spot Check the Code
+
+Look at the actual changes:
+
+```bash
+git diff main..HEAD
+```
+
+Check for:
+- Code that looks incorrect or buggy
+- Missing error handling
+- Incomplete implementations
+- Dead code or unused imports
+
+### 3. Run Tests (if applicable)
+
+If the project has tests:
+
+```bash
+go test ./... 2>&1 | tail -20
+```
+
+### 4. Fix Minor Issues
+
+If you find small issues (typos, missing error checks, etc.), fix them directly and commit:
+
+```bash
+git add -A && git commit -m "fix: review corrections"
+```
+
+For larger issues, document them but do NOT attempt fixes.
+
+## When Done
+
+After review is complete, run:
+
+```
+meow done
+```
+"""
+
+# Step 3.3: Merge to main
+[[main.steps]]
+id = "merge-to-main"
+executor = "agent"
+agent = "merge-agent"
+needs = ["merge-review"]
+prompt = """
+# Merge to Main
+
+Reviews complete. Now merge the {{track_name}} branch to main.
+
+## Steps
+
+1. Get the branch name:
+   ```bash
+   BRANCH=$(cat .meow-branch)
+   echo "Branch to merge: $BRANCH"
+   ```
+
+2. Go to main repo and merge:
+   ```bash
+   cd /data/projects/meow-machine
+   git merge "$BRANCH" --no-edit -m "Merge: {{track_name}} track implementation"
+   ```
+
+3. Verify the merge:
+   ```bash
+   git log --oneline -5
+   ```
+
+4. Run tests to ensure nothing broke:
+   ```bash
+   go test ./... 2>&1 | tail -20
+   ```
+
+## If Merge Conflicts
+
+If there are merge conflicts:
+1. List the conflicted files
+2. Resolve each conflict carefully
+3. Stage resolved files: `git add <file>`
+4. Complete the merge: `git commit`
+
+## When Done
+
+After successful merge, run:
+
+```
+meow done
+```
+"""
+
+# Step 3.4: Kill merge agent
+[[main.steps]]
+id = "kill-merge-agent"
+executor = "kill"
+agent = "merge-agent"
+needs = ["merge-to-main"]
+graceful = true
+
+# Step 3.5: Workflow completion
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["kill-merge-agent"]
+command = """
+echo "=============================================="
+echo "  WORKFLOW COMPLETE: {{track_name}}"
+echo "=============================================="
+echo "Work completed and merged to main."
+echo "=============================================="
+"""
