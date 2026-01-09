@@ -1,0 +1,168 @@
+# ============================================================================
+# MEOW Workflow: Simple E2E Test
+# ============================================================================
+#
+# Minimal workflow for testing the full agent lifecycle:
+#   1. Create worktree
+#   2. Spawn agent -> simple task -> kill
+#   3. Spawn merge agent -> review -> merge to main -> kill
+#
+# Usage:
+#   meow run .meow/templates/simple-e2e-test.meow.toml
+#
+# ============================================================================
+
+[main]
+name = "simple-e2e-test"
+description = "Minimal single-agent workflow for E2E testing"
+
+cleanup = """
+echo "Cleaning up worktree..."
+git worktree remove .meow/worktrees/test-track --force 2>/dev/null || true
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Create Worktree
+# ============================================================================
+
+[[main.steps]]
+id = "create-worktree"
+executor = "shell"
+description = "Create worktree for test agent"
+command = """
+set -e
+WORKTREE=".meow/worktrees/test-track"
+BRANCH="test-track-$(date +%s)"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+branch = { source = "file:.meow/worktrees/test-track/.meow-branch" }
+
+# ============================================================================
+# PHASE 2: Test Agent Lifecycle
+# ============================================================================
+
+[[main.steps]]
+id = "spawn-test-agent"
+executor = "spawn"
+agent = "test-agent"
+workdir = "{{create-worktree.outputs.path}}"
+needs = ["create-worktree"]
+
+[[main.steps]]
+id = "test-agent-work"
+executor = "agent"
+agent = "test-agent"
+needs = ["spawn-test-agent"]
+prompt = """
+# Simple Test Task
+
+You are a test agent. Your ONLY task is very simple:
+
+1. Create a file at `.meow/test-artifacts/hello.txt` with the content:
+   ```
+   Hello from MEOW workflow!
+   Generated at: <current timestamp>
+   ```
+
+2. Run `git add .meow/test-artifacts/hello.txt`
+
+3. Run `git commit -m "test: add hello.txt from e2e workflow"`
+
+4. Run `git status` to verify clean working directory
+
+5. Run `meow done` when complete
+
+That's it! Just create one file and commit it.
+"""
+
+[[main.steps]]
+id = "kill-test-agent"
+executor = "kill"
+agent = "test-agent"
+needs = ["test-agent-work"]
+graceful = true
+
+[[main.steps]]
+id = "test-track-done"
+executor = "shell"
+command = "echo 'Test agent work complete'"
+needs = ["kill-test-agent"]
+
+# ============================================================================
+# PHASE 3: Merge Agent Lifecycle
+# ============================================================================
+
+[[main.steps]]
+id = "spawn-merge-agent"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{create-worktree.outputs.path}}"
+needs = ["test-track-done"]
+
+[[main.steps]]
+id = "merge-agent-review"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn-merge-agent"]
+prompt = """
+# Review and Merge Task
+
+You are the merge agent. Review the test agent's work and merge to main.
+
+## Steps
+
+1. First, check what was done:
+   ```bash
+   git log --oneline main..HEAD
+   git diff --stat main..HEAD
+   ```
+
+2. Verify the test file exists:
+   ```bash
+   cat .meow/test-artifacts/hello.txt
+   ```
+
+3. Now merge to main (from within the worktree):
+   ```bash
+   # Go to the main repo
+   cd /data/projects/meow-machine
+
+   # Get the branch name
+   BRANCH=$(cat .meow/worktrees/test-track/.meow-branch)
+
+   # Merge the branch
+   git merge "$BRANCH" --no-edit -m "Merge: E2E test workflow"
+   ```
+
+4. Verify the merge:
+   ```bash
+   git log --oneline -5
+   ls -la .meow/test-artifacts/
+   ```
+
+5. Run `meow done` when complete
+"""
+
+[[main.steps]]
+id = "kill-merge-agent"
+executor = "kill"
+agent = "merge-agent"
+needs = ["merge-agent-review"]
+graceful = true
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["kill-merge-agent"]
+command = """
+echo "=============================================="
+echo "  E2E TEST WORKFLOW COMPLETE"
+echo "=============================================="
+echo "Test file created and merged to main."
+echo "=============================================="
+"""
