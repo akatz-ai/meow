@@ -196,7 +196,10 @@ func (w *Workflow) GetNextReadyStepForAgent(agentID string) *Step {
 // AgentIsIdle returns true if no step assigned to the agent is currently running.
 func (w *Workflow) AgentIsIdle(agentID string) bool {
 	for _, step := range w.Steps {
-		if step.Agent != nil && step.Agent.Agent == agentID && step.Status == StepStatusRunning {
+		if step.Executor == ExecutorAgent &&
+			step.Agent != nil &&
+			step.Agent.Agent == agentID &&
+			step.Status == StepStatusRunning {
 			return false
 		}
 	}

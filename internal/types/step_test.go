@@ -123,7 +123,7 @@ func TestStepValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("step ID cannot contain dots", func(t *testing.T) {
+	t.Run("step ID cannot contain dots (non-expanded)", func(t *testing.T) {
 		step := &Step{
 			ID:       "parent.child",
 			Executor: ExecutorShell,
@@ -131,6 +131,18 @@ func TestStepValidate(t *testing.T) {
 		}
 		if err := step.Validate(); err == nil {
 			t.Error("expected error for dot in ID")
+		}
+	})
+
+	t.Run("expanded step ID can contain dots", func(t *testing.T) {
+		step := &Step{
+			ID:           "parent.child",
+			Executor:     ExecutorShell,
+			Shell:        &ShellConfig{Command: "echo"},
+			ExpandedFrom: "parent", // This is an expanded step
+		}
+		if err := step.Validate(); err != nil {
+			t.Errorf("expanded step should allow dots: %v", err)
 		}
 	})
 

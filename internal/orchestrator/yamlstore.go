@@ -156,10 +156,8 @@ func (s *YAMLWorkflowStore) List(ctx context.Context, filter WorkflowFilter) ([]
 	var workflows []*types.Workflow
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".yaml") || name == ".lock" {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml.tmp") {
+		// Skip non-YAML files (including .yaml.tmp which ends in .tmp, not .yaml)
+		if !strings.HasSuffix(name, ".yaml") {
 			continue
 		}
 

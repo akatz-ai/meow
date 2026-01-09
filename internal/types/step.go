@@ -220,7 +220,9 @@ func (s *Step) Validate() error {
 	if s.ID == "" {
 		return fmt.Errorf("step ID is required")
 	}
-	if strings.Contains(s.ID, ".") {
+	// Dots are reserved for expansion prefixes (e.g., "parent.child").
+	// Only reject dots for steps that aren't expanded from another step.
+	if strings.Contains(s.ID, ".") && s.ExpandedFrom == "" {
 		return fmt.Errorf("step ID cannot contain dots (reserved for expansion prefixes)")
 	}
 	if !s.Executor.Valid() {
