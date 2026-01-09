@@ -162,3 +162,78 @@ func (c *Client) SendApproval(workflow, gateID string, approved bool, notes, rea
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 }
+
+// SendEvent emits an event to the orchestrator.
+// Returns nil on success (fire-and-forget).
+func (c *Client) SendEvent(eventType string, data map[string]any) error {
+	msg := &EventMessage{
+		Type:      MsgEvent,
+		EventType: eventType,
+		Data:      data,
+	}
+
+	response, err := c.Send(msg)
+	if err != nil {
+		return err
+	}
+
+	switch r := response.(type) {
+	case *AckMessage:
+		if !r.Success {
+			return fmt.Errorf("event was not acknowledged")
+		}
+		return nil
+	case *ErrorMessage:
+		return fmt.Errorf("server error: %s", r.Message)
+	default:
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+}
+
+// AwaitEvent waits for an event matching the given type and filters.
+// Returns the matching event data or an error (including timeout).
+func (c *Client) AwaitEvent(eventType string, filter map[string]string, timeout string) (*EventMatchMessage, error) {
+	msg := &AwaitEventMessage{
+		Type:      MsgAwaitEvent,
+		EventType: eventType,
+		Filter:    filter,
+		Timeout:   timeout,
+	}
+
+	response, err := c.Send(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	switch r := response.(type) {
+	case *EventMatchMessage:
+		return r, nil
+	case *ErrorMessage:
+		return nil, fmt.Errorf("%s", r.Message)
+	default:
+		return nil, fmt.Errorf("unexpected response type: %T", response)
+	}
+}
+
+// GetStepStatus gets the status of a step in a workflow.
+func (c *Client) GetStepStatus(workflow, stepID string) (string, error) {
+	msg := &GetStepStatusMessage{
+		Type:     MsgGetStepStatus,
+		Workflow: workflow,
+		StepID:   stepID,
+	}
+
+	response, err := c.Send(msg)
+	if err != nil {
+		return "", err
+	}
+
+	switch r := response.(type) {
+	case *StepStatusMessage:
+		return r.Status, nil
+	case *ErrorMessage:
+		return "", fmt.Errorf("server error: %s", r.Message)
+	default:
+		return "", fmt.Errorf("unexpected response type: %T", response)
+	}
+}

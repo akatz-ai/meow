@@ -14,23 +14,30 @@ type MessageType string
 
 const (
 	// Request types (agent → orchestrator)
-	MsgStepDone     MessageType = "step_done"
-	MsgGetPrompt    MessageType = "get_prompt"
-	MsgGetSessionID MessageType = "get_session_id"
-	MsgApproval     MessageType = "approval"
+	MsgStepDone      MessageType = "step_done"
+	MsgGetPrompt     MessageType = "get_prompt"
+	MsgGetSessionID  MessageType = "get_session_id"
+	MsgApproval      MessageType = "approval"
+	MsgEvent         MessageType = "event"
+	MsgAwaitEvent    MessageType = "await_event"
+	MsgGetStepStatus MessageType = "get_step_status"
 
 	// Response types (orchestrator → agent)
-	MsgAck       MessageType = "ack"
-	MsgError     MessageType = "error"
-	MsgPrompt    MessageType = "prompt"
-	MsgSessionID MessageType = "session_id"
+	MsgAck        MessageType = "ack"
+	MsgError      MessageType = "error"
+	MsgPrompt     MessageType = "prompt"
+	MsgSessionID  MessageType = "session_id"
+	MsgEventMatch MessageType = "event_match"
+	MsgStepStatus MessageType = "step_status"
 )
 
 // Valid returns true if this is a recognized message type.
 func (t MessageType) Valid() bool {
 	switch t {
 	case MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval,
-		MsgAck, MsgError, MsgPrompt, MsgSessionID:
+		MsgEvent, MsgAwaitEvent, MsgGetStepStatus,
+		MsgAck, MsgError, MsgPrompt, MsgSessionID,
+		MsgEventMatch, MsgStepStatus:
 		return true
 	}
 	return false
@@ -39,7 +46,8 @@ func (t MessageType) Valid() bool {
 // IsRequest returns true if this message type is sent from agent to orchestrator.
 func (t MessageType) IsRequest() bool {
 	switch t {
-	case MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval:
+	case MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval,
+		MsgEvent, MsgAwaitEvent, MsgGetStepStatus:
 		return true
 	}
 	return false
@@ -48,7 +56,8 @@ func (t MessageType) IsRequest() bool {
 // IsResponse returns true if this message type is sent from orchestrator to agent.
 func (t MessageType) IsResponse() bool {
 	switch t {
-	case MsgAck, MsgError, MsgPrompt, MsgSessionID:
+	case MsgAck, MsgError, MsgPrompt, MsgSessionID,
+		MsgEventMatch, MsgStepStatus:
 		return true
 	}
 	return false
@@ -95,6 +104,39 @@ type ApprovalMessage struct {
 	Reason   string      `json:"reason,omitempty"` // For rejections
 }
 
+// EventMessage emits an event from an agent.
+// Sent by: meow event
+//
+// Events are fire-and-forget notifications that can be matched by await-event waiters.
+// The orchestrator adds Agent, Workflow, and Timestamp when processing.
+type EventMessage struct {
+	Type      MessageType    `json:"type"`       // Always "event"
+	EventType string         `json:"event_type"` // e.g., "agent-stopped", "tool-completed"
+	Data      map[string]any `json:"data"`       // Event-specific data
+	Agent     string         `json:"agent"`      // Which agent emitted (set by orchestrator)
+	Workflow  string         `json:"workflow"`   // Which workflow (set by orchestrator)
+	Timestamp int64          `json:"timestamp"`  // Unix timestamp (set by orchestrator)
+}
+
+// AwaitEventMessage waits for an event matching filters.
+// Sent by: meow await-event
+//
+// Blocks until a matching event arrives or timeout occurs.
+type AwaitEventMessage struct {
+	Type      MessageType       `json:"type"`       // Always "await_event"
+	EventType string            `json:"event_type"` // Event type to wait for
+	Filter    map[string]string `json:"filter"`     // Key-value filters (all must match)
+	Timeout   string            `json:"timeout"`    // Duration string, e.g., "5m"
+}
+
+// GetStepStatusMessage requests the status of a step.
+// Sent by: meow step-status
+type GetStepStatusMessage struct {
+	Type     MessageType `json:"type"`     // Always "get_step_status"
+	Workflow string      `json:"workflow"` // Workflow ID
+	StepID   string      `json:"step_id"`  // Step ID to query
+}
+
 // --- Response Messages (orchestrator → agent) ---
 
 // AckMessage confirms successful operation.
@@ -122,6 +164,21 @@ type SessionIDMessage struct {
 	SessionID string      `json:"session_id"`
 }
 
+// EventMatchMessage is returned when an awaited event matches.
+type EventMatchMessage struct {
+	Type      MessageType    `json:"type"`       // Always "event_match"
+	EventType string         `json:"event_type"` // The matched event type
+	Data      map[string]any `json:"data"`       // Event data
+	Timestamp int64          `json:"timestamp"`  // When the event was emitted
+}
+
+// StepStatusMessage returns the status of a step.
+type StepStatusMessage struct {
+	Type   MessageType `json:"type"`    // Always "step_status"
+	StepID string      `json:"step_id"` // Step ID
+	Status string      `json:"status"`  // "pending", "running", "completing", "done", "failed"
+}
+
 // --- Message Interface ---
 
 // Message is the interface implemented by all IPC messages.
@@ -132,14 +189,19 @@ type Message interface {
 
 // Implement Message interface for all message types
 
-func (m *StepDoneMessage) MessageType() MessageType    { return MsgStepDone }
-func (m *GetPromptMessage) MessageType() MessageType   { return MsgGetPrompt }
-func (m *GetSessionIDMessage) MessageType() MessageType { return MsgGetSessionID }
-func (m *ApprovalMessage) MessageType() MessageType    { return MsgApproval }
-func (m *AckMessage) MessageType() MessageType         { return MsgAck }
-func (m *ErrorMessage) MessageType() MessageType       { return MsgError }
-func (m *PromptMessage) MessageType() MessageType      { return MsgPrompt }
-func (m *SessionIDMessage) MessageType() MessageType   { return MsgSessionID }
+func (m *StepDoneMessage) MessageType() MessageType      { return MsgStepDone }
+func (m *GetPromptMessage) MessageType() MessageType     { return MsgGetPrompt }
+func (m *GetSessionIDMessage) MessageType() MessageType  { return MsgGetSessionID }
+func (m *ApprovalMessage) MessageType() MessageType      { return MsgApproval }
+func (m *EventMessage) MessageType() MessageType         { return MsgEvent }
+func (m *AwaitEventMessage) MessageType() MessageType    { return MsgAwaitEvent }
+func (m *GetStepStatusMessage) MessageType() MessageType { return MsgGetStepStatus }
+func (m *AckMessage) MessageType() MessageType           { return MsgAck }
+func (m *ErrorMessage) MessageType() MessageType         { return MsgError }
+func (m *PromptMessage) MessageType() MessageType        { return MsgPrompt }
+func (m *SessionIDMessage) MessageType() MessageType     { return MsgSessionID }
+func (m *EventMatchMessage) MessageType() MessageType    { return MsgEventMatch }
+func (m *StepStatusMessage) MessageType() MessageType    { return MsgStepStatus }
 
 // --- Parsing Helpers ---
 
@@ -166,6 +228,12 @@ func ParseMessage(data []byte) (Message, error) {
 		msg = &GetSessionIDMessage{}
 	case MsgApproval:
 		msg = &ApprovalMessage{}
+	case MsgEvent:
+		msg = &EventMessage{}
+	case MsgAwaitEvent:
+		msg = &AwaitEventMessage{}
+	case MsgGetStepStatus:
+		msg = &GetStepStatusMessage{}
 	case MsgAck:
 		msg = &AckMessage{}
 	case MsgError:
@@ -174,6 +242,10 @@ func ParseMessage(data []byte) (Message, error) {
 		msg = &PromptMessage{}
 	case MsgSessionID:
 		msg = &SessionIDMessage{}
+	case MsgEventMatch:
+		msg = &EventMatchMessage{}
+	case MsgStepStatus:
+		msg = &StepStatusMessage{}
 	default:
 		return nil, fmt.Errorf("unknown message type: %q", raw.Type)
 	}

@@ -15,10 +15,15 @@ func TestMessageType_Valid(t *testing.T) {
 		{MsgGetPrompt, true},
 		{MsgGetSessionID, true},
 		{MsgApproval, true},
+		{MsgEvent, true},
+		{MsgAwaitEvent, true},
+		{MsgGetStepStatus, true},
 		{MsgAck, true},
 		{MsgError, true},
 		{MsgPrompt, true},
 		{MsgSessionID, true},
+		{MsgEventMatch, true},
+		{MsgStepStatus, true},
 		{"unknown", false},
 		{"", false},
 	}
@@ -31,8 +36,8 @@ func TestMessageType_Valid(t *testing.T) {
 }
 
 func TestMessageType_IsRequest(t *testing.T) {
-	requests := []MessageType{MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval}
-	responses := []MessageType{MsgAck, MsgError, MsgPrompt, MsgSessionID}
+	requests := []MessageType{MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
+	responses := []MessageType{MsgAck, MsgError, MsgPrompt, MsgSessionID, MsgEventMatch, MsgStepStatus}
 
 	for _, mt := range requests {
 		if !mt.IsRequest() {
@@ -458,5 +463,189 @@ func TestStepDoneMessage_OutputTypes(t *testing.T) {
 	// Check bool value
 	if v, ok := got.Outputs["bool_val"].(bool); !ok || v != true {
 		t.Errorf("Outputs[bool_val] = %v, want true", got.Outputs["bool_val"])
+	}
+}
+
+func TestEventMessage_Marshal(t *testing.T) {
+	msg := EventMessage{
+		Type:      MsgEvent,
+		EventType: "tool-completed",
+		Data: map[string]any{
+			"tool":      "Bash",
+			"exit_code": 0,
+		},
+		Agent:     "worker-1",
+		Workflow:  "wf-abc123",
+		Timestamp: 1704825600,
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	// Verify single-line output
+	if strings.Count(string(data), "\n") > 0 {
+		t.Errorf("Marshal() produced multi-line output")
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*EventMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *EventMessage", parsed)
+	}
+
+	if got.EventType != msg.EventType {
+		t.Errorf("EventType = %q, want %q", got.EventType, msg.EventType)
+	}
+	if got.Agent != msg.Agent {
+		t.Errorf("Agent = %q, want %q", got.Agent, msg.Agent)
+	}
+	if got.Workflow != msg.Workflow {
+		t.Errorf("Workflow = %q, want %q", got.Workflow, msg.Workflow)
+	}
+	if got.Timestamp != msg.Timestamp {
+		t.Errorf("Timestamp = %d, want %d", got.Timestamp, msg.Timestamp)
+	}
+	if got.Data["tool"] != "Bash" {
+		t.Errorf("Data[tool] = %v, want 'Bash'", got.Data["tool"])
+	}
+}
+
+func TestAwaitEventMessage_Marshal(t *testing.T) {
+	msg := AwaitEventMessage{
+		Type:      MsgAwaitEvent,
+		EventType: "tool-completed",
+		Filter: map[string]string{
+			"tool":   "Bash",
+			"status": "success",
+		},
+		Timeout: "5m",
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*AwaitEventMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *AwaitEventMessage", parsed)
+	}
+
+	if got.EventType != msg.EventType {
+		t.Errorf("EventType = %q, want %q", got.EventType, msg.EventType)
+	}
+	if got.Timeout != msg.Timeout {
+		t.Errorf("Timeout = %q, want %q", got.Timeout, msg.Timeout)
+	}
+	if got.Filter["tool"] != "Bash" {
+		t.Errorf("Filter[tool] = %v, want 'Bash'", got.Filter["tool"])
+	}
+	if got.Filter["status"] != "success" {
+		t.Errorf("Filter[status] = %v, want 'success'", got.Filter["status"])
+	}
+}
+
+func TestGetStepStatusMessage_Marshal(t *testing.T) {
+	msg := GetStepStatusMessage{
+		Type:     MsgGetStepStatus,
+		Workflow: "wf-abc123",
+		StepID:   "impl.write-tests",
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*GetStepStatusMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *GetStepStatusMessage", parsed)
+	}
+
+	if got.Workflow != msg.Workflow {
+		t.Errorf("Workflow = %q, want %q", got.Workflow, msg.Workflow)
+	}
+	if got.StepID != msg.StepID {
+		t.Errorf("StepID = %q, want %q", got.StepID, msg.StepID)
+	}
+}
+
+func TestEventMatchMessage_Marshal(t *testing.T) {
+	msg := EventMatchMessage{
+		Type:      MsgEventMatch,
+		EventType: "tool-completed",
+		Data: map[string]any{
+			"tool":      "Bash",
+			"exit_code": 0,
+		},
+		Timestamp: 1704825600,
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*EventMatchMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *EventMatchMessage", parsed)
+	}
+
+	if got.EventType != msg.EventType {
+		t.Errorf("EventType = %q, want %q", got.EventType, msg.EventType)
+	}
+	if got.Timestamp != msg.Timestamp {
+		t.Errorf("Timestamp = %d, want %d", got.Timestamp, msg.Timestamp)
+	}
+}
+
+func TestStepStatusMessage_Marshal(t *testing.T) {
+	msg := StepStatusMessage{
+		Type:   MsgStepStatus,
+		StepID: "impl.write-tests",
+		Status: "done",
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*StepStatusMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *StepStatusMessage", parsed)
+	}
+
+	if got.StepID != msg.StepID {
+		t.Errorf("StepID = %q, want %q", got.StepID, msg.StepID)
+	}
+	if got.Status != msg.Status {
+		t.Errorf("Status = %q, want %q", got.Status, msg.Status)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -11,9 +12,10 @@ import (
 
 // IPCHandler implements ipc.Handler for the orchestrator.
 type IPCHandler struct {
-	store  WorkflowStore
-	agents *TmuxAgentManager
-	logger *slog.Logger
+	store       WorkflowStore
+	agents      *TmuxAgentManager
+	eventRouter *EventRouter
+	logger      *slog.Logger
 }
 
 // NewIPCHandler creates a new IPC handler.
@@ -22,10 +24,16 @@ func NewIPCHandler(store WorkflowStore, agents *TmuxAgentManager, logger *slog.L
 		logger = slog.Default()
 	}
 	return &IPCHandler{
-		store:  store,
-		agents: agents,
-		logger: logger.With("component", "ipc-handler"),
+		store:       store,
+		agents:      agents,
+		eventRouter: NewEventRouter(logger),
+		logger:      logger.With("component", "ipc-handler"),
 	}
+}
+
+// EventRouter returns the event router for this handler.
+func (h *IPCHandler) EventRouter() *EventRouter {
+	return h.eventRouter
 }
 
 // HandleStepDone processes a step completion signal.
@@ -271,5 +279,104 @@ func (h *IPCHandler) HandleApproval(ctx context.Context, msg *ipc.ApprovalMessag
 	return &ipc.AckMessage{
 		Type:    ipc.MsgAck,
 		Success: true,
+	}
+}
+
+// HandleEvent processes an event emitted by an agent.
+func (h *IPCHandler) HandleEvent(ctx context.Context, msg *ipc.EventMessage) any {
+	h.logger.Info("handling event", "event_type", msg.EventType, "agent", msg.Agent)
+
+	// Add metadata
+	msg.Timestamp = time.Now().Unix()
+
+	// Route to waiters
+	matched := h.eventRouter.Route(msg)
+
+	h.logger.Info("event processed",
+		"event_type", msg.EventType,
+		"matched", matched,
+		"agent", msg.Agent,
+		"workflow", msg.Workflow,
+	)
+
+	return &ipc.AckMessage{
+		Type:    ipc.MsgAck,
+		Success: true,
+	}
+}
+
+// HandleAwaitEvent waits for an event matching the given criteria.
+func (h *IPCHandler) HandleAwaitEvent(ctx context.Context, msg *ipc.AwaitEventMessage) any {
+	h.logger.Debug("handling await_event", "event_type", msg.EventType, "filter", msg.Filter, "timeout", msg.Timeout)
+
+	// Parse timeout
+	timeout := 24 * time.Hour // Default timeout
+	if msg.Timeout != "" {
+		parsed, err := time.ParseDuration(msg.Timeout)
+		if err != nil {
+			h.logger.Warn("invalid timeout, using default", "timeout", msg.Timeout, "error", err)
+		} else {
+			timeout = parsed
+		}
+	}
+
+	// Register waiter
+	ch := h.eventRouter.RegisterWaiter(msg.EventType, msg.Filter, timeout)
+
+	// Wait for event or timeout
+	select {
+	case event, ok := <-ch:
+		if !ok {
+			// Channel closed = timeout
+			return &ipc.ErrorMessage{
+				Type:    ipc.MsgError,
+				Message: "timeout waiting for event",
+			}
+		}
+		return &ipc.EventMatchMessage{
+			Type:      ipc.MsgEventMatch,
+			EventType: event.EventType,
+			Data:      event.Data,
+			Timestamp: event.Timestamp,
+		}
+	case <-time.After(timeout):
+		return &ipc.ErrorMessage{
+			Type:    ipc.MsgError,
+			Message: "timeout waiting for event",
+		}
+	case <-ctx.Done():
+		return &ipc.ErrorMessage{
+			Type:    ipc.MsgError,
+			Message: "cancelled",
+		}
+	}
+}
+
+// HandleGetStepStatus returns the status of a step.
+func (h *IPCHandler) HandleGetStepStatus(ctx context.Context, msg *ipc.GetStepStatusMessage) any {
+	h.logger.Debug("handling get_step_status", "workflow", msg.Workflow, "step_id", msg.StepID)
+
+	wf, err := h.store.Get(ctx, msg.Workflow)
+	if err != nil {
+		h.logger.Error("workflow not found", "workflow", msg.Workflow, "error", err)
+		return &ipc.ErrorMessage{
+			Type:    ipc.MsgError,
+			Message: fmt.Sprintf("workflow not found: %s", msg.Workflow),
+		}
+	}
+
+	step, ok := wf.GetStep(msg.StepID)
+	if !ok {
+		h.logger.Error("step not found", "step_id", msg.StepID)
+		return &ipc.ErrorMessage{
+			Type:    ipc.MsgError,
+			Message: fmt.Sprintf("step not found: %s", msg.StepID),
+		}
+	}
+
+	return &ipc.StepStatusMessage{
+		Type:   ipc.MsgStepStatus,
+		StepID: step.ID,
+		Status: string(step.Status),
 	}
 }
