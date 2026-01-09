@@ -50,7 +50,8 @@ type Workflow struct {
 	DoneAt    *time.Time     `yaml:"done_at,omitempty"`
 
 	// Configuration
-	Variables map[string]string `yaml:"variables,omitempty"`
+	Variables      map[string]string `yaml:"variables,omitempty"`
+	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Workflow-level default adapter
 
 	// Agent state - tracked for crash recovery and file_path validation
 	Agents map[string]*AgentInfo `yaml:"agents,omitempty"`

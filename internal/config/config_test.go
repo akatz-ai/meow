@@ -31,6 +31,13 @@ func TestDefault(t *testing.T) {
 	if cfg.Logging.Level != LogLevelInfo {
 		t.Errorf("Logging.Level = %s, want info", cfg.Logging.Level)
 	}
+	// Verify default adapter
+	if cfg.Agent.DefaultAdapter != "claude" {
+		t.Errorf("Agent.DefaultAdapter = %s, want claude", cfg.Agent.DefaultAdapter)
+	}
+	if cfg.Agent.SetupHooks != true {
+		t.Errorf("Agent.SetupHooks = %v, want true", cfg.Agent.SetupHooks)
+	}
 }
 
 func TestLoad(t *testing.T) {
@@ -196,7 +203,8 @@ func TestLoadFromDir(t *testing.T) {
 			t.Skip("Cannot get user home directory")
 		}
 
-		userConfigDir := filepath.Join(home, ".config", "meow")
+		// Per spec: ~/.meow/config.toml (not ~/.config/meow/config.toml)
+		userConfigDir := filepath.Join(home, ".meow")
 		userConfigPath := filepath.Join(userConfigDir, "config.toml")
 
 		// Check if config already exists (don't overwrite)
@@ -285,6 +293,46 @@ func TestConfig_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadFromDir_DefaultAdapter(t *testing.T) {
+	t.Run("default adapter from project config", func(t *testing.T) {
+		dir := t.TempDir()
+		meowDir := filepath.Join(dir, ".meow")
+		if err := os.MkdirAll(meowDir, 0755); err != nil {
+			t.Fatalf("Failed to create .meow dir: %v", err)
+		}
+
+		content := `
+[agent]
+default_adapter = "aider"
+`
+		configPath := filepath.Join(meowDir, "config.toml")
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write config: %v", err)
+		}
+
+		cfg, err := LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("LoadFromDir failed: %v", err)
+		}
+
+		if cfg.Agent.DefaultAdapter != "aider" {
+			t.Errorf("Agent.DefaultAdapter = %s, want aider", cfg.Agent.DefaultAdapter)
+		}
+	})
+
+	t.Run("default adapter falls back to claude", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg, err := LoadFromDir(dir)
+		if err != nil {
+			t.Fatalf("LoadFromDir failed: %v", err)
+		}
+
+		if cfg.Agent.DefaultAdapter != "claude" {
+			t.Errorf("Agent.DefaultAdapter = %s, want claude (default)", cfg.Agent.DefaultAdapter)
+		}
+	})
 }
 
 func TestConfig_PathHelpers(t *testing.T) {
