@@ -238,6 +238,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 		return readySteps[i].ID < readySteps[j].ID
 	})
 
+	// Track which steps we dispatched for merging later
+	dispatchedSteps := make(map[string]*types.Step)
+
 	// Process ALL ready steps (enables parallel agent execution)
 	for _, step := range readySteps {
 		// For agent steps, only dispatch if agent is idle
@@ -258,9 +261,67 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 				step.Fail(&types.StepError{Message: err.Error()})
 			}
 		}
+		dispatchedSteps[step.ID] = step
 	}
 
-	return o.store.Save(ctx, wf)
+	// If we dispatched any steps, we need to save. But first re-read the workflow
+	// to avoid overwriting concurrent IPC handler updates (race condition fix).
+	if len(dispatchedSteps) > 0 {
+		freshWf, err := o.store.Get(ctx, wf.ID)
+		if err != nil {
+			return fmt.Errorf("re-reading workflow before save: %w", err)
+		}
+
+		// Merge step states between our copy and fresh copy.
+		// Strategy: use the more "advanced" state for each step.
+		// - Our copy has synchronous step completions (shell/spawn/kill/expand)
+		// - Fresh copy may have IPC handler completions (agent steps)
+		for stepID, ourStep := range wf.Steps {
+			freshStep, ok := freshWf.GetStep(stepID)
+			if !ok {
+				// New step (from expand) - add to fresh
+				freshWf.Steps[stepID] = ourStep
+				continue
+			}
+
+			// Use the more advanced state
+			ourRank := stepStatusRank(ourStep.Status)
+			freshRank := stepStatusRank(freshStep.Status)
+
+			if ourRank > freshRank {
+				// Our step is more advanced - copy our state to fresh
+				freshStep.Status = ourStep.Status
+				freshStep.StartedAt = ourStep.StartedAt
+				freshStep.DoneAt = ourStep.DoneAt
+				freshStep.Outputs = ourStep.Outputs
+				freshStep.Error = ourStep.Error
+				freshStep.ExpandedInto = ourStep.ExpandedInto
+			}
+			// If fresh is more advanced (IPC handler completed it), keep fresh state
+		}
+
+		return o.store.Save(ctx, freshWf)
+	}
+
+	return nil
+}
+
+// stepStatusRank returns a numeric rank for step status (higher = more advanced).
+func stepStatusRank(status types.StepStatus) int {
+	switch status {
+	case types.StepStatusPending:
+		return 0
+	case types.StepStatusRunning:
+		return 1
+	case types.StepStatusCompleting:
+		return 2
+	case types.StepStatusDone:
+		return 3
+	case types.StepStatusFailed:
+		return 3 // Same as done - both terminal
+	default:
+		return 0
+	}
 }
 
 // dispatch routes a step to the appropriate executor handler.
