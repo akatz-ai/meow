@@ -539,16 +539,16 @@ outputs:
   test_file:
     required: false
     type: string
-mode: "autonomous"  # autonomous | interactive
+mode: "autonomous"  # autonomous | interactive | fire_forget
 timeout: "2h"       # Optional: max time for step
 ```
 
 **Fields:**
 - `agent` (required): Agent identifier
 - `prompt` (required): Instructions for the agent
-- `outputs` (optional): Expected output definitions
-- `mode` (optional): `autonomous` (default) or `interactive`
-- `timeout` (optional): Maximum time for step execution
+- `outputs` (optional): Expected output definitions (not allowed with `fire_forget` mode)
+- `mode` (optional): `autonomous` (default), `interactive`, or `fire_forget`
+- `timeout` (optional): Maximum time for step execution (not applicable to `fire_forget`)
 
 **Output Definition:**
 ```yaml
@@ -575,8 +575,49 @@ outputs:
 - If an agent changes directories during execution, relative paths still resolve against the original spawn workdir
 
 **Modes:**
-- `autonomous`: Normal execution—on step completion, orchestrator immediately injects next prompt
-- `interactive`: Pauses for human conversation—orchestrator returns empty prompt during stop hook, allowing natural Claude-human interaction
+- `autonomous`: Normal execution—waits for agent to call `meow done`, then orchestrator immediately injects next prompt
+- `interactive`: Pauses for human conversation—orchestrator returns empty prompt during stop hook, allowing natural Claude-human interaction. Still waits for `meow done`.
+- `fire_forget`: Inject prompt and immediately mark step done—does not wait for agent response. Useful for sending commands like `/compact`, `Escape` key presses, or other fire-and-forget instructions. Cannot have outputs.
+
+**Fire-and-Forget Use Cases:**
+
+The `fire_forget` mode leverages the robust prompt injection mechanism (copy mode handling, readiness detection, retry logic) without waiting for completion. Common uses:
+
+```yaml
+# Send a slash command to trigger context compaction
+[[steps]]
+id = "trigger-compact"
+executor = "agent"
+agent = "worker"
+prompt = "/compact"
+mode = "fire_forget"
+
+# Send Escape key to pause agent mid-work (aggressive compaction pattern)
+[[steps]]
+id = "pause-agent"
+executor = "agent"
+agent = "worker"
+prompt = "Escape"  # Special: single key name sends that key
+mode = "fire_forget"
+
+# Chain them: Escape then /compact for aggressive compaction
+[[steps]]
+id = "escape"
+executor = "agent"
+agent = "worker"
+prompt = "Escape"
+mode = "fire_forget"
+
+[[steps]]
+id = "compact"
+executor = "agent"
+agent = "worker"
+prompt = "/compact"
+mode = "fire_forget"
+needs = ["escape"]
+```
+
+**Note:** For `fire_forget` mode, the prompt injection still uses the full reliability mechanism (cancel copy mode, wait for Claude readiness, send with retry). The only difference is the step completes immediately after successful injection rather than waiting for `meow done`.
 
 **Timeout Behavior:**
 If specified, the orchestrator monitors step duration. If the step exceeds the timeout:
@@ -1371,6 +1412,197 @@ Events are an **enhancement**, not a requirement. Workflows work fine without th
 - If adapter doesn't support events → no events fire → `await-event` times out → workflow continues
 - If events aren't configured → same behavior
 - Events add observability and reactive patterns, but core orchestration doesn't depend on them
+
+### Context Monitor Pattern
+
+A common pattern is monitoring an agent's context usage and triggering `/compact` when it gets high. This uses `fire_forget` mode to inject commands without waiting for completion.
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      WORKFLOW                               │
+│                                                             │
+│  spawn-agent ─┬─► work-agent (agent executor, waits)        │
+│               │                                             │
+│               └─► start-monitor (expand, parallel)          │
+│                        │                                    │
+│                        ▼                                    │
+│                   context-monitor-loop (internal)           │
+│                        │                                    │
+│                        ├─► sleep 30s                        │
+│                        ├─► check session exists             │
+│                        ├─► check context %                  │
+│                        ├─► if high: fire_forget /compact    │
+│                        └─► recurse                          │
+│                                                             │
+│  kill-agent ◄── needs: [work-agent] (NOT monitor)           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Example Implementation:**
+
+```toml
+[main]
+name = "work-with-context-monitor"
+
+[[main.steps]]
+id = "spawn-worker"
+executor = "spawn"
+agent = "worker"
+workdir = "{{worktree}}"
+
+# Start monitor and work in parallel
+[[main.steps]]
+id = "start-monitor"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "worker", threshold = "85" }
+needs = ["spawn-worker"]
+
+[[main.steps]]
+id = "do-work"
+executor = "agent"
+agent = "worker"
+prompt = "Implement the feature..."
+needs = ["spawn-worker"]
+
+# Kill depends only on work, not monitor
+[[main.steps]]
+id = "kill-worker"
+executor = "kill"
+agent = "worker"
+needs = ["do-work"]
+
+
+# Context monitor loop (internal template)
+[context-monitor-loop]
+internal = true
+
+[context-monitor-loop.variables]
+agent = { required = true }
+threshold = { default = "90" }
+check_interval = { default = "30" }
+
+[[context-monitor-loop.steps]]
+id = "wait"
+executor = "shell"
+command = "sleep {{check_interval}}"
+
+[[context-monitor-loop.steps]]
+id = "check-session"
+executor = "branch"
+condition = "tmux has-session -t meow-${MEOW_WORKFLOW}-{{agent}} 2>/dev/null"
+needs = ["wait"]
+
+# Session gone - exit loop gracefully
+[context-monitor-loop.steps.on_false]
+inline = []
+
+# Session exists - check context
+[context-monitor-loop.steps.on_true]
+template = ".check-and-maybe-compact"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+
+
+[check-and-maybe-compact]
+internal = true
+
+[[check-and-maybe-compact.steps]]
+id = "get-context"
+executor = "shell"
+description = "Screen-scrape tmux for context percentage"
+command = """
+SESSION="meow-${MEOW_WORKFLOW}-{{agent}}"
+PERCENT=$(tmux capture-pane -p -t "$SESSION" -S -100 2>/dev/null | \
+    grep -oE '[0-9]+k/[0-9]+k \([0-9]+%\)' | tail -1 | \
+    grep -oE '\([0-9]+%\)' | tr -d '()%')
+echo "${PERCENT:-0}"
+"""
+[check-and-maybe-compact.steps.outputs]
+percent = { source = "stdout" }
+
+[[check-and-maybe-compact.steps]]
+id = "check-threshold"
+executor = "branch"
+condition = "test {{get-context.outputs.percent}} -ge {{threshold}}"
+needs = ["get-context"]
+
+# Below threshold - just loop
+[check-and-maybe-compact.steps.on_false]
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+
+# Above threshold - compact then loop
+[check-and-maybe-compact.steps.on_true]
+template = ".compact-and-continue"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+
+
+[compact-and-continue]
+internal = true
+
+[[compact-and-continue.steps]]
+id = "inject-compact"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "/compact"
+mode = "fire_forget"
+
+[[compact-and-continue.steps]]
+id = "wait-for-compact"
+executor = "shell"
+command = "sleep 60"
+needs = ["inject-compact"]
+
+[[compact-and-continue.steps]]
+id = "continue-loop"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+needs = ["wait-for-compact"]
+```
+
+**Key Points:**
+1. Monitor runs in parallel with main work via `expand` without dependencies between them
+2. Loop terminates naturally when `tmux has-session` fails (agent killed)
+3. `fire_forget` mode uses full injection reliability without waiting for response
+4. `kill-agent` depends only on `do-work`, not the monitor—so killing proceeds immediately when work completes
+5. All loop state is in the template recursion—no external polling process needed
+
+**Aggressive Compaction (with Escape):**
+
+For cases where you want to interrupt Claude mid-thought before compacting:
+
+```toml
+[compact-and-continue]
+internal = true
+
+# First send Escape to pause
+[[compact-and-continue.steps]]
+id = "send-escape"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Escape"
+mode = "fire_forget"
+
+# Small delay for escape to take effect
+[[compact-and-continue.steps]]
+id = "escape-delay"
+executor = "shell"
+command = "sleep 0.5"
+needs = ["send-escape"]
+
+# Then send /compact
+[[compact-and-continue.steps]]
+id = "inject-compact"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "/compact"
+mode = "fire_forget"
+needs = ["escape-delay"]
+
+# ... rest of loop continues ...
+```
 
 ---
 
@@ -3173,6 +3405,7 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 - [ ] Template parsing (module format)
 - [ ] `shell` executor
 - [ ] `agent` executor with prompt injection
+- [ ] Agent modes: `autonomous`, `interactive`, `fire_forget`
 - [ ] Basic persistence (workflow YAML files)
 - [ ] IPC server (Unix socket, single-line JSON)
 - [ ] `meow run`, `meow prime`, `meow done` commands
