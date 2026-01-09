@@ -11,7 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/meow-stack/meow-machine/internal/ipc"
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -211,17 +210,14 @@ func readWorkflowFile(path string) (*types.Workflow, error) {
 // buildPrimeOutput creates prime output from a workflow.
 func buildPrimeOutput(wf *types.Workflow, agentID string) (*PrimeOutput, error) {
 	// Find running step for this agent
+	// Note: We only show running steps, not pending/ready steps.
+	// The orchestrator will inject prompts when it starts a step.
 	step := wf.GetRunningStepForAgent(agentID)
 	if step == nil {
-		// Check for next ready step
-		nextStep := wf.GetNextReadyStepForAgent(agentID)
-		if nextStep == nil {
-			return &PrimeOutput{NoWork: true}, nil
-		}
-		step = nextStep
+		return &PrimeOutput{NoWork: true}, nil
 	}
 
-	// Check for completing state
+	// Check for completing state - step is transitioning, agent should wait
 	if step.Status == types.StepStatusCompleting {
 		return &PrimeOutput{NoWork: true}, nil
 	}
@@ -322,10 +318,4 @@ func formatPrimeText(output *PrimeOutput) string {
 	}
 
 	return sb.String()
-}
-
-// formatPrimePrompt creates prompt output for stop-hook injection.
-// This is called from GetPromptForStopHook in the orchestrator.
-func formatPrimePrompt(step *types.Step) string {
-	return orchestrator.GetPromptForStopHook(step)
 }

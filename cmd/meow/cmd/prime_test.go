@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -487,10 +488,10 @@ func TestFormatPrimeText_Interactive(t *testing.T) {
 	if text == "" {
 		t.Error("expected non-empty text")
 	}
-	if !contains(text, "Interactive mode") {
+	if !strings.Contains(text, "Interactive mode") {
 		t.Error("expected 'Interactive mode' in output")
 	}
-	if !contains(text, "wf-test") {
+	if !strings.Contains(text, "wf-test") {
 		t.Error("expected workflow ID in output")
 	}
 }
@@ -518,32 +519,19 @@ func TestFormatPrimeText_WithStep(t *testing.T) {
 	}
 	text := formatPrimeText(output)
 
-	if !contains(text, "do-work") {
+	if !strings.Contains(text, "do-work") {
 		t.Error("expected step ID in output")
 	}
-	if !contains(text, "autonomous mode") {
+	if !strings.Contains(text, "autonomous mode") {
 		t.Error("expected mode in output")
 	}
-	if !contains(text, "Write the code") {
+	if !strings.Contains(text, "Write the code") {
 		t.Error("expected prompt in output")
 	}
-	if !contains(text, "file_path") {
+	if !strings.Contains(text, "file_path") {
 		t.Error("expected output name in output")
 	}
-	if !contains(text, "meow done") {
+	if !strings.Contains(text, "meow done") {
 		t.Error("expected completion instructions in output")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
-}
-
-func containsMiddle(s, substr string) bool {
-	for i := 1; i < len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
