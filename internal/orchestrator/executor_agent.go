@@ -18,6 +18,9 @@ const (
 	AgentModeAutonomous AgentMode = "autonomous"
 	// AgentModeInteractive allows human conversation during step.
 	AgentModeInteractive AgentMode = "interactive"
+	// AgentModeFireForget injects prompt and completes immediately.
+	// Does not wait for meow done, cannot have outputs.
+	AgentModeFireForget AgentMode = "fire_forget"
 )
 
 // PromptInjector injects prompts into agent sessions via tmux.
@@ -76,6 +79,11 @@ func StartAgentStep(step *types.Step) (*AgentStartResult, *types.StepError) {
 		return nil, &types.StepError{Message: "agent step missing prompt field"}
 	}
 
+	// Validate fire_forget mode constraints
+	if cfg.Mode == string(AgentModeFireForget) && len(cfg.Outputs) > 0 {
+		return nil, &types.StepError{Message: "fire_forget mode cannot have outputs"}
+	}
+
 	// Build the full prompt with output expectations
 	prompt := buildAgentPrompt(cfg)
 
@@ -90,6 +98,11 @@ func buildAgentPrompt(cfg *types.AgentConfig) string {
 
 	// Main prompt
 	sb.WriteString(cfg.Prompt)
+
+	// Fire-and-forget mode: just the prompt, no meow done instructions
+	if cfg.Mode == string(AgentModeFireForget) {
+		return sb.String()
+	}
 
 	// Add output expectations if defined
 	if len(cfg.Outputs) > 0 {
@@ -262,7 +275,7 @@ func validateFilePath(path, workdir string) string {
 // This is called when Claude's stop hook fires to determine what to inject.
 //
 // Returns:
-// - Empty string: Agent should wait (interactive mode or step completing)
+// - Empty string: Agent should wait (interactive/fire_forget mode or step completing)
 // - Prompt string: Inject this prompt (autonomous mode, nudge agent to continue)
 func GetPromptForStopHook(step *types.Step) string {
 	if step == nil || step.Agent == nil {
@@ -288,6 +301,11 @@ func GetPromptForStopHook(step *types.Step) string {
 			return ""
 		}
 
+		if mode == AgentModeFireForget {
+			// Fire-forget step should already be done; if somehow running, don't re-inject
+			return ""
+		}
+
 		// Autonomous mode - re-inject prompt as nudge
 		return buildAgentPrompt(cfg)
 
@@ -302,7 +320,17 @@ func ParseAgentMode(s string) AgentMode {
 	switch strings.ToLower(s) {
 	case "interactive":
 		return AgentModeInteractive
+	case "fire_forget":
+		return AgentModeFireForget
 	default:
 		return AgentModeAutonomous
 	}
+}
+
+// IsFireForget returns true if the agent config is in fire_forget mode.
+func IsFireForget(cfg *types.AgentConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Mode == string(AgentModeFireForget)
 }

@@ -1,0 +1,325 @@
+# Claude Code Agent Utilities
+#
+# Reusable templates for Claude Code agent workflows.
+#
+# Usage:
+#   Import in your workflow templates:
+#     template = "lib/claude-utils#context-monitor"
+#     variables = { agent = "worker", threshold = "85" }
+#
+# Available Templates:
+#   - context-monitor: Monitor agent context and auto-compact when high
+#   - context-monitor-aggressive: Same as above but sends Escape first
+#   - send-compact: Fire-and-forget /compact injection
+#   - send-escape: Fire-and-forget Escape key injection
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONTEXT MONITOR (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Monitors an agent's context usage and triggers /compact when it exceeds
+# the threshold. Runs as a parallel loop that terminates when the agent
+# session is killed.
+#
+# Usage in workflows:
+#   [[main.steps]]
+#   id = "start-monitor"
+#   executor = "expand"
+#   template = "lib/claude-utils#context-monitor"
+#   variables = { agent = "worker", threshold = "85" }
+#   needs = ["spawn-worker"]
+
+[context-monitor]
+name = "context-monitor"
+description = "Monitor agent context and trigger /compact when above threshold"
+
+[context-monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+threshold = { default = "85", description = "Context % to trigger compact (0-100)" }
+check_interval = { default = "30", description = "Seconds between checks" }
+
+[[context-monitor.steps]]
+id = "start-loop"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "false" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONTEXT MONITOR AGGRESSIVE (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Same as context-monitor but sends Escape before /compact to interrupt
+# Claude mid-work. Use when you want to force compaction even if Claude
+# is in the middle of something.
+
+[context-monitor-aggressive]
+name = "context-monitor-aggressive"
+description = "Monitor context and compact aggressively (with Escape first)"
+
+[context-monitor-aggressive.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+threshold = { default = "85", description = "Context % to trigger compact (0-100)" }
+check_interval = { default = "30", description = "Seconds between checks" }
+
+[[context-monitor-aggressive.steps]]
+id = "start-loop"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "true" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEND COMPACT (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Fire-and-forget /compact injection. Use when you want to trigger
+# compaction without blocking.
+
+[send-compact]
+name = "send-compact"
+description = "Send /compact to agent (fire-and-forget)"
+
+[send-compact.variables]
+agent = { required = true, description = "Agent ID to compact" }
+
+[[send-compact.steps]]
+id = "inject-compact"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "/compact"
+mode = "fire_forget"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEND ESCAPE (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Fire-and-forget Escape key injection. Use to pause agent mid-work.
+
+[send-escape]
+name = "send-escape"
+description = "Send Escape key to agent (fire-and-forget)"
+
+[send-escape.variables]
+agent = { required = true, description = "Agent ID to send Escape" }
+
+[[send-escape.steps]]
+id = "send-escape"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Escape"
+mode = "fire_forget"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: CONTEXT MONITOR LOOP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[context-monitor-loop]
+name = "context-monitor-loop"
+description = "Internal: Main monitoring loop"
+internal = true
+
+[context-monitor-loop.variables]
+agent = { required = true }
+threshold = { default = "90" }
+check_interval = { default = "30" }
+aggressive = { default = "false" }
+
+# Wait before checking
+[[context-monitor-loop.steps]]
+id = "wait"
+executor = "shell"
+command = "sleep {{check_interval}}"
+
+# Check if tmux session still exists
+[[context-monitor-loop.steps]]
+id = "check-session"
+executor = "branch"
+condition = "tmux has-session -t meow-${MEOW_WORKFLOW}-{{agent}} 2>/dev/null"
+needs = ["wait"]
+
+# Session gone - exit loop gracefully (empty inline = noop)
+[context-monitor-loop.steps.on_false]
+inline = []
+
+# Session exists - continue to check context
+[context-monitor-loop.steps.on_true]
+template = ".check-and-maybe-compact"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "{{aggressive}}" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: CHECK AND MAYBE COMPACT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[check-and-maybe-compact]
+name = "check-and-maybe-compact"
+description = "Internal: Get context % and decide whether to compact"
+internal = true
+
+[check-and-maybe-compact.variables]
+agent = { required = true }
+threshold = { required = true }
+check_interval = { required = true }
+aggressive = { default = "false" }
+
+# Screen-scrape tmux for context percentage
+# Claude Code shows context like: "123k/200k (61%)"
+[[check-and-maybe-compact.steps]]
+id = "get-context"
+executor = "shell"
+command = """
+SESSION="meow-${MEOW_WORKFLOW}-{{agent}}"
+# Capture the last 100 lines and look for the context pattern
+PERCENT=$(tmux capture-pane -p -t "$SESSION" -S -100 2>/dev/null | \
+    grep -oE '[0-9]+k/[0-9]+k \\([0-9]+%\\)' | tail -1 | \
+    grep -oE '\\([0-9]+%\\)' | tr -d '()%')
+# Default to 0 if not found (Claude may not be showing context yet)
+echo "${PERCENT:-0}"
+"""
+
+[check-and-maybe-compact.steps.outputs]
+percent = { source = "stdout" }
+
+# Compare against threshold
+[[check-and-maybe-compact.steps]]
+id = "check-threshold"
+executor = "branch"
+condition = "test {{get-context.outputs.percent}} -ge {{threshold}}"
+needs = ["get-context"]
+
+# Below threshold - continue loop without compacting
+[check-and-maybe-compact.steps.on_false]
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "{{aggressive}}" }
+
+# Above threshold - compact then continue loop
+[check-and-maybe-compact.steps.on_true]
+template = ".do-compact-and-continue"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "{{aggressive}}" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: DO COMPACT AND CONTINUE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[do-compact-and-continue]
+name = "do-compact-and-continue"
+description = "Internal: Perform compaction and continue loop"
+internal = true
+
+[do-compact-and-continue.variables]
+agent = { required = true }
+threshold = { required = true }
+check_interval = { required = true }
+aggressive = { default = "false" }
+
+# Branch: aggressive vs normal compaction
+[[do-compact-and-continue.steps]]
+id = "choose-mode"
+executor = "branch"
+condition = "test '{{aggressive}}' = 'true'"
+
+# Aggressive mode: send Escape first
+[do-compact-and-continue.steps.on_true]
+template = ".compact-aggressive"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+
+# Normal mode: just send /compact
+[do-compact-and-continue.steps.on_false]
+template = ".compact-normal"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: COMPACT NORMAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[compact-normal]
+name = "compact-normal"
+description = "Internal: Normal compaction (just /compact)"
+internal = true
+
+[compact-normal.variables]
+agent = { required = true }
+threshold = { required = true }
+check_interval = { required = true }
+
+# Send /compact via fire-and-forget
+[[compact-normal.steps]]
+id = "inject-compact"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "/compact"
+mode = "fire_forget"
+
+# Wait for compaction to process (Claude needs time to compact)
+[[compact-normal.steps]]
+id = "wait-for-compact"
+executor = "shell"
+command = "sleep 60"
+needs = ["inject-compact"]
+
+# Continue monitoring loop
+[[compact-normal.steps]]
+id = "continue-loop"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "false" }
+needs = ["wait-for-compact"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: COMPACT AGGRESSIVE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[compact-aggressive]
+name = "compact-aggressive"
+description = "Internal: Aggressive compaction (Escape then /compact)"
+internal = true
+
+[compact-aggressive.variables]
+agent = { required = true }
+threshold = { required = true }
+check_interval = { required = true }
+
+# Send Escape first to interrupt Claude
+[[compact-aggressive.steps]]
+id = "send-escape"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Escape"
+mode = "fire_forget"
+
+# Small delay for Escape to take effect
+[[compact-aggressive.steps]]
+id = "escape-delay"
+executor = "shell"
+command = "sleep 0.5"
+needs = ["send-escape"]
+
+# Now send /compact
+[[compact-aggressive.steps]]
+id = "inject-compact"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "/compact"
+mode = "fire_forget"
+needs = ["escape-delay"]
+
+# Wait for compaction to process
+[[compact-aggressive.steps]]
+id = "wait-for-compact"
+executor = "shell"
+command = "sleep 60"
+needs = ["inject-compact"]
+
+# Continue monitoring loop
+[[compact-aggressive.steps]]
+id = "continue-loop"
+executor = "expand"
+template = ".context-monitor-loop"
+variables = { agent = "{{agent}}", threshold = "{{threshold}}", check_interval = "{{check_interval}}", aggressive = "true" }
+needs = ["wait-for-compact"]

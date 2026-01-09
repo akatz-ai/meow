@@ -556,6 +556,9 @@ func TestParseAgentMode(t *testing.T) {
 		{"interactive", AgentModeInteractive},
 		{"INTERACTIVE", AgentModeInteractive},
 		{"Interactive", AgentModeInteractive},
+		{"fire_forget", AgentModeFireForget},
+		{"FIRE_FORGET", AgentModeFireForget},
+		{"Fire_Forget", AgentModeFireForget},
 		{"", AgentModeAutonomous},
 		{"unknown", AgentModeAutonomous},
 	}
@@ -565,5 +568,156 @@ func TestParseAgentMode(t *testing.T) {
 		if result != tc.expected {
 			t.Errorf("ParseAgentMode(%q) = %q, expected %q", tc.input, result, tc.expected)
 		}
+	}
+}
+
+// --- Fire-and-Forget Mode Tests ---
+
+func TestStartAgentStep_FireForgetBasic(t *testing.T) {
+	step := &types.Step{
+		ID:       "compact-step",
+		Executor: types.ExecutorAgent,
+		Agent: &types.AgentConfig{
+			Agent:  "worker-1",
+			Prompt: "/compact",
+			Mode:   "fire_forget",
+		},
+	}
+
+	result, stepErr := StartAgentStep(step)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	// Fire-forget prompts should NOT contain meow done instructions
+	if strings.Contains(result.Prompt, "meow done") {
+		t.Errorf("fire_forget prompt should not mention 'meow done', got %q", result.Prompt)
+	}
+
+	// Should contain the original prompt
+	if result.Prompt != "/compact" {
+		t.Errorf("expected prompt to be just '/compact', got %q", result.Prompt)
+	}
+}
+
+func TestStartAgentStep_FireForgetRejectsOutputs(t *testing.T) {
+	step := &types.Step{
+		ID:       "bad-step",
+		Executor: types.ExecutorAgent,
+		Agent: &types.AgentConfig{
+			Agent:  "worker-1",
+			Prompt: "/compact",
+			Mode:   "fire_forget",
+			Outputs: map[string]types.AgentOutputDef{
+				"result": {Required: true, Type: "string"},
+			},
+		},
+	}
+
+	_, stepErr := StartAgentStep(step)
+	if stepErr == nil {
+		t.Fatal("expected error for fire_forget with outputs")
+	}
+	if stepErr.Message != "fire_forget mode cannot have outputs" {
+		t.Errorf("unexpected error: %s", stepErr.Message)
+	}
+}
+
+func TestStartAgentStep_FireForgetEscapeKey(t *testing.T) {
+	step := &types.Step{
+		ID:       "escape-step",
+		Executor: types.ExecutorAgent,
+		Agent: &types.AgentConfig{
+			Agent:  "worker-1",
+			Prompt: "Escape",
+			Mode:   "fire_forget",
+		},
+	}
+
+	result, stepErr := StartAgentStep(step)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	// Prompt should be just "Escape" without any meow done additions
+	if result.Prompt != "Escape" {
+		t.Errorf("expected prompt to be just 'Escape', got %q", result.Prompt)
+	}
+}
+
+func TestGetPromptForStopHook_FireForget(t *testing.T) {
+	step := &types.Step{
+		ID:       "fire-forget-step",
+		Executor: types.ExecutorAgent,
+		Status:   types.StepStatusRunning,
+		Agent: &types.AgentConfig{
+			Agent:  "worker-1",
+			Prompt: "/compact",
+			Mode:   "fire_forget",
+		},
+	}
+
+	prompt := GetPromptForStopHook(step)
+	if prompt != "" {
+		t.Errorf("expected empty prompt for fire_forget mode, got %q", prompt)
+	}
+}
+
+func TestIsFireForget(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *types.AgentConfig
+		expected bool
+	}{
+		{
+			name:     "nil config",
+			cfg:      nil,
+			expected: false,
+		},
+		{
+			name: "fire_forget mode",
+			cfg: &types.AgentConfig{
+				Agent:  "worker",
+				Prompt: "/compact",
+				Mode:   "fire_forget",
+			},
+			expected: true,
+		},
+		{
+			name: "autonomous mode",
+			cfg: &types.AgentConfig{
+				Agent:  "worker",
+				Prompt: "Do work",
+				Mode:   "autonomous",
+			},
+			expected: false,
+		},
+		{
+			name: "interactive mode",
+			cfg: &types.AgentConfig{
+				Agent:  "worker",
+				Prompt: "Do work",
+				Mode:   "interactive",
+			},
+			expected: false,
+		},
+		{
+			name: "empty mode (defaults to autonomous)",
+			cfg: &types.AgentConfig{
+				Agent:  "worker",
+				Prompt: "Do work",
+				Mode:   "",
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := IsFireForget(tc.cfg)
+			if result != tc.expected {
+				t.Errorf("IsFireForget() = %v, expected %v", result, tc.expected)
+			}
+		})
 	}
 }

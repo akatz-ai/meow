@@ -658,6 +658,15 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Workflow, step
 		return fmt.Errorf("injecting prompt: %w", err)
 	}
 
+	// Fire-and-forget mode: complete immediately after injection
+	if IsFireForget(step.Agent) {
+		if err := step.Complete(nil); err != nil {
+			return fmt.Errorf("completing fire-forget step: %w", err)
+		}
+		o.logger.Info("fire-forget step completed", "step", step.ID)
+		return nil
+	}
+
 	// Agent step stays running until agent calls meow done
 	return nil
 }
