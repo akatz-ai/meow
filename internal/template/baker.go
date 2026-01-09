@@ -138,16 +138,10 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 		stepToID[step.ID] = beadID
 	}
 
-	// Determine HookBead from hooks_to variable
-	var hookBead string
-	if workflow.HooksTo != "" {
-		hookBead = b.VarContext.Get(workflow.HooksTo)
-	}
-
 	// Process steps (order doesn't matter for baking - Needs field handles runtime ordering)
 	var beads []*types.Bead
 	for _, step := range workflow.Steps {
-		bead, err := b.workflowStepToBead(step, stepToID, workflow, hookBead)
+		bead, err := b.workflowStepToBead(step, stepToID, workflow)
 		if err != nil {
 			return nil, fmt.Errorf("bake step %q: %w", step.ID, err)
 		}
@@ -162,7 +156,7 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 }
 
 // workflowStepToBead converts a module-format workflow step to a bead with tier detection.
-func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workflow *Workflow, hookBead string) (*types.Bead, error) {
+func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workflow *Workflow) (*types.Bead, error) {
 	beadID := stepToID[step.ID]
 
 	// Set step-specific builtins BEFORE substitution
@@ -231,7 +225,6 @@ func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workf
 		Needs:          needs,
 		Parent:         b.ParentBead,
 		Tier:           tier,
-		HookBead:       hookBead,
 		SourceWorkflow: workflow.Name,
 		WorkflowID:     b.WorkflowID,
 		CreatedAt:      b.Now(),
@@ -243,8 +236,8 @@ func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workf
 		bead.Assignee = ""
 	}
 
-	// Add ephemeral label if step or workflow is ephemeral
-	if step.Ephemeral || workflow.Ephemeral {
+	// Add ephemeral label if step is ephemeral
+	if step.Ephemeral {
 		bead.Labels = append(bead.Labels, "meow:ephemeral")
 	}
 
@@ -263,7 +256,8 @@ func (b *Baker) workflowStepToBead(step *Step, stepToID map[string]string, workf
 	return bead, nil
 }
 
-// determineTier determines the bead tier based on workflow and step type.
+// determineTier determines the bead tier based on step type.
+// Note: workflow.Ephemeral is no longer supported; use step.Ephemeral instead.
 func (b *Baker) determineTier(step *Step, workflow *Workflow) types.BeadTier {
 	stepType := step.Type
 	if stepType == "" {
@@ -272,7 +266,8 @@ func (b *Baker) determineTier(step *Step, workflow *Workflow) types.BeadTier {
 
 	switch stepType {
 	case "task", "collaborative":
-		if workflow.Ephemeral {
+		// Check step-level ephemeral flag
+		if step.Ephemeral {
 			return types.TierWisp
 		}
 		return types.TierWork
@@ -418,8 +413,12 @@ func (b *Baker) setTypeSpec(bead *types.Bead, step *Step, stepToID map[string]st
 	switch bead.Type {
 	case types.BeadTypeTask:
 		// Set task output specifications if defined
-		if step.Outputs != nil {
-			bead.TaskOutputs = taskOutputSpecToTypes(step.Outputs)
+		// Use LegacyOutputs for backwards compatibility, or convert new Outputs format
+		if step.LegacyOutputs != nil {
+			bead.TaskOutputs = taskOutputSpecToTypes(step.LegacyOutputs)
+		} else if len(step.Outputs) > 0 {
+			// Convert new format to legacy format for beads
+			bead.TaskOutputs = agentOutputsToTaskOutputSpec(step.Outputs)
 		}
 		return nil
 
@@ -554,6 +553,31 @@ func taskOutputSpecToTypes(spec *TaskOutputSpec) *types.TaskOutputSpec {
 			Type:        types.TaskOutputType(def.Type),
 			Description: def.Description,
 		})
+	}
+
+	return result
+}
+
+// agentOutputsToTaskOutputSpec converts new-format agent outputs to legacy TaskOutputSpec.
+// This is a transitional helper - will be removed when baker is refactored.
+func agentOutputsToTaskOutputSpec(outputs map[string]AgentOutputDef) *types.TaskOutputSpec {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	result := &types.TaskOutputSpec{}
+
+	for name, def := range outputs {
+		taskDef := types.TaskOutputDef{
+			Name:        name,
+			Type:        types.TaskOutputType(def.Type),
+			Description: def.Description,
+		}
+		if def.Required {
+			result.Required = append(result.Required, taskDef)
+		} else {
+			result.Optional = append(result.Optional, taskDef)
+		}
 	}
 
 	return result

@@ -402,71 +402,8 @@ func TestValidateFullModule_ExternalReferenceSkipped(t *testing.T) {
 	}
 }
 
-// hooks_to validation tests
-
-func TestValidateFullModule_ValidHooksTo(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"implement": {
-				Name:      "implement",
-				Ephemeral: true,
-				HooksTo:   "work_bead",
-				Variables: map[string]*Var{
-					"work_bead": {Required: true},
-				},
-				Steps: []*Step{{ID: "step-1"}},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if containsModuleError(result, "hooks_to") {
-		t.Errorf("expected no hooks_to error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_HooksToUndefinedVariable(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"implement": {
-				Name:      "implement",
-				Ephemeral: true,
-				HooksTo:   "missing_var",
-				Variables: map[string]*Var{
-					"work_bead": {Required: true},
-				},
-				Steps: []*Step{{ID: "step-1"}},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "hooks_to references undefined variable") {
-		t.Errorf("expected hooks_to error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_HooksToNoVariablesDefined(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"implement": {
-				Name:      "implement",
-				Ephemeral: true,
-				HooksTo:   "work_bead",
-				// No variables defined
-				Steps: []*Step{{ID: "step-1"}},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "no variables are defined") {
-		t.Errorf("expected hooks_to error, got: %v", result.Error())
-	}
-}
+// Note: hooks_to validation tests removed - hooks_to is no longer supported
+// (MVP-SPEC-v2 is task-tracking agnostic)
 
 // Variable reference tests
 

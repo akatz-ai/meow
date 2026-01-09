@@ -27,13 +27,11 @@ type Module struct {
 
 // Workflow represents a single workflow within a module.
 type Workflow struct {
-	Name        string           `toml:"name"`
-	Description string           `toml:"description,omitempty"`
-	Ephemeral   bool             `toml:"ephemeral,omitempty"`   // All steps become wisps
-	Internal    bool             `toml:"internal,omitempty"`    // Cannot be called from outside
-	HooksTo     string           `toml:"hooks_to,omitempty"`    // Variable name for HookBead
-	Variables   map[string]*Var  `toml:"variables,omitempty"`   // Reuses template.Var
-	Steps       []*Step          `toml:"steps"`
+	Name        string          `toml:"name"`
+	Description string          `toml:"description,omitempty"`
+	Internal    bool            `toml:"internal,omitempty"` // Cannot be called from outside
+	Variables   map[string]*Var `toml:"variables,omitempty"`
+	Steps       []*Step         `toml:"steps"`
 }
 
 // GetWorkflow returns the workflow with the given name, or nil if not found.
@@ -136,15 +134,11 @@ func parseWorkflow(name string, data map[string]any) (*Workflow, error) {
 	if v, ok := data["description"].(string); ok {
 		w.Description = v
 	}
-	if v, ok := data["ephemeral"].(bool); ok {
-		w.Ephemeral = v
-	}
 	if v, ok := data["internal"].(bool); ok {
 		w.Internal = v
 	}
-	if v, ok := data["hooks_to"].(string); ok {
-		w.HooksTo = v
-	}
+	// Note: ephemeral and hooks_to are no longer supported
+	// They are ignored if present in templates for backwards compatibility
 
 	// Parse variables
 	if vars, ok := data["variables"].(map[string]any); ok {
@@ -208,36 +202,14 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		return nil, fmt.Errorf("step missing id")
 	}
 
-	// Parse optional fields
-	if v, ok := data["type"].(string); ok {
-		s.Type = v
+	// Parse executor field (new format)
+	if v, ok := data["executor"].(string); ok {
+		s.Executor = ExecutorType(v)
 	}
-	if v, ok := data["title"].(string); ok {
-		s.Title = v
-	}
-	if v, ok := data["description"].(string); ok {
-		s.Description = v
-	}
-	if v, ok := data["instructions"].(string); ok {
-		s.Instructions = v
-	}
-	if v, ok := data["assignee"].(string); ok {
-		s.Assignee = v
-	}
-	if v, ok := data["condition"].(string); ok {
-		s.Condition = v
-	}
-	if v, ok := data["code"].(string); ok {
-		s.Code = v
-	}
+
+	// Parse shared fields
 	if v, ok := data["timeout"].(string); ok {
 		s.Timeout = v
-	}
-	if v, ok := data["template"].(string); ok {
-		s.Template = v
-	}
-	if v, ok := data["ephemeral"].(bool); ok {
-		s.Ephemeral = v
 	}
 
 	// Parse needs (dependencies)
@@ -249,7 +221,66 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		}
 	}
 
-	// Parse variables for expand
+	// Parse agent executor fields
+	if v, ok := data["agent"].(string); ok {
+		s.Agent = v
+	}
+	if v, ok := data["prompt"].(string); ok {
+		s.Prompt = v
+	}
+	if v, ok := data["mode"].(string); ok {
+		s.Mode = v
+	}
+
+	// Parse shell executor fields
+	if v, ok := data["command"].(string); ok {
+		s.Command = v
+	}
+	if v, ok := data["workdir"].(string); ok {
+		s.Workdir = v
+	}
+	if v, ok := data["on_error"].(string); ok {
+		s.OnError = v
+	}
+
+	// Parse env (used by shell and spawn)
+	if env, ok := data["env"].(map[string]any); ok {
+		s.Env = make(map[string]string)
+		for k, v := range env {
+			if vs, ok := v.(string); ok {
+				s.Env[k] = vs
+			}
+		}
+	}
+
+	// Parse shell_outputs for shell executor
+	if outputs, ok := data["shell_outputs"].(map[string]any); ok {
+		s.ShellOutputs = make(map[string]OutputSource)
+		for k, v := range outputs {
+			if vm, ok := v.(map[string]any); ok {
+				os := OutputSource{}
+				if src, ok := vm["source"].(string); ok {
+					os.Source = src
+				}
+				s.ShellOutputs[k] = os
+			}
+		}
+	}
+
+	// Parse spawn executor fields
+	if v, ok := data["resume_session"].(string); ok {
+		s.ResumeSession = v
+	}
+
+	// Parse kill executor fields
+	if v, ok := data["graceful"].(bool); ok {
+		s.Graceful = &v
+	}
+
+	// Parse expand executor fields
+	if v, ok := data["template"].(string); ok {
+		s.Template = v
+	}
 	if vars, ok := data["variables"].(map[string]any); ok {
 		s.Variables = make(map[string]string)
 		for k, v := range vars {
@@ -259,7 +290,10 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		}
 	}
 
-	// Parse condition branch targets
+	// Parse branch executor fields
+	if v, ok := data["condition"].(string); ok {
+		s.Condition = v
+	}
 	if v, ok := data["on_true"].(map[string]any); ok {
 		target, err := parseExpansionTarget(v)
 		if err != nil {
@@ -282,13 +316,64 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		s.OnTimeout = target
 	}
 
-	// Parse task output specifications
-	if v, ok := data["outputs"].(map[string]any); ok {
-		outputs, err := parseTaskOutputSpec(v)
-		if err != nil {
-			return nil, fmt.Errorf("outputs: %w", err)
+	// Parse agent output definitions (new format: map of field -> definition)
+	if outputs, ok := data["outputs"].(map[string]any); ok {
+		// Check if this is new format (map of definitions) or legacy format (required/optional arrays)
+		if _, hasRequired := outputs["required"]; hasRequired {
+			// Legacy format - parse as TaskOutputSpec
+			spec, err := parseTaskOutputSpec(outputs)
+			if err != nil {
+				return nil, fmt.Errorf("outputs: %w", err)
+			}
+			s.LegacyOutputs = spec
+		} else {
+			// New format - parse as map[string]AgentOutputDef
+			s.Outputs = make(map[string]AgentOutputDef)
+			for name, def := range outputs {
+				if defMap, ok := def.(map[string]any); ok {
+					outDef := AgentOutputDef{}
+					if req, ok := defMap["required"].(bool); ok {
+						outDef.Required = req
+					}
+					if typ, ok := defMap["type"].(string); ok {
+						outDef.Type = typ
+					}
+					if desc, ok := defMap["description"].(string); ok {
+						outDef.Description = desc
+					}
+					s.Outputs[name] = outDef
+				}
+			}
 		}
-		s.Outputs = outputs
+	}
+
+	// === Legacy field parsing (for backwards compatibility) ===
+	if v, ok := data["type"].(string); ok {
+		s.Type = v
+	}
+	if v, ok := data["title"].(string); ok {
+		s.Title = v
+	}
+	if v, ok := data["description"].(string); ok {
+		s.Description = v
+	}
+	if v, ok := data["instructions"].(string); ok {
+		s.Instructions = v
+	}
+	if v, ok := data["assignee"].(string); ok {
+		s.Assignee = v
+	}
+	if v, ok := data["code"].(string); ok {
+		s.Code = v
+	}
+	if v, ok := data["action"].(string); ok {
+		s.Action = v
+	}
+	if v, ok := data["validation"].(string); ok {
+		s.Validation = v
+	}
+	if v, ok := data["ephemeral"].(bool); ok {
+		s.Ephemeral = v
 	}
 
 	return s, nil
@@ -418,14 +503,139 @@ func parseExpansionTarget(data map[string]any) (*ExpansionTarget, error) {
 func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	step := &InlineStep{}
 
+	// Parse required fields
 	if id, ok := data["id"].(string); ok {
 		step.ID = id
 	} else {
 		return nil, fmt.Errorf("inline step missing id")
 	}
 
+	// Parse executor field (new format)
+	if v, ok := data["executor"].(string); ok {
+		step.Executor = ExecutorType(v)
+	}
+
+	// Parse shared fields
+	if v, ok := data["timeout"].(string); ok {
+		step.Timeout = v
+	}
+
+	// Parse needs (dependencies)
+	if needs, ok := data["needs"].([]any); ok {
+		for _, n := range needs {
+			if ns, ok := n.(string); ok {
+				step.Needs = append(step.Needs, ns)
+			}
+		}
+	}
+
+	// Parse agent executor fields
+	if v, ok := data["agent"].(string); ok {
+		step.Agent = v
+	}
+	if v, ok := data["prompt"].(string); ok {
+		step.Prompt = v
+	}
+	if v, ok := data["mode"].(string); ok {
+		step.Mode = v
+	}
+
+	// Parse shell executor fields
+	if v, ok := data["command"].(string); ok {
+		step.Command = v
+	}
+	if v, ok := data["workdir"].(string); ok {
+		step.Workdir = v
+	}
+	if v, ok := data["on_error"].(string); ok {
+		step.OnError = v
+	}
+
+	// Parse env
+	if env, ok := data["env"].(map[string]any); ok {
+		step.Env = make(map[string]string)
+		for k, v := range env {
+			if vs, ok := v.(string); ok {
+				step.Env[k] = vs
+			}
+		}
+	}
+
+	// Parse spawn executor fields
+	if v, ok := data["resume_session"].(string); ok {
+		step.ResumeSession = v
+	}
+
+	// Parse kill executor fields
+	if v, ok := data["graceful"].(bool); ok {
+		step.Graceful = &v
+	}
+
+	// Parse expand executor fields
+	if v, ok := data["template"].(string); ok {
+		step.Template = v
+	}
+	if vars, ok := data["variables"].(map[string]any); ok {
+		step.Variables = make(map[string]string)
+		for k, v := range vars {
+			if vs, ok := v.(string); ok {
+				step.Variables[k] = vs
+			}
+		}
+	}
+
+	// Parse branch executor fields
+	if v, ok := data["condition"].(string); ok {
+		step.Condition = v
+	}
+	if v, ok := data["on_true"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_true: %w", err)
+		}
+		step.OnTrue = target
+	}
+	if v, ok := data["on_false"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_false: %w", err)
+		}
+		step.OnFalse = target
+	}
+	if v, ok := data["on_timeout"].(map[string]any); ok {
+		target, err := parseExpansionTarget(v)
+		if err != nil {
+			return nil, fmt.Errorf("on_timeout: %w", err)
+		}
+		step.OnTimeout = target
+	}
+
+	// Parse agent output definitions
+	if outputs, ok := data["outputs"].(map[string]any); ok {
+		step.Outputs = make(map[string]AgentOutputDef)
+		for name, def := range outputs {
+			if defMap, ok := def.(map[string]any); ok {
+				outDef := AgentOutputDef{}
+				if req, ok := defMap["required"].(bool); ok {
+					outDef.Required = req
+				}
+				if typ, ok := defMap["type"].(string); ok {
+					outDef.Type = typ
+				}
+				if desc, ok := defMap["description"].(string); ok {
+					outDef.Description = desc
+				}
+				step.Outputs[name] = outDef
+			}
+		}
+	}
+
+	// === Legacy field parsing ===
 	if v, ok := data["type"].(string); ok {
 		step.Type = v
+	}
+	if v, ok := data["title"].(string); ok {
+		step.Title = v
 	}
 	if v, ok := data["description"].(string); ok {
 		step.Description = v
@@ -436,14 +646,17 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	if v, ok := data["assignee"].(string); ok {
 		step.Assignee = v
 	}
-
-	// Parse needs (dependencies)
-	if needs, ok := data["needs"].([]any); ok {
-		for _, n := range needs {
-			if ns, ok := n.(string); ok {
-				step.Needs = append(step.Needs, ns)
-			}
-		}
+	if v, ok := data["code"].(string); ok {
+		step.Code = v
+	}
+	if v, ok := data["action"].(string); ok {
+		step.Action = v
+	}
+	if v, ok := data["validation"].(string); ok {
+		step.Validation = v
+	}
+	if v, ok := data["ephemeral"].(bool); ok {
+		step.Ephemeral = v
 	}
 
 	return step, nil
@@ -615,9 +828,6 @@ func ValidateFullModule(m *Module) *ModuleValidationResult {
 	// Validate cross-workflow references
 	validateLocalReferences(m, result)
 
-	// Validate hooks_to references
-	validateHooksTo(m, result)
-
 	return result
 }
 
@@ -773,38 +983,6 @@ func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *M
 		}
 	}
 }
-
-// validateHooksTo checks that hooks_to references a defined variable.
-func validateHooksTo(m *Module, result *ModuleValidationResult) {
-	for workflowName, w := range m.Workflows {
-		if w.HooksTo == "" {
-			continue
-		}
-
-		// hooks_to should reference a variable defined in this workflow
-		if w.Variables == nil {
-			result.Add(workflowName, "", "hooks_to",
-				fmt.Sprintf("hooks_to references variable %q but no variables are defined", w.HooksTo),
-				fmt.Sprintf("define [%s.variables.%s]", workflowName, w.HooksTo))
-			continue
-		}
-
-		if _, exists := w.Variables[w.HooksTo]; !exists {
-			var varNames []string
-			for name := range w.Variables {
-				varNames = append(varNames, name)
-			}
-			suggest := ""
-			if len(varNames) > 0 {
-				suggest = fmt.Sprintf("defined variables: %s", strings.Join(varNames, ", "))
-			}
-			result.Add(workflowName, "", "hooks_to",
-				fmt.Sprintf("hooks_to references undefined variable %q", w.HooksTo),
-				suggest)
-		}
-	}
-}
-
 // validateModuleVariableReferences checks that all variable references in a workflow are defined.
 func validateModuleVariableReferences(m *Module, workflowName string, w *Workflow, result *ModuleValidationResult) {
 	// Collect all defined variables
@@ -920,10 +1098,9 @@ func validateModuleTypeSpecific(workflowName string, w *Workflow, result *Module
 			}
 
 		case "task", "collaborative":
-			// Task and collaborative need an assignee (often a variable)
-			// This is a soft check - might be inherited or set at bake time
-			// So we only warn if it's empty and not in an ephemeral workflow
-			// Actually, don't enforce this - it can be set at bake time
+			// Task and collaborative steps may need an assignee
+			// This is a soft check - assignee can be set at bake time
+			// so we don't enforce it during template parsing
 
 		case "expand":
 			// Expand steps need a template
