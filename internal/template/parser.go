@@ -55,12 +55,13 @@ type Var struct {
 type ExecutorType string
 
 const (
-	ExecutorShell  ExecutorType = "shell"
-	ExecutorSpawn  ExecutorType = "spawn"
-	ExecutorKill   ExecutorType = "kill"
-	ExecutorExpand ExecutorType = "expand"
-	ExecutorBranch ExecutorType = "branch"
-	ExecutorAgent  ExecutorType = "agent"
+	ExecutorShell   ExecutorType = "shell"
+	ExecutorSpawn   ExecutorType = "spawn"
+	ExecutorKill    ExecutorType = "kill"
+	ExecutorExpand  ExecutorType = "expand"
+	ExecutorBranch  ExecutorType = "branch"
+	ExecutorForeach ExecutorType = "foreach"
+	ExecutorAgent   ExecutorType = "agent"
 	// Note: Gate is NOT an executor. Human approval is implemented via
 	// branch executor with condition = "meow await-approval <gate-id>"
 )
@@ -69,7 +70,7 @@ const (
 // Note: Empty executor is allowed during template migration period.
 func (e ExecutorType) Valid() bool {
 	switch e {
-	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorAgent:
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorForeach, ExecutorAgent:
 		return true
 	case "": // Allow empty during migration - templates use type field
 		return true
@@ -80,7 +81,7 @@ func (e ExecutorType) Valid() bool {
 // IsOrchestrator returns true if the executor runs internally (not waiting for external completion).
 func (e ExecutorType) IsOrchestrator() bool {
 	switch e {
-	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch:
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorForeach:
 		return true
 	}
 	return false
@@ -101,7 +102,7 @@ type AgentOutputDef struct {
 // Step represents a single step in a template.
 type Step struct {
 	ID       string       `toml:"id"`
-	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | foreach | agent
 
 	// Shared fields
 	Needs   []string          `toml:"needs,omitempty"` // Step IDs that must complete first
@@ -137,6 +138,15 @@ type Step struct {
 	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`     // Expand if condition true
 	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`    // Expand if condition false
 	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"`  // Expand if condition times out
+
+	// Foreach executor fields
+	Items         string `toml:"items,omitempty"`          // JSON array expression (may contain variable refs)
+	ItemVar       string `toml:"item_var,omitempty"`       // Variable name for current item
+	IndexVar      string `toml:"index_var,omitempty"`      // Variable name for index (optional)
+	Parallel      bool   `toml:"parallel,omitempty"`       // Run iterations in parallel (default true)
+	MaxConcurrent int    `toml:"max_concurrent,omitempty"` // Limit concurrent executions
+	Join          bool   `toml:"join,omitempty"`           // Wait for all iterations (default true)
+	// Template and Variables fields already defined above for expand executor
 
 	// Agent output definitions (for agent executor)
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
@@ -193,6 +203,16 @@ func (s *Step) Validate() error {
 		if s.Condition == "" {
 			return fmt.Errorf("branch executor requires condition")
 		}
+	case ExecutorForeach:
+		if s.Items == "" {
+			return fmt.Errorf("foreach executor requires items")
+		}
+		if s.ItemVar == "" {
+			return fmt.Errorf("foreach executor requires item_var")
+		}
+		if s.Template == "" {
+			return fmt.Errorf("foreach executor requires template")
+		}
 	case ExecutorAgent:
 		if s.Agent == "" {
 			return fmt.Errorf("agent executor requires agent")
@@ -238,6 +258,13 @@ func (is *InlineStep) ToStep() *Step {
 		OnTrue:        is.OnTrue,
 		OnFalse:       is.OnFalse,
 		OnTimeout:     is.OnTimeout,
+		// Foreach fields
+		Items:         is.Items,
+		ItemVar:       is.ItemVar,
+		IndexVar:      is.IndexVar,
+		Parallel:      is.Parallel,
+		MaxConcurrent: is.MaxConcurrent,
+		Join:          is.Join,
 		Outputs:       is.Outputs,
 		// Legacy fields
 		Type:          is.Type,
@@ -277,7 +304,7 @@ type ExpansionTarget struct {
 // It mirrors the Step struct to ensure all fields are preserved when parsing inline steps.
 type InlineStep struct {
 	ID       string       `toml:"id"`
-	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | agent
+	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | foreach | agent
 
 	// Shared fields
 	Needs   []string `toml:"needs,omitempty"`
@@ -310,6 +337,15 @@ type InlineStep struct {
 	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`
 	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`
 	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"`
+
+	// Foreach executor fields
+	Items         string `toml:"items,omitempty"`
+	ItemVar       string `toml:"item_var,omitempty"`
+	IndexVar      string `toml:"index_var,omitempty"`
+	Parallel      bool   `toml:"parallel,omitempty"`
+	MaxConcurrent int    `toml:"max_concurrent,omitempty"`
+	Join          bool   `toml:"join,omitempty"`
+	// Template and Variables fields already defined above for expand executor
 
 	// Agent outputs
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
@@ -386,9 +422,9 @@ func (t *Template) Validate() error {
 		return fmt.Errorf("template must have at least one step")
 	}
 
-	// Track step IDs and which steps are expand steps
+	// Track step IDs and which steps are expand/foreach steps
 	stepIDs := make(map[string]bool)
-	expandSteps := make(map[string]bool)
+	expandingSteps := make(map[string]bool) // Steps that produce child steps (expand, foreach)
 	for i, step := range t.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step[%d]: id is required", i)
@@ -397,23 +433,30 @@ func (t *Template) Validate() error {
 			return fmt.Errorf("step[%d]: duplicate id %q", i, step.ID)
 		}
 		stepIDs[step.ID] = true
-		if step.Executor == ExecutorExpand {
-			expandSteps[step.ID] = true
+		if step.Executor == ExecutorExpand || step.Executor == ExecutorForeach {
+			expandingSteps[step.ID] = true
 		}
 	}
 
 	// Validate dependencies reference existing steps
-	// Allow references to children of expand steps (e.g., "expand-step.child")
+	// Allow references to children of expand/foreach steps (e.g., "expand-step.child")
+	// Also allow wildcard patterns for foreach children (e.g., "foreach-step.*.build")
 	for i, step := range t.Steps {
 		for _, need := range step.Needs {
 			if !stepIDs[need] {
-				// Check if this references a child of an expand step
+				// Check if this references a child of an expand/foreach step
 				if dotIdx := strings.Index(need, "."); dotIdx > 0 {
 					prefix := need[:dotIdx]
-					if expandSteps[prefix] {
-						// This references a child of an expand step - allowed
+					if expandingSteps[prefix] {
+						// This references a child of an expand/foreach step - allowed
+						// Includes wildcard patterns like "foreach.*.step"
 						continue
 					}
+				}
+				// Check if this is a wildcard pattern like "step-prefix-*"
+				if strings.Contains(need, "*") {
+					// Wildcards are evaluated at runtime, allow them
+					continue
 				}
 				return fmt.Errorf("step[%d] %q: needs references unknown step %q", i, step.ID, need)
 			}

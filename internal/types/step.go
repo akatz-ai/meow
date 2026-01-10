@@ -7,17 +7,18 @@ import (
 )
 
 // ExecutorType determines who runs a step and how.
-// IMPORTANT: There are exactly 6 executors. Gate is NOT an executor -
+// IMPORTANT: There are exactly 7 executors. Gate is NOT an executor -
 // human approval is implemented via branch + meow await-approval.
 type ExecutorType string
 
 const (
 	// Orchestrator executors - run internally, complete synchronously
-	ExecutorShell  ExecutorType = "shell"  // Run shell command
-	ExecutorSpawn  ExecutorType = "spawn"  // Start agent in tmux
-	ExecutorKill   ExecutorType = "kill"   // Stop agent's tmux session
-	ExecutorExpand ExecutorType = "expand" // Inline another workflow
-	ExecutorBranch ExecutorType = "branch" // Conditional execution
+	ExecutorShell   ExecutorType = "shell"   // Run shell command
+	ExecutorSpawn   ExecutorType = "spawn"   // Start agent in tmux
+	ExecutorKill    ExecutorType = "kill"    // Stop agent's tmux session
+	ExecutorExpand  ExecutorType = "expand"  // Inline another workflow
+	ExecutorBranch  ExecutorType = "branch"  // Conditional execution
+	ExecutorForeach ExecutorType = "foreach" // Iterate over a list
 
 	// External executors - wait for external completion signal
 	ExecutorAgent ExecutorType = "agent" // Agent does work, signals meow done
@@ -26,7 +27,7 @@ const (
 // IsOrchestrator returns true if this executor runs internally.
 func (e ExecutorType) IsOrchestrator() bool {
 	switch e {
-	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch:
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorForeach:
 		return true
 	}
 	return false
@@ -40,7 +41,7 @@ func (e ExecutorType) IsExternal() bool {
 // Valid returns true if this is a recognized executor type.
 func (e ExecutorType) Valid() bool {
 	switch e {
-	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorAgent:
+	case ExecutorShell, ExecutorSpawn, ExecutorKill, ExecutorExpand, ExecutorBranch, ExecutorForeach, ExecutorAgent:
 		return true
 	}
 	return false
@@ -148,6 +149,35 @@ type BranchConfig struct {
 	Timeout   string        `yaml:"timeout,omitempty" toml:"timeout,omitempty"` // Duration string
 }
 
+// ForeachConfig for executor: foreach
+// Dynamically expands a template for each item in a list.
+type ForeachConfig struct {
+	Items         string            `yaml:"items" toml:"items"`                                 // JSON array expression to iterate over
+	ItemVar       string            `yaml:"item_var" toml:"item_var"`                           // Variable name for current item
+	IndexVar      string            `yaml:"index_var,omitempty" toml:"index_var,omitempty"`     // Optional variable name for index
+	Template      string            `yaml:"template" toml:"template"`                           // Template reference to expand
+	Variables     map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`     // Variables to pass to template
+	Parallel      *bool             `yaml:"parallel,omitempty" toml:"parallel,omitempty"`       // Run in parallel (default: true)
+	MaxConcurrent int               `yaml:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"` // Limit concurrent iterations
+	Join          *bool             `yaml:"join,omitempty" toml:"join,omitempty"`               // Wait for all iterations (default: true)
+}
+
+// IsParallel returns whether iterations should run in parallel (default: true).
+func (f *ForeachConfig) IsParallel() bool {
+	if f.Parallel == nil {
+		return true // Default to parallel
+	}
+	return *f.Parallel
+}
+
+// IsJoin returns whether to wait for all iterations (default: true).
+func (f *ForeachConfig) IsJoin() bool {
+	if f.Join == nil {
+		return true // Default to join
+	}
+	return *f.Join
+}
+
 // AgentOutputDef defines an expected output from an agent step.
 type AgentOutputDef struct {
 	Required    bool   `yaml:"required" toml:"required"`
@@ -164,6 +194,20 @@ type AgentConfig struct {
 	Timeout string                    `yaml:"timeout,omitempty" toml:"timeout,omitempty"` // Max time for step
 }
 
+// Validate checks the foreach config has required fields.
+func (f *ForeachConfig) Validate() error {
+	if f.Items == "" {
+		return fmt.Errorf("foreach items is required")
+	}
+	if f.ItemVar == "" {
+		return fmt.Errorf("foreach item_var is required")
+	}
+	if f.Template == "" {
+		return fmt.Errorf("foreach template is required")
+	}
+	return nil
+}
+
 // StepError captures failure information.
 type StepError struct {
 	Message string `yaml:"message"`
@@ -172,7 +216,7 @@ type StepError struct {
 }
 
 // Step is the single primitive in MEOW. Everything is a step.
-// IMPORTANT: Only 6 executor configs for 6 executors.
+// IMPORTANT: Only 7 executor configs for 7 executors.
 type Step struct {
 	// Identity
 	ID       string       `yaml:"id"`
@@ -196,12 +240,14 @@ type Step struct {
 	Error   *StepError     `yaml:"error,omitempty"`
 
 	// Executor-specific config (exactly one populated based on Executor)
-	Shell  *ShellConfig  `yaml:"shell,omitempty"`
-	Spawn  *SpawnConfig  `yaml:"spawn,omitempty"`
-	Kill   *KillConfig   `yaml:"kill,omitempty"`
-	Expand *ExpandConfig `yaml:"expand,omitempty"`
-	Branch *BranchConfig `yaml:"branch,omitempty"`
-	Agent  *AgentConfig  `yaml:"agent,omitempty"`
+	Shell   *ShellConfig   `yaml:"shell,omitempty"`
+	Spawn   *SpawnConfig   `yaml:"spawn,omitempty"`
+	Kill    *KillConfig    `yaml:"kill,omitempty"`
+	Expand  *ExpandConfig  `yaml:"expand,omitempty"`
+	Branch  *BranchConfig  `yaml:"branch,omitempty"`
+
+	Foreach *ForeachConfig `yaml:"foreach,omitempty"`
+	Agent   *AgentConfig   `yaml:"agent,omitempty"`
 }
 
 // IsReady returns true if all dependencies are done.
@@ -237,12 +283,13 @@ func (s *Step) Validate() error {
 // validateConfig ensures exactly one config is set matching the executor.
 func (s *Step) validateConfig() error {
 	configs := map[ExecutorType]bool{
-		ExecutorShell:  s.Shell != nil,
-		ExecutorSpawn:  s.Spawn != nil,
-		ExecutorKill:   s.Kill != nil,
-		ExecutorExpand: s.Expand != nil,
-		ExecutorBranch: s.Branch != nil,
-		ExecutorAgent:  s.Agent != nil,
+		ExecutorShell:   s.Shell != nil,
+		ExecutorSpawn:   s.Spawn != nil,
+		ExecutorKill:    s.Kill != nil,
+		ExecutorExpand:  s.Expand != nil,
+		ExecutorBranch:  s.Branch != nil,
+		ExecutorForeach: s.Foreach != nil,
+		ExecutorAgent:   s.Agent != nil,
 	}
 
 	if !configs[s.Executor] {
@@ -254,6 +301,14 @@ func (s *Step) validateConfig() error {
 			return fmt.Errorf("step %s: has config for %s but executor is %s", s.ID, exec, s.Executor)
 		}
 	}
+
+	// Validate foreach config if present
+	if s.Foreach != nil {
+		if err := s.Foreach.Validate(); err != nil {
+			return fmt.Errorf("step %s: %w", s.ID, err)
+		}
+	}
+
 	return nil
 }
 

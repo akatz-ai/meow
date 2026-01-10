@@ -8,7 +8,7 @@ func TestExecutorType(t *testing.T) {
 	t.Run("Valid returns true for valid executors", func(t *testing.T) {
 		validExecutors := []ExecutorType{
 			ExecutorShell, ExecutorSpawn, ExecutorKill,
-			ExecutorExpand, ExecutorBranch, ExecutorAgent,
+			ExecutorExpand, ExecutorBranch, ExecutorAgent, ExecutorForeach,
 		}
 		for _, e := range validExecutors {
 			if !e.Valid() {
@@ -27,7 +27,7 @@ func TestExecutorType(t *testing.T) {
 	t.Run("IsOrchestrator for orchestrator executors", func(t *testing.T) {
 		orchestratorExecutors := []ExecutorType{
 			ExecutorShell, ExecutorSpawn, ExecutorKill,
-			ExecutorExpand, ExecutorBranch,
+			ExecutorExpand, ExecutorBranch, ExecutorForeach,
 		}
 		for _, e := range orchestratorExecutors {
 			if !e.IsOrchestrator() {
@@ -42,6 +42,9 @@ func TestExecutorType(t *testing.T) {
 		}
 		if ExecutorShell.IsExternal() {
 			t.Error("shell should not be external executor")
+		}
+		if ExecutorForeach.IsExternal() {
+			t.Error("foreach should not be external executor")
 		}
 	})
 }
@@ -209,6 +212,105 @@ func TestStepIsReady(t *testing.T) {
 		}
 		if step.IsReady(steps) {
 			t.Error("step should not be ready (already running)")
+		}
+	})
+}
+
+func TestForeachConfig(t *testing.T) {
+	// Helper function to get pointer to bool
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("valid foreach step with all fields", func(t *testing.T) {
+		step := &Step{
+			ID:       "parallel-workers",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			Foreach: &ForeachConfig{
+				Items:         `["task1", "task2", "task3"]`,
+				ItemVar:       "task",
+				IndexVar:      "i",
+				Template:      ".worker-task",
+				Variables:     map[string]string{"agent_id": "worker-{{i}}"},
+				Parallel:      boolPtr(true),
+				MaxConcurrent: 5,
+				Join:          boolPtr(true),
+			},
+		}
+		if err := step.Validate(); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("valid foreach step with minimal fields", func(t *testing.T) {
+		step := &Step{
+			ID:       "simple-foreach",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			Foreach: &ForeachConfig{
+				Items:    `{{planner.outputs.tasks}}`,
+				ItemVar:  "task",
+				Template: ".worker",
+			},
+		}
+		if err := step.Validate(); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing items field", func(t *testing.T) {
+		step := &Step{
+			ID:       "bad-foreach",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			Foreach: &ForeachConfig{
+				ItemVar:  "task",
+				Template: ".worker",
+			},
+		}
+		if err := step.Validate(); err == nil {
+			t.Error("expected error for missing items")
+		}
+	})
+
+	t.Run("missing item_var field", func(t *testing.T) {
+		step := &Step{
+			ID:       "bad-foreach",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			Foreach: &ForeachConfig{
+				Items:    `["a", "b"]`,
+				Template: ".worker",
+			},
+		}
+		if err := step.Validate(); err == nil {
+			t.Error("expected error for missing item_var")
+		}
+	})
+
+	t.Run("missing template field", func(t *testing.T) {
+		step := &Step{
+			ID:       "bad-foreach",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			Foreach: &ForeachConfig{
+				Items:   `["a", "b"]`,
+				ItemVar: "item",
+			},
+		}
+		if err := step.Validate(); err == nil {
+			t.Error("expected error for missing template")
+		}
+	})
+
+	t.Run("missing foreach config", func(t *testing.T) {
+		step := &Step{
+			ID:       "bad-foreach",
+			Executor: ExecutorForeach,
+			Status:   StepStatusPending,
+			// No Foreach config
+		}
+		if err := step.Validate(); err == nil {
+			t.Error("expected error for missing foreach config")
 		}
 	})
 }

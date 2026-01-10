@@ -251,6 +251,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	// Check timeouts for running agent steps
 	o.checkStepTimeouts(ctx, wf)
 
+	// Check for foreach steps with implicit join that are ready to complete
+	o.checkForeachCompletion(wf)
+
 	readySteps := wf.GetReadySteps()
 	if len(readySteps) == 0 {
 		if wf.AllDone() {
@@ -399,6 +402,8 @@ func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *t
 		return o.handleExpand(ctx, wf, step)
 	case types.ExecutorBranch:
 		return o.handleBranch(ctx, wf, step)
+	case types.ExecutorForeach:
+		return o.handleForeach(ctx, wf, step)
 	case types.ExecutorAgent:
 		return o.handleAgent(ctx, wf, step)
 	default:
@@ -750,6 +755,48 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 			// Record when we sent the interrupt
 			now := time.Now()
 			step.InterruptedAt = &now
+		}
+	}
+}
+
+// checkForeachCompletion checks for foreach steps with implicit join that are ready to complete.
+// When join=true (default) and all child steps are done, the foreach step is marked done.
+func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
+	for _, step := range wf.Steps {
+		// Only check running foreach steps with join=true
+		if step.Status != types.StepStatusRunning {
+			continue
+		}
+		if step.Executor != types.ExecutorForeach {
+			continue
+		}
+		if step.Foreach == nil || !step.Foreach.IsJoin() {
+			continue
+		}
+
+		// Check if all children are complete
+		if IsForeachComplete(step, wf.Steps) {
+			// Check if any children failed
+			if IsForeachFailed(step, wf.Steps) {
+				o.logger.Info("foreach step failed (child failed)",
+					"step", step.ID)
+				if err := step.Fail(&types.StepError{
+					Message: "one or more iterations failed",
+				}); err != nil {
+					o.logger.Error("failed to fail foreach step",
+						"step", step.ID,
+						"error", err)
+				}
+			} else {
+				o.logger.Info("foreach step complete (all children done)",
+					"step", step.ID,
+					"childCount", len(step.ExpandedInto))
+				if err := step.Complete(nil); err != nil {
+					o.logger.Error("failed to complete foreach step",
+						"step", step.ID,
+						"error", err)
+				}
+			}
 		}
 	}
 }
@@ -1164,6 +1211,71 @@ func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, ste
 	if err := step.Complete(nil); err != nil {
 		return fmt.Errorf("completing step: %w", err)
 	}
+	return nil
+}
+
+// handleForeach expands a template for each item in a list.
+func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+	if step.Foreach == nil {
+		return fmt.Errorf("foreach step %s missing config", step.ID)
+	}
+
+	if err := step.Start(); err != nil {
+		return fmt.Errorf("starting step: %w", err)
+	}
+
+	// Build template loader from the expander
+	var loader TemplateLoader
+	if o.expander != nil {
+		if adapter, ok := o.expander.(*TemplateExpanderAdapter); ok {
+			loader = &fileTemplateLoader{
+				expander:     adapter.Expander,
+				sourceModule: wf.Template,
+				workflowID:   wf.ID,
+			}
+		}
+	}
+	if loader == nil {
+		return fmt.Errorf("foreach executor requires template loader")
+	}
+
+	// Execute the foreach expansion
+	result, stepErr := ExecuteForeach(ctx, step, loader, wf.Variables, 0, nil)
+	if stepErr != nil {
+		return fmt.Errorf("foreach expansion failed: %s", stepErr.Message)
+	}
+
+	// Add expanded steps to workflow
+	if wf.Steps == nil {
+		wf.Steps = make(map[string]*types.Step)
+	}
+	for _, newStep := range result.ExpandedSteps {
+		wf.Steps[newStep.ID] = newStep
+	}
+
+	// Track expanded steps on the foreach step
+	step.ExpandedInto = result.StepIDs
+
+	// Handle join vs fire-and-forget
+	if step.Foreach.IsJoin() {
+		// Implicit join: step stays running until all children complete
+		// The orchestrator will mark it done when IsForeachComplete returns true
+		o.logger.Info("foreach expansion complete, waiting for children",
+			"step", step.ID,
+			"iterations", len(result.IterationIDs),
+			"childSteps", len(result.ExpandedSteps))
+		// Step stays in "running" state - main loop will check for completion
+	} else {
+		// Fire-and-forget: mark done immediately after expansion
+		if err := step.Complete(nil); err != nil {
+			return fmt.Errorf("completing step: %w", err)
+		}
+		o.logger.Info("foreach expansion complete (fire-and-forget)",
+			"step", step.ID,
+			"iterations", len(result.IterationIDs),
+			"childSteps", len(result.ExpandedSteps))
+	}
+
 	return nil
 }
 

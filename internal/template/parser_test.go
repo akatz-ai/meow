@@ -1286,3 +1286,203 @@ func TestStep_Validate_InvalidExecutor(t *testing.T) {
 		t.Errorf("expected error about invalid executor, got: %v", err)
 	}
 }
+
+// ============================================================================
+// Foreach Executor Tests
+// ============================================================================
+
+func TestExecutorType_Foreach(t *testing.T) {
+	if !ExecutorForeach.Valid() {
+		t.Error("foreach should be a valid executor")
+	}
+	if !ExecutorForeach.IsOrchestrator() {
+		t.Error("foreach should be an orchestrator executor")
+	}
+}
+
+func TestParseString_ForeachStep(t *testing.T) {
+	toml := `
+[meta]
+name = "test-foreach"
+version = "1.0.0"
+
+[[steps]]
+id = "parallel-workers"
+executor = "foreach"
+items = '["task1", "task2", "task3"]'
+item_var = "task"
+index_var = "i"
+template = ".worker-task"
+parallel = true
+max_concurrent = 5
+join = true
+
+[steps.variables]
+agent_id = "worker-{{i}}"
+task_description = "{{task}}"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Executor != ExecutorForeach {
+		t.Errorf("expected executor 'foreach', got %q", step.Executor)
+	}
+	if step.Items != `["task1", "task2", "task3"]` {
+		t.Errorf("expected items, got %q", step.Items)
+	}
+	if step.ItemVar != "task" {
+		t.Errorf("expected item_var 'task', got %q", step.ItemVar)
+	}
+	if step.IndexVar != "i" {
+		t.Errorf("expected index_var 'i', got %q", step.IndexVar)
+	}
+	if step.Template != ".worker-task" {
+		t.Errorf("expected template '.worker-task', got %q", step.Template)
+	}
+	if !step.Parallel {
+		t.Error("expected parallel to be true")
+	}
+	if step.MaxConcurrent != 5 {
+		t.Errorf("expected max_concurrent 5, got %d", step.MaxConcurrent)
+	}
+	if !step.Join {
+		t.Error("expected join to be true")
+	}
+	if step.Variables["agent_id"] != "worker-{{i}}" {
+		t.Errorf("expected agent_id variable, got %q", step.Variables["agent_id"])
+	}
+}
+
+func TestParseString_ForeachMinimalStep(t *testing.T) {
+	toml := `
+[meta]
+name = "test-foreach-minimal"
+version = "1.0.0"
+
+[[steps]]
+id = "simple-foreach"
+executor = "foreach"
+items = "{{planner.outputs.tasks}}"
+item_var = "task"
+template = ".worker"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.Executor != ExecutorForeach {
+		t.Errorf("expected executor 'foreach', got %q", step.Executor)
+	}
+	if step.Items != "{{planner.outputs.tasks}}" {
+		t.Errorf("expected items with variable reference, got %q", step.Items)
+	}
+	if step.ItemVar != "task" {
+		t.Errorf("expected item_var 'task', got %q", step.ItemVar)
+	}
+	if step.Template != ".worker" {
+		t.Errorf("expected template '.worker', got %q", step.Template)
+	}
+}
+
+func TestStep_Validate_Foreach(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name: "valid foreach step",
+			step: Step{
+				ID:       "parallel-workers",
+				Executor: ExecutorForeach,
+				Items:    `["a", "b", "c"]`,
+				ItemVar:  "item",
+				Template: ".worker",
+			},
+			wantErr: "",
+		},
+		{
+			name: "foreach without items",
+			step: Step{
+				ID:       "missing-items",
+				Executor: ExecutorForeach,
+				ItemVar:  "item",
+				Template: ".worker",
+			},
+			wantErr: "foreach executor requires items",
+		},
+		{
+			name: "foreach without item_var",
+			step: Step{
+				ID:       "missing-item-var",
+				Executor: ExecutorForeach,
+				Items:    `["a", "b"]`,
+				Template: ".worker",
+			},
+			wantErr: "foreach executor requires item_var",
+		},
+		{
+			name: "foreach without template",
+			step: Step{
+				ID:       "missing-template",
+				Executor: ExecutorForeach,
+				Items:    `["a", "b"]`,
+				ItemVar:  "item",
+			},
+			wantErr: "foreach executor requires template",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.step.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTemplate_Validate_ForeachDependencies(t *testing.T) {
+	// Foreach steps should allow pattern-based dependencies on their children
+	toml := `
+[meta]
+name = "test-foreach-deps"
+version = "1.0.0"
+
+[[steps]]
+id = "parallel-builds"
+executor = "foreach"
+items = '["a", "b", "c"]'
+item_var = "item"
+template = ".build"
+
+[[steps]]
+id = "run-integration-tests"
+executor = "shell"
+command = "npm run test:integration"
+needs = ["parallel-builds.*.build"]
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	if len(tmpl.Steps) != 2 {
+		t.Errorf("expected 2 steps, got %d", len(tmpl.Steps))
+	}
+}
