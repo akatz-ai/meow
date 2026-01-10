@@ -1,10 +1,10 @@
 # MEOW Stack
 
-**Molecular Expression Of Work** — A primitives-first workflow system for durable AI agent orchestration.
+**Meow Executors Orchestrate Work** — A durable, recursive coordination language for AI agent orchestration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  "6 primitives. Everything else is template composition."                   │
+│  Templates are programs. Steps are instructions. Executors run them.        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -20,95 +20,150 @@ AI coding agents are powerful but fragile:
 
 ## The Solution
 
-MEOW Stack provides **6 primitive bead types** that compose into arbitrary workflows:
+MEOW provides **7 executors** that compose into arbitrary workflows:
 
-| # | Primitive | Purpose |
-|---|-----------|---------|
-| 1 | `task` | Claude-executed work (with optional validated outputs) |
-| 2 | `condition` | Branching, looping, and waiting (can block for gates) |
-| 3 | `stop` | Kill agent session |
-| 4 | `start` | Spawn agent (with optional resume from session) |
-| 5 | `code` | Arbitrary shell execution (with output capture) |
-| 6 | `expand` | Template composition |
+| Executor | Who Runs | Purpose |
+|----------|----------|---------|
+| `shell` | Orchestrator | Run shell commands, capture outputs |
+| `spawn` | Orchestrator | Start an agent in tmux |
+| `kill` | Orchestrator | Stop an agent session |
+| `expand` | Orchestrator | Inline another template |
+| `branch` | Orchestrator | Conditional execution |
+| `foreach` | Orchestrator | Iterate over lists |
+| `agent` | Agent | Prompt agent, wait for `meow done` |
 
-**Everything else—`refresh`, `handoff`, `call`, loops, context management, human approval gates, checkpoint/resume—is template composition using these primitives.**
+**Everything else—loops, parallel execution, human gates, context management, checkpoint/resume—emerges from composing these primitives.**
 
 ## Design Philosophy
 
-> **The orchestrator is dumb; the templates are smart.**
+> **MEOW is a coordination language, not a task tracker.**
 
-The orchestrator is a simple dispatch loop that recognizes 6 bead types. All workflow complexity lives in composable TOML templates that users define and control.
+MEOW templates are **programs** that coordinate agents. They are not task lists, not tickets, not issues. They are executable specifications of how work flows through a system of agents.
 
-- **No magic context thresholds** — Users define when to check context via `condition` beads
-- **No hardcoded call semantics** — `call` is a template: checkpoint → stop → start → expand → stop → resume
-- **No special gate type** — Gates are blocking `condition` beads: `meow wait-approve --bead xyz`
-- **No built-in worktree management** — Users add `code` beads for git operations
+```
+Templates = Programs (static, version-controlled)
+Steps     = Instructions
+Executors = Who runs each instruction
+Outputs   = Data flowing between steps
+Workflows = Running program instances
+```
+
+### Core Principles
+
+**The Propulsion Principle** — The orchestrator drives agents forward. Agents don't poll—they receive prompts directly via tmux injection.
+
+**Minimal Agent Exposure** — Agents see only what they need: a prompt and how to signal completion (`meow done`).
+
+**Durable Execution** — All workflow state survives crashes. Simple YAML files, no database.
+
+**Composition Over Complexity** — Complex behaviors emerge from simple primitives composed together.
+
+### Agnosticism
+
+**Task Tracking Agnostic** — MEOW doesn't care how you track work. Your workflow template tells agents how to interact with Jira, GitHub Issues, Beads, or nothing at all.
+
+**Agent Agnostic** — MEOW supports any terminal-based AI agent through adapters. Claude Code, Aider, Cursor—just configuration.
 
 ## Quick Example
 
 ```bash
 # Start a workflow
-meow run work-loop
+meow run work-loop --var agent=claude
 
 # The orchestrator:
-# 1. Bakes template into beads
-# 2. Spawns Claude in tmux
-# 3. Watches for special bead types
-# 4. Claude executes task beads, closes them
-# 5. Orchestrator handles condition/stop/start/etc
-# 6. Loop continues until all beads complete
+# 1. Parses template into steps
+# 2. Spawns agent in tmux
+# 3. Injects prompts as steps become ready
+# 4. Agent works, calls `meow done` when finished
+# 5. Orchestrator advances to next step
+# 6. Loop continues until workflow completes
 ```
 
 A simple work loop template:
 
 ```toml
-# .meow/templates/work-loop.toml
-[meta]
+# work-loop.meow.toml
+
+[main]
 name = "work-loop"
 
-[[steps]]
-id = "check-work"
-type = "condition"
-condition = "bd list --type=task --status=open | grep -q ."
-on_true:
-  template = "work-iteration"
-on_false:
-  template = "finalize"
+[main.variables]
+agent = { required = true }
+
+[[main.steps]]
+id = "start-agent"
+executor = "spawn"
+agent = "{{agent}}"
+
+[[main.steps]]
+id = "select-task"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Run `bd ready` and pick a task to work on."
+needs = ["start-agent"]
+[main.steps.outputs]
+task_id = { required = true, type = "string" }
+
+[[main.steps]]
+id = "implement"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Implement task {{select-task.outputs.task_id}} using TDD."
+needs = ["select-task"]
+
+[[main.steps]]
+id = "check-more-work"
+executor = "branch"
+condition = "bd list --status=open | grep -q ."
+needs = ["implement"]
+[main.steps.on_true]
+template = ".continue-loop"
+[main.steps.on_false]
+template = ".finalize"
+```
+
+## Data Flow
+
+Steps communicate through outputs, like GitHub Actions:
+
+```toml
+# Capture from shell
+[[main.steps]]
+id = "get-branch"
+executor = "shell"
+command = "git branch --show-current"
+[main.steps.outputs]
+branch = { source = "stdout" }
+
+# Capture from agent
+[[main.steps]]
+id = "select"
+executor = "agent"
+prompt = "Pick a task"
+[main.steps.outputs]
+task_id = { required = true, type = "string" }
+
+# Reference in later steps
+[[main.steps]]
+id = "implement"
+executor = "agent"
+prompt = "Implement {{select.outputs.task_id}} on branch {{get-branch.outputs.branch}}"
 ```
 
 ## Documentation
 
-**[MVP Specification](docs/MVP-SPEC.md)** — The complete technical specification including:
+**[MVP Specification v2](docs/MVP-SPEC-v2.md)** — The complete technical specification:
 
-- All 6 primitive types with examples
-- Orchestrator architecture and main loop
-- Template system and composition patterns
-- Agent lifecycle management
-- Complete execution traces
-- Implementation roadmap
-
-## Related Projects
-
-MEOW Stack builds on:
-
-- **[Beads](https://github.com/steveyegge/beads)** — Git-backed issue tracker
-- **[Beads Viewer](https://github.com/Dicklesworthstone/beads_viewer)** — TUI + robot mode for task scoring
-- **[Ralph Wiggum](https://ghuntley.com/ralph/)** — Persistent iteration loop technique
-- **[Gas Town](https://github.com/...)** — Multi-agent orchestrator (propulsion principle inspiration)
-
-## Philosophy
-
-> **6 primitives compose into any workflow.** Simple orchestrator, smart templates.
-
-> **Beads survive crashes.** Any agent can resume where another left off.
-
-> **The prompt never changes, but the world does.** Each iteration sees accumulated work.
-
-> **Users control everything.** Context management, call semantics, gates—all user-defined.
+- All 7 executors with examples
+- Template system and composition
+- Agent adapter architecture
+- IPC protocol
+- Crash recovery
+- Multi-agent coordination patterns
 
 ## Status
 
-**Design Phase** — This repository contains the architectural specification. See [MVP-SPEC.md](docs/MVP-SPEC.md) for implementation roadmap.
+**Active Development** — Core orchestrator and executors being implemented.
 
 ## License
 
@@ -116,4 +171,4 @@ MIT
 
 ---
 
-*"It's just 6 primitives. But they compose into anything."*
+*"7 executors. Everything else is composition."*

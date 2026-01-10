@@ -1,6 +1,6 @@
 # MEOW Stack MVP Specification v2
 
-**MEOW** (Molecular Expression Of Work) is a durable, recursive, composable coordination language for AI agent orchestration.
+**MEOW** (Meow Executors Orchestrate Work) is a durable, recursive, composable coordination language for AI agent orchestration.
 
 > **Core Insight**: MEOW is not a task tracker. It's a programming language for agent coordination. Task tracking is the user's concern—MEOW orchestrates agents through workflows that users program to interact with whatever systems they choose.
 
@@ -1043,24 +1043,24 @@ meow run work-loop.meow.toml#tdd       # Runs [tdd] explicitly
 
 ## Agent Adapters
 
-Adapters encapsulate agent-specific behavior, keeping MEOW core agent-agnostic. An adapter defines how to start, stop, inject prompts into, and receive events from a specific agent type.
+Adapters encapsulate agent-specific **runtime behavior**, keeping MEOW core agent-agnostic. An adapter defines how to start, stop, and inject prompts into a specific agent type.
+
+**Design principle:** Adapters handle only what the orchestrator needs to interact with agent processes at runtime. Agent configuration (like event hooks) belongs in library templates, not adapters. This keeps adapters focused and allows workflows to customize agent configuration as needed.
 
 ### Adapter Structure
 
-Adapters are directories containing configuration and optional scripts:
+Adapters are directories containing configuration:
 
 ```
 ~/.meow/adapters/
 └── claude/
-    ├── adapter.toml        # Required: configuration
-    ├── setup.sh            # Optional: one-time setup script
-    ├── event-translator.sh # Optional: translates agent events to MEOW events
+    ├── adapter.toml        # Required: runtime configuration
     └── README.md           # Optional: documentation
 ```
 
 ### Adapter Configuration
 
-The `adapter.toml` file defines adapter behavior:
+The `adapter.toml` file defines runtime behavior:
 
 ```toml
 # ~/.meow/adapters/claude/adapter.toml
@@ -1090,77 +1090,9 @@ post_keys = ["Enter"]      # Keys to send after prompt
 [graceful_stop]
 keys = ["C-c"]
 wait = "2s"
-
-# Event translation (for agent-specific event systems)
-[events]
-translator = "./event-translator.sh"
-
-# What to put in .claude/settings.json for event support
-[events.agent_config]
-Stop = "{{adapter_dir}}/event-translator.sh Stop"
-PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
-PostToolUse = "{{adapter_dir}}/event-translator.sh PostToolUse $TOOL_NAME"
 ```
 
-### Event Translator Script
-
-The event translator converts agent-specific events to generic MEOW events:
-
-```bash
-#!/bin/bash
-# ~/.meow/adapters/claude/event-translator.sh
-# Translates Claude Code hooks to MEOW events
-
-HOOK_TYPE="$1"
-shift
-
-case "$HOOK_TYPE" in
-  Stop)
-    meow event agent-stopped
-    ;;
-  PreToolUse)
-    meow event tool-starting --data tool="$1"
-    ;;
-  PostToolUse)
-    meow event tool-completed --data tool="$1"
-    ;;
-  *)
-    meow event unknown --data type="$HOOK_TYPE"
-    ;;
-esac
-```
-
-### Setup Script
-
-The optional `setup.sh` helps configure the agent for MEOW integration:
-
-```bash
-#!/bin/bash
-# ~/.meow/adapters/claude/setup.sh
-# Sets up Claude Code for MEOW event integration in a worktree
-
-WORKTREE="$1"
-ADAPTER_DIR="$(dirname "$0")"
-
-if [ -z "$WORKTREE" ]; then
-  echo "Usage: setup.sh <worktree-path>"
-  exit 1
-fi
-
-mkdir -p "$WORKTREE/.claude"
-
-cat > "$WORKTREE/.claude/settings.json" << EOF
-{
-  "hooks": {
-    "Stop": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh Stop"}],
-    "PreToolUse": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh PreToolUse \$TOOL_NAME"}],
-    "PostToolUse": [{"type": "command", "command": "$ADAPTER_DIR/event-translator.sh PostToolUse \$TOOL_NAME"}]
-  }
-}
-EOF
-
-echo "Claude hooks configured in $WORKTREE/.claude/settings.json"
-```
+**Note:** Event hooks (like Claude's Stop/PreToolUse/PostToolUse) are configured via library templates, not adapters. See [Event Hook Configuration](#event-hook-configuration) below.
 
 ### Using Adapters in Workflows
 
@@ -1209,32 +1141,24 @@ meow adapter remove claude
 To create an adapter for a new agent type:
 
 1. Create adapter directory: `mkdir -p ~/.meow/adapters/my-agent`
-2. Create `adapter.toml` with spawn/injection configuration
-3. Optionally create `setup.sh` for one-time configuration
-4. Optionally create `event-translator.sh` if the agent supports events
+2. Create `adapter.toml` with spawn/injection/stop configuration
+3. Test with a simple workflow
 
-See the [claude adapter](https://github.com/meow-stack/adapter-claude) for a complete example.
+For event support, create a corresponding library template (e.g., `lib/my-agent-events.meow.toml`) that configures the agent's hook system. See [Event Hook Configuration](#event-hook-configuration).
 
 ### Trust Model
 
-Adapters can contain shell scripts, just like templates. The trust model is consistent:
+Templates and adapters can contain shell commands. The trust model is consistent:
 
 | Component | User Must Trust |
 |-----------|-----------------|
 | MEOW core | Yes (it's the tool) |
 | Templates | Yes (contains shell commands) |
-| Adapters | Yes (contains shell scripts) |
+| Adapters | Yes (defines how agents start) |
+| Library templates | Yes (contains shell commands) |
 | The agent itself | Yes (it runs on your system) |
 
-**Users should review adapter code before installing**, just as they would review any script they download from the internet. Adapters from untrusted sources could contain malicious code.
-
-```bash
-# Review before installing
-git clone github.com/someone/adapter-something
-cat adapter-something/setup.sh
-cat adapter-something/event-translator.sh
-meow adapter install ./adapter-something
-```
+**Users should review code before using**, just as they would review any script they download from the internet.
 
 ---
 
@@ -1247,7 +1171,7 @@ Events are the generic mechanism for agents to communicate with the orchestrator
 MEOW core provides two commands for events:
 
 ```bash
-# Emit an event (typically called by adapter event translators)
+# Emit an event (called from agent hook configurations)
 meow event <event-type> [--data key=value ...]
 
 # Wait for an event (used in branch conditions)
@@ -1275,30 +1199,30 @@ Users can define any event types they need.
 │                           EVENT FLOW                                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  Agent (Claude)        Adapter Script         Orchestrator       Workflow   │
-│  ──────────────        ──────────────         ────────────       ────────   │
-│       │                      │                     │                │       │
-│  Calls Write tool            │                     │                │       │
-│       │                      │                     │                │       │
-│  PostToolUse hook fires      │                     │                │       │
-│       │                      │                     │                │       │
-│       └─────────────────────►│                     │                │       │
-│         Runs event-translator.sh                   │                │       │
-│                              │                     │                │       │
-│                              │  meow event         │                │       │
-│                              │  tool-completed     │                │       │
-│                              │  --data tool=Write  │                │       │
-│                              │─────────────────────►                │       │
-│                              │                     │                │       │
-│                              │                     │ Routes event   │       │
-│                              │                     │ to waiters     │       │
-│                              │                     │────────────────►       │
-│                              │                     │                │       │
-│                              │                     │         await-event    │
-│                              │                     │         unblocks       │
+│  Agent (Claude)                          Orchestrator             Workflow  │
+│  ──────────────                          ────────────             ────────  │
+│       │                                       │                      │      │
+│  Calls Write tool                             │                      │      │
+│       │                                       │                      │      │
+│  PostToolUse hook fires                       │                      │      │
+│  (configured by workflow                      │                      │      │
+│   via library template)                       │                      │      │
+│       │                                       │                      │      │
+│       │  meow event tool-completed            │                      │      │
+│       │  --data tool=Write                    │                      │      │
+│       │──────────────────────────────────────►│                      │      │
+│       │                                       │                      │      │
+│       │                                       │ Routes event         │      │
+│       │                                       │ to waiters           │      │
+│       │                                       │─────────────────────►│      │
+│       │                                       │                      │      │
+│       │                                       │              await-event    │
+│       │                                       │              unblocks       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key insight:** The agent's hooks call `meow event` directly. Hook configuration is done by workflows via library templates—there's no separate "event translator" script in the adapter.
 
 ### Using Events in Workflows
 
@@ -1409,9 +1333,97 @@ The orchestrator acknowledges receipt:
 
 Events are an **enhancement**, not a requirement. Workflows work fine without them:
 
-- If adapter doesn't support events → no events fire → `await-event` times out → workflow continues
-- If events aren't configured → same behavior
+- If hooks aren't configured → no events fire → `await-event` times out → workflow continues via timeout branch
 - Events add observability and reactive patterns, but core orchestration doesn't depend on them
+
+### Event Hook Configuration
+
+Event hooks are configured via **library templates**, not adapters. This keeps workflows self-contained and allows different workflows to configure different hooks.
+
+**Library template for Claude Code hooks (`lib/claude-events.meow.toml`):**
+
+```toml
+# Configure Claude Code hooks to emit MEOW events
+# Usage: expand template "lib/claude-events#setup-hooks" with worktree path
+
+[setup-hooks]
+name = "setup-hooks"
+description = "Configure Claude Code hooks for MEOW events"
+
+[setup-hooks.variables]
+worktree = { required = true, description = "Path to worktree" }
+events = { default = "all", description = "all | stop-only | tools-only" }
+
+[[setup-hooks.steps]]
+id = "configure"
+executor = "shell"
+command = """
+mkdir -p {{worktree}}/.claude
+
+case "{{events}}" in
+  all)
+    cat > {{worktree}}/.claude/settings.json << 'EOF'
+{
+  "hooks": {
+    "Stop": [{"type": "command", "command": "meow event agent-stopped"}],
+    "PreToolUse": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}],
+    "PostToolUse": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]
+  }
+}
+EOF
+    ;;
+  stop-only)
+    cat > {{worktree}}/.claude/settings.json << 'EOF'
+{"hooks": {"Stop": [{"type": "command", "command": "meow event agent-stopped"}]}}
+EOF
+    ;;
+  tools-only)
+    cat > {{worktree}}/.claude/settings.json << 'EOF'
+{
+  "hooks": {
+    "PreToolUse": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}],
+    "PostToolUse": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]
+  }
+}
+EOF
+    ;;
+esac
+"""
+```
+
+**Usage in workflows:**
+
+```toml
+[[main.steps]]
+id = "create-worktree"
+executor = "shell"
+command = "git worktree add ... && echo path"
+outputs = { path = { source = "stdout" } }
+
+[[main.steps]]
+id = "setup-hooks"
+executor = "expand"
+template = "lib/claude-events#setup-hooks"
+variables = { worktree = "{{create-worktree.outputs.path}}", events = "all" }
+needs = ["create-worktree"]
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+adapter = "claude"
+workdir = "{{create-worktree.outputs.path}}"
+needs = ["setup-hooks"]
+```
+
+**Benefits of library templates over adapter-based events:**
+
+1. **Visibility**: Hook configuration is visible in the workflow
+2. **Flexibility**: Different workflows can use different event configurations
+3. **Self-contained**: Workflows don't depend on adapter installation details
+4. **Testable**: Hook setup is just a shell step—easy to debug
+
+**For other agents:** Create similar library templates (e.g., `lib/aider-events.meow.toml`) that configure that agent's hook/callback system.
 
 ### Context Monitor Pattern
 
@@ -2488,7 +2500,7 @@ meow await-approval gate-id --timeout 24h
 ### Events
 
 ```bash
-# Emit an event (typically called by adapter event translators)
+# Emit an event (called from agent hook configurations)
 meow event <event-type> [--data key=value ...]
 meow event tool-completed --data tool=Write --data file=src/main.ts
 meow event progress --data percent=50 --data message="Halfway done"
@@ -2517,9 +2529,6 @@ meow adapter list
 # Show adapter details
 meow adapter show claude
 meow adapter show claude --config   # Show adapter.toml contents
-
-# Run adapter setup script (one-time per worktree)
-meow adapter setup claude /path/to/worktree
 
 # Remove an adapter
 meow adapter remove claude
