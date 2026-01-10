@@ -23,10 +23,11 @@ The system has **three layers** of concurrency protection:
 │                       CONCURRENCY PROTECTION LAYERS                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  Layer 1: File-System Lock (syscall.Flock)                                  │
-│  ├── Purpose: Prevent multiple orchestrator PROCESSES                       │
-│  ├── Location: .meow/workflows/.lock                                        │
-│  └── Scope: Per workflow directory, inter-process                           │
+│  Layer 1: File-System Lock (syscall.Flock) - PER WORKFLOW                   │
+│  ├── Purpose: Prevent multiple orchestrators on SAME workflow               │
+│  ├── Location: .meow/workflows/{id}.yaml.lock                               │
+│  └── Scope: Per workflow, inter-process                                     │
+│  └── Note: Different workflows can run concurrently!                        │
 │                                                                             │
 │  Layer 2: In-Memory Mutex (sync.Mutex)                                      │
 │  ├── Purpose: Coordinate GOROUTINES within one process                      │
@@ -212,13 +213,17 @@ This merge logic is a band-aid for the orphan IPC handler problem. If the IPC ha
 
 There are **two different lock mechanisms** defined:
 
-1. `YAMLWorkflowStore` uses `.meow/workflows/.lock` (acquired in `NewYAMLWorkflowStore`)
+1. `YAMLWorkflowStore.AcquireWorkflowLock()` uses `.meow/workflows/{id}.yaml.lock` (per-workflow lock)
 2. `StatePersister` uses `.meow/orchestrator.lock` (acquired in `AcquireLock`)
 
 Looking at `run.go`:
 ```go
-// Line 135: Creates workflow store (acquires .meow/workflows/.lock)
+// Line 135: Creates workflow store (no lock acquired here)
 store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+
+// Line 142: Acquires per-workflow lock
+lock, err := store.AcquireWorkflowLock(workflowID)
+defer lock.Release()
 
 // StatePersister is NEVER created or used!
 ```

@@ -175,28 +175,82 @@ func TestYAMLWorkflowStore(t *testing.T) {
 func TestYAMLWorkflowStoreLocking(t *testing.T) {
 	dir := t.TempDir()
 
+	// Multiple stores can be created on the same directory (no directory-level lock)
 	store1, err := NewYAMLWorkflowStore(dir)
 	if err != nil {
 		t.Fatalf("first store failed: %v", err)
 	}
 	defer store1.Close()
 
-	// Second store should fail to acquire lock
-	_, err = NewYAMLWorkflowStore(dir)
-	if err == nil {
-		t.Error("second store should fail due to lock")
-	}
-
-	// Close first store, second should work now
-	store1.Close()
-
 	store2, err := NewYAMLWorkflowStore(dir)
 	if err != nil {
-		t.Errorf("store after close should work: %v", err)
+		t.Fatalf("second store should succeed (per-workflow locking): %v", err)
 	}
-	if store2 != nil {
-		store2.Close()
-	}
+	defer store2.Close()
+
+	t.Run("same workflow lock conflicts", func(t *testing.T) {
+		// First lock on workflow-1
+		lock1, err := store1.AcquireWorkflowLock("workflow-1")
+		if err != nil {
+			t.Fatalf("first lock failed: %v", err)
+		}
+		defer lock1.Release()
+
+		// Second lock on same workflow should fail
+		_, err = store2.AcquireWorkflowLock("workflow-1")
+		if err == nil {
+			t.Error("second lock on same workflow should fail")
+		}
+
+		// Release first lock
+		lock1.Release()
+
+		// Now second lock should succeed
+		lock3, err := store2.AcquireWorkflowLock("workflow-1")
+		if err != nil {
+			t.Errorf("lock after release should succeed: %v", err)
+		}
+		if lock3 != nil {
+			lock3.Release()
+		}
+	})
+
+	t.Run("different workflows can run concurrently", func(t *testing.T) {
+		// Lock on workflow-a
+		lockA, err := store1.AcquireWorkflowLock("workflow-a")
+		if err != nil {
+			t.Fatalf("lock on workflow-a failed: %v", err)
+		}
+		defer lockA.Release()
+
+		// Lock on workflow-b should succeed (different workflow)
+		lockB, err := store2.AcquireWorkflowLock("workflow-b")
+		if err != nil {
+			t.Fatalf("lock on workflow-b should succeed: %v", err)
+		}
+		defer lockB.Release()
+
+		// Both workflows can be "running" concurrently
+		// This is the key test for parallel workflow execution
+	})
+
+	t.Run("lock file cleanup on release", func(t *testing.T) {
+		lock, err := store1.AcquireWorkflowLock("cleanup-test")
+		if err != nil {
+			t.Fatalf("lock failed: %v", err)
+		}
+
+		lockPath := filepath.Join(dir, "cleanup-test.yaml.lock")
+		if _, err := os.Stat(lockPath); os.IsNotExist(err) {
+			t.Error("lock file should exist while locked")
+		}
+
+		lock.Release()
+
+		if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+			t.Error("lock file should be cleaned up after release")
+		}
+	})
 }
 
 func TestYAMLWorkflowStoreCrashRecovery(t *testing.T) {

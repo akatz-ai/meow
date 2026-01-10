@@ -13,46 +13,72 @@ import (
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
-// YAMLWorkflowStore persists workflows as YAML files with atomic writes.
-type YAMLWorkflowStore struct {
-	dir      string   // .meow/workflows
-	lockFile *os.File // Exclusive lock to prevent multiple orchestrators
+// WorkflowLock represents an exclusive lock on a specific workflow.
+// This enables multiple orchestrators to run different workflows concurrently.
+type WorkflowLock struct {
+	workflowID string
+	lockFile   *os.File
+	lockPath   string
 }
 
-// NewYAMLWorkflowStore creates a new store and acquires exclusive lock.
+// Release releases the workflow lock and cleans up the lock file.
+func (l *WorkflowLock) Release() error {
+	if l.lockFile == nil {
+		return nil
+	}
+	syscall.Flock(int(l.lockFile.Fd()), syscall.LOCK_UN)
+	err := l.lockFile.Close()
+	l.lockFile = nil
+	// Clean up lock file (best effort)
+	os.Remove(l.lockPath)
+	return err
+}
+
+// YAMLWorkflowStore persists workflows as YAML files with atomic writes.
+// Multiple stores can be created for the same directory - locking is per-workflow.
+type YAMLWorkflowStore struct {
+	dir string // .meow/workflows
+}
+
+// NewYAMLWorkflowStore creates a new store.
+// The store does not acquire any locks - use AcquireWorkflowLock for per-workflow locking.
 func NewYAMLWorkflowStore(dir string) (*YAMLWorkflowStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating workflow dir: %w", err)
 	}
 
-	// Acquire exclusive lock
-	lockPath := filepath.Join(dir, ".lock")
+	// Recover from any interrupted writes
+	if err := recoverInterruptedWrites(dir); err != nil {
+		return nil, fmt.Errorf("recovering interrupted writes: %w", err)
+	}
+
+	return &YAMLWorkflowStore{dir: dir}, nil
+}
+
+// AcquireWorkflowLock acquires an exclusive lock for a specific workflow.
+// This prevents multiple orchestrators from running the same workflow concurrently.
+// Other workflows are not affected and can run in parallel.
+func (s *YAMLWorkflowStore) AcquireWorkflowLock(workflowID string) (*WorkflowLock, error) {
+	lockPath := filepath.Join(s.dir, workflowID+".yaml.lock")
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("opening lock file: %w", err)
+		return nil, fmt.Errorf("opening workflow lock file: %w", err)
 	}
 
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lockFile.Close()
-		return nil, fmt.Errorf("another orchestrator is running (lock held): %w", err)
+		return nil, fmt.Errorf("workflow %s is already being orchestrated (lock held): %w", workflowID, err)
 	}
 
-	// Recover from any interrupted writes
-	if err := recoverInterruptedWrites(dir); err != nil {
-		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		lockFile.Close()
-		return nil, fmt.Errorf("recovering interrupted writes: %w", err)
-	}
-
-	return &YAMLWorkflowStore{dir: dir, lockFile: lockFile}, nil
+	return &WorkflowLock{
+		workflowID: workflowID,
+		lockFile:   lockFile,
+		lockPath:   lockPath,
+	}, nil
 }
 
-// Close releases the lock.
+// Close is a no-op for compatibility. Use WorkflowLock.Release() to release locks.
 func (s *YAMLWorkflowStore) Close() error {
-	if s.lockFile != nil {
-		syscall.Flock(int(s.lockFile.Fd()), syscall.LOCK_UN)
-		return s.lockFile.Close()
-	}
 	return nil
 }
 

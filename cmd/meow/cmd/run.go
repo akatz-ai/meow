@@ -136,7 +136,14 @@ func runRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
-	defer store.Close()
+
+	// Acquire per-workflow lock before persisting
+	// This prevents multiple orchestrators from running the same workflow
+	lock, err := store.AcquireWorkflowLock(workflowID)
+	if err != nil {
+		return fmt.Errorf("acquiring workflow lock: %w", err)
+	}
+	defer lock.Release()
 
 	// Persist the workflow
 	if err := store.Create(ctx, wf); err != nil {
