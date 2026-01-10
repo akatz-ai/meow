@@ -83,13 +83,6 @@ func setupLogger(level string) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 }
 
-// LoadConfig loads simulator configuration from a YAML file.
-// STUB: Will be implemented by Track 2 (meow-v0bp)
-func LoadConfig(path string) (SimConfig, error) {
-	// TODO: Implement YAML loading in Track 2
-	return NewDefaultSimConfig(), nil
-}
-
 // NewDefaultSimConfig returns a default simulator configuration.
 func NewDefaultSimConfig() SimConfig {
 	return SimConfig{

@@ -32,7 +32,7 @@ func NewSimulator(config SimConfig, logger *slog.Logger) *Simulator {
 		config:        config,
 		logger:        logger,
 		state:         StateStarting,
-		ipc:           NewStubIPCClient(os.Getenv("MEOW_ORCH_SOCK")),
+		ipc:           NewIPCClient(os.Getenv("MEOW_ORCH_SOCK")),
 		agentID:       os.Getenv("MEOW_AGENT"),
 		workflowID:    os.Getenv("MEOW_WORKFLOW"),
 		stepID:        os.Getenv("MEOW_STEP"),
@@ -199,41 +199,3 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// ============================================================================
-// Stub IPC Client Implementation
-// Will be replaced by Track 3 (meow-vvr9)
-// ============================================================================
-
-// StubIPCClient is a stub implementation of IPCClientInterface.
-// Track 3 will implement the real IPC client.
-type StubIPCClient struct {
-	socketPath string
-}
-
-// NewStubIPCClient creates a stub IPC client.
-func NewStubIPCClient(socketPath string) *StubIPCClient {
-	return &StubIPCClient{socketPath: socketPath}
-}
-
-// StepDone signals step completion to the orchestrator.
-func (c *StubIPCClient) StepDone(outputs map[string]any) error {
-	// STUB: No-op, Track 3 will implement real IPC
-	return nil
-}
-
-// GetPrompt retrieves the current prompt from the orchestrator.
-func (c *StubIPCClient) GetPrompt() (string, error) {
-	// STUB: Return empty (no prompt available)
-	return "", nil
-}
-
-// Event sends an event to the orchestrator.
-func (c *StubIPCClient) Event(eventType string, data map[string]any) error {
-	// STUB: No-op, Track 3 will implement real IPC
-	return nil
-}
-
-// Close closes the IPC connection.
-func (c *StubIPCClient) Close() error {
-	return nil
-}
