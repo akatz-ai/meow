@@ -1,0 +1,153 @@
+# ============================================================================
+# MEOW Workflow: Dual Agent Task Runner (v2 - Using Library Components)
+# ============================================================================
+#
+# Two parallel agents with parameterized task inputs, using reusable library
+# templates for cleaner composition.
+#
+# Flow:
+#   1. Create worktrees (serialized)
+#   2. Agent tracks run in parallel (spawn → work → review → verify → kill)
+#   3. Merge branches into integration worktree
+#   4. Merge agent reviews and merges to main
+#
+# Usage:
+#   meow run .meow/templates/dual-agent-v2.meow.toml \
+#     --var 'task_prompt_1=First agent task' \
+#     --var 'task_prompt_2=Second agent task'
+#
+# ============================================================================
+
+[main]
+name = "dual-agent-v2"
+description = "Two parallel agents using library components"
+
+[main.variables]
+track_name_1 = { default = "track-1", description = "First track name" }
+task_prompt_1 = { required = true, description = "Task for first agent" }
+
+track_name_2 = { default = "track-2", description = "Second track name" }
+task_prompt_2 = { required = true, description = "Task for second agent" }
+
+integration_track = { default = "integration", description = "Integration track name" }
+
+cleanup = """
+echo "Cleaning up worktrees..."
+git worktree remove .meow/worktrees/{{track_name_1}}-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/{{track_name_2}}-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/{{integration_track}}-track --force 2>/dev/null || true
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Create Worktrees (Serialized)
+# ============================================================================
+
+[[main.steps]]
+id = "worktree-1"
+executor = "expand"
+template = "lib/worktree"
+[main.steps.variables]
+track_name = "{{track_name_1}}"
+
+[[main.steps]]
+id = "worktree-2"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-1.create"]
+[main.steps.variables]
+track_name = "{{track_name_2}}"
+
+[[main.steps]]
+id = "worktree-integration"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-2.create"]
+[main.steps.variables]
+track_name = "{{integration_track}}"
+
+# ============================================================================
+# PHASE 2: Parallel Agent Tracks
+# ============================================================================
+
+[[main.steps]]
+id = "agent-1"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["worktree-1.create"]
+[main.steps.variables]
+agent_name = "agent-1"
+track_name = "{{track_name_1}}"
+workdir = "{{worktree-1.create.outputs.path}}"
+task_prompt = "{{task_prompt_1}}"
+
+[[main.steps]]
+id = "agent-2"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["worktree-2.create"]
+[main.steps.variables]
+agent_name = "agent-2"
+track_name = "{{track_name_2}}"
+workdir = "{{worktree-2.create.outputs.path}}"
+task_prompt = "{{task_prompt_2}}"
+
+# ============================================================================
+# PHASE 3: Merge Tracks into Integration
+# ============================================================================
+
+[[main.steps]]
+id = "merge-tracks"
+executor = "shell"
+description = "Merge both track branches into integration worktree"
+needs = ["agent-1.done", "agent-2.done", "worktree-integration.create"]
+command = """
+set -e
+cd .meow/worktrees/{{integration_track}}-track
+
+# Read branch names
+BRANCH_1=$(cat ../.meow/worktrees/{{track_name_1}}-track/.meow-branch 2>/dev/null || cat .meow/worktrees/{{track_name_1}}-track/.meow-branch)
+BRANCH_2=$(cat ../.meow/worktrees/{{track_name_2}}-track/.meow-branch 2>/dev/null || cat .meow/worktrees/{{track_name_2}}-track/.meow-branch)
+
+echo "Merging $BRANCH_1..."
+git merge "$BRANCH_1" --no-edit -m "Merge {{track_name_1}} track"
+
+echo "Merging $BRANCH_2..."
+git merge "$BRANCH_2" --no-edit -m "Merge {{track_name_2}} track"
+
+echo "All tracks merged"
+git log --oneline -10
+"""
+
+# ============================================================================
+# PHASE 4: Final Merge Agent
+# ============================================================================
+
+[[main.steps]]
+id = "final"
+executor = "expand"
+template = "lib/merge-agent"
+needs = ["merge-tracks"]
+[main.steps.variables]
+workdir = "{{worktree-integration.create.outputs.path}}"
+branches = "{{track_name_1}}, {{track_name_2}}"
+merge_message = "Merge: Dual agent implementation"
+
+# ============================================================================
+# Done
+# ============================================================================
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["final.done"]
+command = """
+echo "=============================================="
+echo "  DUAL AGENT WORKFLOW COMPLETE"
+echo "=============================================="
+echo "Tracks completed:"
+echo "  - {{track_name_1}}"
+echo "  - {{track_name_2}}"
+echo "All work merged to main."
+echo "=============================================="
+"""

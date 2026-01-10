@@ -1,0 +1,431 @@
+# ============================================================================
+# MEOW Workflow: Edge Case Test Coverage Sprint
+# ============================================================================
+#
+# Implements the edge case test coverage epic (meow-ix1g) with parallelization.
+#
+# Phase 1: Infrastructure (1 agent - all 4 tasks touch same package)
+#   - meow-mmlx: Crash simulation in E2E harness
+#   - meow-a1rx: Output sequence support in simulator
+#   - meow-c58f: Agent session control in harness
+#   - meow-qivp: ActionHang for timeout testing
+#
+# Phase 2: P1 Features (4 agents in parallel)
+#   - meow-5r39: Agent Step Timeout Tests
+#   - meow-3hkv: Agent Crash Tests
+#   - meow-1fb8: Output Validation Retry Tests
+#   - meow-c15i: Crash Recovery Tests
+#
+# Phase 3: Merge and final review
+#
+# Usage:
+#   meow run .meow/templates/edge-case-tests-sprint.meow.toml
+#   meow run .meow/templates/edge-case-tests-sprint.meow.toml --var 'skip_merge_to_target=true'
+#
+# ============================================================================
+
+[main]
+name = "edge-case-tests-sprint"
+description = "Implement edge case test coverage with parallel agents"
+
+[main.variables]
+target_branch = { default = "main", description = "Target branch for merge" }
+skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
+
+cleanup = """
+echo "Cleaning up worktrees..."
+git worktree remove .meow/worktrees/infra-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/timeout-tests-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/crash-tests-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/validation-tests-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/recovery-tests-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/edge-case-integration-track --force 2>/dev/null || true
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Create All Worktrees (Serialized to avoid git conflicts)
+# ============================================================================
+
+[[main.steps]]
+id = "worktree-infra"
+executor = "expand"
+template = "lib/worktree"
+[main.steps.variables]
+track_name = "infra"
+
+[[main.steps]]
+id = "worktree-timeout"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-infra.create"]
+[main.steps.variables]
+track_name = "timeout-tests"
+
+[[main.steps]]
+id = "worktree-crash"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-timeout.create"]
+[main.steps.variables]
+track_name = "crash-tests"
+
+[[main.steps]]
+id = "worktree-validation"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-crash.create"]
+[main.steps.variables]
+track_name = "validation-tests"
+
+[[main.steps]]
+id = "worktree-recovery"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-validation.create"]
+[main.steps.variables]
+track_name = "recovery-tests"
+
+[[main.steps]]
+id = "worktree-integration"
+executor = "expand"
+template = "lib/worktree"
+needs = ["worktree-recovery.create"]
+[main.steps.variables]
+track_name = "edge-case-integration"
+
+# ============================================================================
+# PHASE 2: Infrastructure Track (Must complete before feature tracks)
+# ============================================================================
+
+[[main.steps]]
+id = "infra"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["worktree-infra.create"]
+[main.steps.variables]
+agent_name = "agent-infra"
+track_name = "Infrastructure"
+workdir = "{{worktree-infra.create.outputs.path}}"
+task_prompt = """
+## Test Infrastructure Enhancements
+
+You are implementing 4 infrastructure tasks that extend the E2E test harness.
+These are prerequisites for the edge case tests. Work in order.
+
+### Task 1: meow-mmlx - Crash Simulation in E2E Harness
+Add ability to simulate orchestrator crashes mid-workflow.
+- Add `SimulateCrash()` method to Harness
+- Save workflow state before "crash"
+- Create new harness that loads saved state
+
+### Task 2: meow-a1rx - Output Sequence Support in Simulator
+Enable simulator to produce different outputs on successive calls.
+- Add `WithBehaviorSequence(prompt string, actions []Action)` to SimConfigBuilder
+- First call returns actions[0], second returns actions[1], etc.
+- After sequence exhausted, return last action
+
+### Task 3: meow-c58f - Agent Session Control in Harness
+Add methods to control agent tmux sessions for crash testing.
+- `KillAgentSession(agentName string)` - forcefully kill session
+- `IsAgentSessionAlive(agentName string) bool` - check if running
+- Use the harness's isolated tmux socket
+
+### Task 4: meow-qivp - ActionHang for Timeout Testing
+Add an action that causes the simulator to hang (not respond).
+- Add `ActionHang` constant to action types
+- When simulator receives ActionHang, sleep indefinitely (or until killed)
+- For testing agent step timeouts
+
+## Files to Modify
+- `internal/testutil/e2e/harness.go` - crash simulation, session control
+- `internal/testutil/e2e/sim_config.go` - sequence support, ActionHang
+- `cmd/meow-agent-sim/simulator.go` - implement ActionHang behavior
+
+## Workflow
+1. `bd show <bead-id>` for full requirements
+2. Write tests for each enhancement
+3. Implement the feature
+4. Commit: `feat(e2e): <description> [<bead-id>]`
+5. Close: `bd close <bead-id>`
+"""
+
+# ============================================================================
+# PHASE 3: Parallel Feature Tracks (Start after infrastructure completes)
+# ============================================================================
+
+# --- Agent Timeout Tests ---
+[[main.steps]]
+id = "timeout-tests"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["infra.done", "worktree-timeout.create"]
+[main.steps.variables]
+agent_name = "agent-timeout"
+track_name = "Timeout Tests"
+workdir = "{{worktree-timeout.create.outputs.path}}"
+task_prompt = """
+## Feature: Agent Step Timeout Tests (meow-5r39)
+
+Implement E2E tests for agent step timeout handling.
+
+### Tests to Implement (in internal/testutil/e2e/e2e_test.go)
+
+1. **TestAgentTimeout_SendsSignal**
+   - Agent step with short timeout
+   - Simulator hangs (use ActionHang)
+   - Verify orchestrator sends C-c to tmux session
+   - Step should fail after timeout
+
+2. **TestAgentTimeout_OnErrorContinue**
+   - Agent step with on_error=continue and timeout
+   - Simulator hangs
+   - Verify workflow continues after timeout
+   - Next step runs successfully
+
+3. **TestAgentTimeout_OnErrorFail**
+   - Agent step with on_error=fail (default) and timeout
+   - Simulator hangs
+   - Verify workflow fails
+   - Cleanup runs
+
+4. **TestAgentTimeout_RecoveryTemplate**
+   - Agent step with timeout and recovery_template
+   - Simulator hangs
+   - Verify recovery template expands on timeout
+   - Recovery steps execute
+
+## Implementation Notes
+- Use the new ActionHang from infrastructure
+- Set short timeouts (5s) for fast tests
+- Verify correct state transitions in workflow
+"""
+
+# --- Agent Crash Tests ---
+[[main.steps]]
+id = "crash-tests"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["infra.done", "worktree-crash.create"]
+[main.steps.variables]
+agent_name = "agent-crash"
+track_name = "Crash Tests"
+workdir = "{{worktree-crash.create.outputs.path}}"
+task_prompt = """
+## Feature: Agent Crash Tests (meow-3hkv)
+
+Implement E2E tests for agent session crash handling.
+
+### Tests to Implement (in internal/testutil/e2e/e2e_test.go)
+
+1. **TestAgentCrash_SessionDies**
+   - Start agent step
+   - Use harness to kill agent's tmux session
+   - Verify orchestrator detects death
+   - Step marked as failed
+
+2. **TestAgentCrash_OnErrorContinue**
+   - Agent step with on_error=continue
+   - Kill session mid-execution
+   - Workflow continues to next step
+
+3. **TestAgentCrash_StopHookNotCalled**
+   - Agent step running
+   - Kill session unexpectedly
+   - Verify stop hook was NOT called (crashed, not graceful)
+
+4. **TestAgentCrash_RalphWiggum** (catastrophic failure)
+   - Multiple agent steps in sequence
+   - First agent crashes
+   - Verify workflow fails gracefully
+   - All resources cleaned up
+
+## Implementation Notes
+- Use the new KillAgentSession from infrastructure
+- Use IsAgentSessionAlive to verify state
+- Check workflow state files for correct status
+"""
+
+# --- Output Validation Retry Tests ---
+[[main.steps]]
+id = "validation-tests"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["infra.done", "worktree-validation.create"]
+[main.steps.variables]
+agent_name = "agent-validation"
+track_name = "Validation Tests"
+workdir = "{{worktree-validation.create.outputs.path}}"
+task_prompt = """
+## Feature: Output Validation Retry Tests (meow-1fb8)
+
+Implement E2E tests for output validation and retry behavior.
+
+### Tests to Implement (in internal/testutil/e2e/e2e_test.go)
+
+1. **TestOutputValidation_MissingOutput**
+   - Agent step requires output "result"
+   - Simulator completes without providing "result"
+   - Verify step stays in "completing" state
+   - Agent prompted to provide missing output
+
+2. **TestOutputValidation_WrongType**
+   - Agent step expects output "count" as integer
+   - Simulator provides string
+   - Verify validation fails
+   - Agent prompted to correct
+
+3. **TestOutputValidation_MultipleRetries**
+   - Use behavior sequence: fail, fail, succeed
+   - First two calls missing output
+   - Third call provides correct output
+   - Step eventually completes
+
+4. **TestOutputValidation_EventualTimeout**
+   - Agent step with max_retries=2
+   - Simulator never provides correct output
+   - After retries exhausted, step fails
+   - on_error handling triggered
+
+## Implementation Notes
+- Use the new WithBehaviorSequence from infrastructure
+- Test the completing → running → completing cycle
+- Verify retry count tracking
+"""
+
+# --- Crash Recovery Tests ---
+[[main.steps]]
+id = "recovery-tests"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["infra.done", "worktree-recovery.create"]
+[main.steps.variables]
+agent_name = "agent-recovery"
+track_name = "Recovery Tests"
+workdir = "{{worktree-recovery.create.outputs.path}}"
+task_prompt = """
+## Feature: Crash Recovery Tests (meow-c15i)
+
+Implement E2E tests for orchestrator crash recovery.
+
+### Tests to Implement (in internal/testutil/e2e/e2e_test.go)
+
+1. **TestRecovery_PendingStep**
+   - Start workflow, crash before first step runs
+   - Restart orchestrator
+   - Verify workflow resumes from pending step
+
+2. **TestRecovery_RunningShellStep**
+   - Shell step running, orchestrator crashes
+   - Restart orchestrator
+   - Shell step should be marked failed (can't recover process)
+   - on_error handling applied
+
+3. **TestRecovery_RunningAgentStep**
+   - Agent step running, orchestrator crashes
+   - Agent's tmux session still alive
+   - Restart orchestrator
+   - Orchestrator re-attaches to agent session
+   - Step can complete normally
+
+4. **TestRecovery_CompletingStep**
+   - Step in "completing" state (output validation)
+   - Orchestrator crashes
+   - Restart orchestrator
+   - Resume validation from completing state
+
+5. **TestRecovery_PartialExpansion**
+   - Expand step running, orchestrator crashes mid-expansion
+   - Some child steps created, others not
+   - Restart orchestrator
+   - Expansion completes correctly
+
+## Implementation Notes
+- Use the new SimulateCrash from infrastructure
+- Create new harness instances to simulate restart
+- Verify state file integrity after recovery
+"""
+
+# ============================================================================
+# PHASE 4: Merge All Tracks
+# ============================================================================
+
+[[main.steps]]
+id = "merge-all"
+executor = "shell"
+description = "Merge all tracks into integration worktree"
+needs = ["timeout-tests.done", "crash-tests.done", "validation-tests.done", "recovery-tests.done", "worktree-integration.create"]
+command = """
+set -e
+cd .meow/worktrees/edge-case-integration-track
+
+# Read branch names
+BRANCH_INFRA=$(cat ../infra-track/.meow-branch)
+BRANCH_TIMEOUT=$(cat ../timeout-tests-track/.meow-branch)
+BRANCH_CRASH=$(cat ../crash-tests-track/.meow-branch)
+BRANCH_VALIDATION=$(cat ../validation-tests-track/.meow-branch)
+BRANCH_RECOVERY=$(cat ../recovery-tests-track/.meow-branch)
+
+echo "Merging infrastructure track ($BRANCH_INFRA)..."
+git merge "$BRANCH_INFRA" --no-edit -m "Merge: E2E infrastructure enhancements"
+
+echo "Merging timeout tests track ($BRANCH_TIMEOUT)..."
+git merge "$BRANCH_TIMEOUT" --no-edit -m "Merge: Agent timeout tests"
+
+echo "Merging crash tests track ($BRANCH_CRASH)..."
+git merge "$BRANCH_CRASH" --no-edit -m "Merge: Agent crash tests"
+
+echo "Merging validation tests track ($BRANCH_VALIDATION)..."
+git merge "$BRANCH_VALIDATION" --no-edit -m "Merge: Output validation tests"
+
+echo "Merging recovery tests track ($BRANCH_RECOVERY)..."
+git merge "$BRANCH_RECOVERY" --no-edit -m "Merge: Crash recovery tests"
+
+echo "All tracks merged"
+git log --oneline -20
+"""
+
+# ============================================================================
+# PHASE 5: Final Review and Merge
+# ============================================================================
+
+[[main.steps]]
+id = "final"
+executor = "expand"
+template = "lib/merge-agent"
+needs = ["merge-all"]
+[main.steps.variables]
+workdir = "{{worktree-integration.create.outputs.path}}"
+branches = "infra, timeout-tests, crash-tests, validation-tests, recovery-tests"
+merge_message = "feat(e2e): Edge case test coverage [meow-ix1g]"
+target_branch = "{{target_branch}}"
+skip_merge_to_target = "{{skip_merge_to_target}}"
+
+# ============================================================================
+# Done
+# ============================================================================
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["final.done"]
+command = """
+echo "=============================================="
+echo "  EDGE CASE TESTS SPRINT COMPLETE"
+echo "=============================================="
+echo ""
+echo "Infrastructure tasks:"
+echo "  - meow-mmlx: Crash simulation"
+echo "  - meow-a1rx: Output sequences"
+echo "  - meow-c58f: Session control"
+echo "  - meow-qivp: ActionHang"
+echo ""
+echo "P1 Features:"
+echo "  - meow-5r39: Agent timeout tests"
+echo "  - meow-3hkv: Agent crash tests"
+echo "  - meow-1fb8: Output validation tests"
+echo "  - meow-c15i: Crash recovery tests"
+echo ""
+echo "Epic: meow-ix1g (Edge Case Test Coverage)"
+echo "=============================================="
+"""

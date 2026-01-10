@@ -1,0 +1,172 @@
+# ============================================================================
+# MEOW Library: Merge Agent
+# ============================================================================
+#
+# Final merge agent pattern: spawn → review → merge to main → kill
+#
+# This agent reviews all completed work, runs tests, and merges to main.
+# Used as the final step in multi-agent workflows.
+#
+# Variables:
+#   workdir       (required) - Working directory (integration worktree)
+#   branches      (required) - Description of branches to merge or review
+#   merge_message (default)  - Commit message for the merge
+#
+# Usage:
+#   [[main.steps]]
+#   id = "final-merge"
+#   executor = "expand"
+#   template = "lib/merge-agent"
+#   needs = ["track-1.done", "track-2.done"]
+#   variables = {
+#     workdir = "{{integration-worktree.create.outputs.path}}",
+#     branches = "track-1, track-2",
+#     merge_message = "Merge: Feature implementation"
+#   }
+#
+# ============================================================================
+
+[main]
+name = "merge-agent"
+description = "Final review and merge agent"
+
+[main.variables]
+workdir = { required = true, description = "Working directory (integration worktree)" }
+branches = { required = true, description = "Description of branches being merged" }
+merge_message = { default = "Merge: Multi-agent implementation", description = "Merge commit message" }
+target_branch = { default = "main", description = "Target branch to merge into (main or feature branch)" }
+skip_merge_to_target = { default = "false", description = "If true, skip merging to target - just push integration branch" }
+
+# ============================================================================
+# Step 1: Spawn Merge Agent
+# ============================================================================
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{workdir}}"
+
+# ============================================================================
+# Step 2: Review All Changes
+# ============================================================================
+
+[[main.steps]]
+id = "review"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn"]
+prompt = """
+# Final Review Agent
+
+You are the final reviewer. Verify all implementation work before merging.
+
+## Target Branch: {{target_branch}}
+## Branches Being Merged: {{branches}}
+
+## Review All Changes
+```bash
+git log --oneline {{target_branch}}..HEAD
+git diff --stat {{target_branch}}..HEAD
+```
+
+## Run Tests
+```bash
+go test ./... 2>&1 | tail -50
+```
+
+All tests must pass before proceeding.
+
+## Check for Issues
+- Code that doesn't match the spec
+- Missing error handling
+- Incomplete implementations
+- Dead code or unused imports
+- Merge conflicts or inconsistencies
+
+Fix small issues directly, document larger ones.
+
+When review is complete: `meow done`
+"""
+
+# ============================================================================
+# Step 3: Merge to Target Branch
+# ============================================================================
+
+[[main.steps]]
+id = "merge"
+executor = "agent"
+agent = "merge-agent"
+needs = ["review"]
+prompt = """
+# Merge to {{target_branch}}
+
+All reviews complete. Now merge the integration branch.
+
+## Skip Merge Mode: {{skip_merge_to_target}}
+
+If skip_merge_to_target is "true", just push the integration branch:
+```bash
+BRANCH=$(cat {{workdir}}/.meow-branch)
+cd /data/projects/meow-machine
+git push -u origin "$BRANCH"
+echo "Branch $BRANCH pushed. Ready for PR to {{target_branch}}"
+```
+
+If skip_merge_to_target is "false" (default), merge to {{target_branch}}:
+```bash
+cd /data/projects/meow-machine
+
+# Get current branch name from the worktree
+BRANCH=$(cat {{workdir}}/.meow-branch)
+
+# Checkout target and merge
+git checkout {{target_branch}}
+git pull origin {{target_branch}}
+git merge "$BRANCH" --no-edit -m "{{merge_message}}"
+
+# Verify
+git log --oneline -10
+go test ./... 2>&1 | tail -20
+
+# Push
+git push origin {{target_branch}}
+```
+
+## If Merge Conflicts
+1. List conflicted files: `git status`
+2. Resolve each conflict carefully
+3. Stage: `git add <file>`
+4. Complete: `git commit`
+
+When complete: `meow done`
+"""
+
+# ============================================================================
+# Step 4: Kill Merge Agent
+# ============================================================================
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "merge-agent"
+needs = ["merge"]
+graceful = true
+
+# ============================================================================
+# Step 5: Done Marker
+# ============================================================================
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = """
+echo "=============================================="
+echo "  MERGE COMPLETE"
+echo "=============================================="
+echo "Branches merged: {{branches}}"
+echo "Target: {{target_branch}}"
+echo "Skip merge mode: {{skip_merge_to_target}}"
+echo "=============================================="
+"""
+needs = ["kill"]

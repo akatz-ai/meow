@@ -1,0 +1,170 @@
+# ============================================================================
+# MEOW Library: Agent Track Lifecycle
+# ============================================================================
+#
+# Complete agent lifecycle: spawn → work → review → verify-clean → kill
+#
+# This is the battle-tested pattern extracted from dual/quad agent workflows.
+# Each agent works in isolation, self-reviews, ensures clean git state, then exits.
+#
+# Variables:
+#   agent_name   (required) - Unique agent identifier
+#   track_name   (required) - Track name for logging/identification
+#   workdir      (required) - Working directory (typically a worktree path)
+#   task_prompt  (required) - The main task prompt for the agent
+#   spec_file    (default: "docs/MVP-SPEC-v2.md") - Spec file to read first
+#
+# Usage:
+#   [[main.steps]]
+#   id = "worker-1"
+#   executor = "expand"
+#   template = "lib/agent-track"
+#   variables = {
+#     agent_name = "agent-1",
+#     track_name = "feature-x",
+#     workdir = "{{setup-worktree.create.outputs.path}}",
+#     task_prompt = "Implement feature X..."
+#   }
+#
+# ============================================================================
+
+[main]
+name = "agent-track"
+description = "Complete agent lifecycle with work, review, and cleanup"
+
+[main.variables]
+agent_name = { required = true, description = "Unique agent identifier" }
+track_name = { required = true, description = "Track name for identification" }
+workdir = { required = true, description = "Working directory path" }
+task_prompt = { required = true, description = "Main task prompt" }
+spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first" }
+
+# ============================================================================
+# Step 1: Spawn Agent
+# ============================================================================
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent_name}}"
+workdir = "{{workdir}}"
+
+# ============================================================================
+# Step 2: Main Work
+# ============================================================================
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["spawn"]
+prompt = """
+# {{track_name}} Agent Task
+
+## FIRST: Read the Specification
+Before doing ANY work, read the complete specification:
+
+@{{spec_file}}
+
+This is REQUIRED. The spec defines all types, patterns, and constraints you must follow.
+
+## Your Assignment
+
+{{task_prompt}}
+
+## IMPORTANT CONSTRAINTS
+- **ONLY** implement the work described above
+- Do NOT work on unrelated beads or issues you might see
+- Do NOT modify files outside your assignment scope
+- If you discover related work needed, note it but do NOT implement it
+
+## Workflow
+1. If beads are referenced, run `bd show <bead-id>` for full requirements
+2. Write tests first (TDD approach) when implementing code
+3. Implement the minimum code to pass tests
+4. Commit after each logical unit with a clear message
+5. If beads are referenced, close them as you complete: `bd close <bead-id>`
+
+## When Done
+After ALL your assigned work is complete, run:
+
+```
+meow done
+```
+"""
+
+# ============================================================================
+# Step 3: Self-Review
+# ============================================================================
+
+[[main.steps]]
+id = "review"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["work"]
+prompt = """
+# Self-Review: {{track_name}} Track
+
+Take a step back and carefully reread your most recent code changes with fresh eyes.
+
+## Review Checklist
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Verify test coverage** - do tests actually test the important behavior?
+5. **Check imports** - any unused imports? Missing imports that will cause build failures?
+6. **Run tests** - `go test ./...` or equivalent for the project
+
+## Actions
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
+
+## When Done
+```
+meow done
+```
+"""
+
+# ============================================================================
+# Step 4: Verify Clean Git State
+# ============================================================================
+
+[[main.steps]]
+id = "verify-clean"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["review"]
+prompt = """
+# Final Commit Check: {{track_name}} Track
+
+Ensure ALL your changes are committed.
+
+## Steps
+1. Run `git status` to check for uncommitted changes
+2. If uncommitted: `git add -A && git commit -m "chore: final changes for {{track_name}}"`
+3. Run `git status` again to verify clean
+4. Run `git log --oneline -5` to show recent commits
+
+When clean, run: `meow done`
+"""
+
+# ============================================================================
+# Step 5: Kill Agent
+# ============================================================================
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "{{agent_name}}"
+needs = ["verify-clean"]
+graceful = true
+
+# ============================================================================
+# Step 6: Done Marker (for downstream dependencies)
+# ============================================================================
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo '{{track_name}} track complete'"
+needs = ["kill"]
