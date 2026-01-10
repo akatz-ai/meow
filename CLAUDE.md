@@ -124,6 +124,97 @@ meow approve <wf> <gate>  # Approve a gate
 meow reject <wf> <gate>   # Reject a gate
 ```
 
+## Testing
+
+### Test Types
+
+| Type | Location | Purpose | Runtime |
+|------|----------|---------|---------|
+| Unit | `*_test.go` alongside source | Test individual functions | ~6s total |
+| Integration | `*_integration_test.go` | Test component interactions | Included in unit |
+| E2E | `internal/testutil/e2e/` | Full workflow execution | ~48-75s |
+
+### Running Tests
+
+**Makefile targets (preferred):**
+
+```bash
+make test              # Run all tests with race detector (~80s)
+make test-short        # Skip E2E tests (~6s) - use for quick feedback
+make test-cover        # Generate coverage report
+make check             # fmt + vet + test
+```
+
+**Direct go test commands:**
+
+```bash
+# All tests
+go test ./...
+go test -v ./...                    # Verbose output
+go test -race ./...                 # Race condition detector
+
+# Short tests only (skip E2E)
+go test -short ./...
+
+# Specific package
+go test ./internal/types/
+go test -v ./internal/template/
+
+# Specific test by name
+go test -v -run TestExecutorType ./internal/types/
+go test -v -run TestShellStep ./internal/testutil/e2e/
+
+# E2E tests only
+go test -v ./internal/testutil/e2e/
+
+# Disable test cache
+go test -count=1 ./...
+
+# Coverage
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
+```
+
+### Key Test Locations
+
+| Package | Tests For |
+|---------|-----------|
+| `internal/types/*_test.go` | Step, Workflow, ExecutorType validation |
+| `internal/template/*_test.go` | Template parsing, validation, variable expansion |
+| `internal/orchestrator/*_test.go` | State management, executor dispatch |
+| `internal/agent/*_test.go` | Tmux session management, agent spawning |
+| `internal/testutil/e2e/e2e_test.go` | Full workflow execution scenarios |
+| `cmd/meow/cmd/*_test.go` | CLI command tests |
+
+### E2E Test Infrastructure
+
+E2E tests use a harness that provides:
+- Isolated temporary directories per test
+- Built binaries (`meow` and `meow-agent-sim`)
+- Simulator for agent responses
+
+```go
+// Example E2E test pattern
+func TestMyWorkflow(t *testing.T) {
+    h := e2e.NewHarness(t)
+
+    cfg := e2e.NewSimConfigBuilder().
+        WithBehavior("do something", e2e.ActionComplete).
+        Build()
+
+    run := h.RunWorkflow("my-template.meow.toml", cfg)
+    run.WaitForStep("step-id", types.StepStatusDone)
+}
+```
+
+### Writing New Tests
+
+1. **Unit tests**: Add `*_test.go` in the same package as source
+2. **Use subtests**: Group related cases with `t.Run("scenario", ...)`
+3. **Use `t.TempDir()`**: For file system isolation
+4. **Use `t.Helper()`**: In helper functions for better error locations
+5. **Use `t.Cleanup()`**: For resource cleanup
+
 ## Best Practices
 
 ### 1. Read the Spec First
