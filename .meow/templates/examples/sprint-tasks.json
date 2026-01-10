@@ -1,0 +1,16 @@
+[
+  {
+    "name": "auth-api",
+    "prompt": "## Implement Authentication API\n\nCreate the authentication endpoints for the application.\n\n### Tasks\n1. Create `/api/auth/login` POST endpoint\n2. Create `/api/auth/logout` POST endpoint\n3. Create `/api/auth/refresh` POST endpoint\n4. Add JWT token validation middleware\n\n### Files to Create/Modify\n- `internal/api/auth.go` - Auth handlers\n- `internal/middleware/jwt.go` - JWT middleware\n- `internal/api/auth_test.go` - Tests",
+    "beads": "meow-auth-1 meow-auth-2"
+  },
+  {
+    "name": "user-crud",
+    "prompt": "## Implement User CRUD Operations\n\nCreate user management endpoints.\n\n### Tasks\n1. GET `/api/users` - List users\n2. GET `/api/users/:id` - Get user by ID\n3. POST `/api/users` - Create user\n4. PUT `/api/users/:id` - Update user\n5. DELETE `/api/users/:id` - Delete user\n\n### Files to Create/Modify\n- `internal/api/users.go` - User handlers\n- `internal/db/users.go` - User database queries\n- `internal/api/users_test.go` - Tests",
+    "beads": "meow-user-1"
+  },
+  {
+    "name": "validation",
+    "prompt": "## Add Request Validation\n\nImplement input validation for all API endpoints.\n\n### Tasks\n1. Add validation middleware using go-playground/validator\n2. Create custom validation rules for email, password strength\n3. Add validation to auth endpoints\n4. Add validation to user endpoints\n5. Return proper error responses\n\n### Files to Create/Modify\n- `internal/middleware/validation.go`\n- `internal/types/validators.go`\n- Update existing handlers to use validation"
+  }
+]

@@ -232,7 +232,7 @@ func TestForeachConfig(t *testing.T) {
 				Template:      ".worker-task",
 				Variables:     map[string]string{"agent_id": "worker-{{i}}"},
 				Parallel:      boolPtr(true),
-				MaxConcurrent: 5,
+				MaxConcurrent: "5",
 				Join:          boolPtr(true),
 			},
 		}
@@ -313,6 +313,32 @@ func TestForeachConfig(t *testing.T) {
 			t.Error("expected error for missing foreach config")
 		}
 	})
+}
+
+func TestGetMaxConcurrent(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{"empty string", "", 0},
+		{"valid integer", "5", 5},
+		{"zero", "0", 0},
+		{"negative", "-1", 0},
+		{"invalid string", "abc", 0},
+		{"variable placeholder (unparsed)", "{{max_agents}}", 0},
+		{"large number", "100", 100},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ForeachConfig{MaxConcurrent: tc.input}
+			result := cfg.GetMaxConcurrent()
+			if result != tc.expected {
+				t.Errorf("GetMaxConcurrent(%q) = %d, expected %d", tc.input, result, tc.expected)
+			}
+		})
+	}
 }
 
 func TestStepLifecycle(t *testing.T) {

@@ -1346,8 +1346,18 @@ task_description = "{{task}}"
 	if step.Parallel == nil || !*step.Parallel {
 		t.Error("expected parallel to be true")
 	}
-	if step.MaxConcurrent != 5 {
-		t.Errorf("expected max_concurrent 5, got %d", step.MaxConcurrent)
+	// MaxConcurrent is any type (can be int64 or string)
+	switch v := step.MaxConcurrent.(type) {
+	case int64:
+		if v != 5 {
+			t.Errorf("expected max_concurrent 5, got %d", v)
+		}
+	case string:
+		if v != "5" {
+			t.Errorf("expected max_concurrent '5', got %q", v)
+		}
+	default:
+		t.Errorf("expected max_concurrent to be int64 or string, got %T", step.MaxConcurrent)
 	}
 	if step.Join == nil || !*step.Join {
 		t.Error("expected join to be true")

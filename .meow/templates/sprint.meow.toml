@@ -1,0 +1,443 @@
+# ============================================================================
+# MEOW Workflow: Master Sprint Template
+# ============================================================================
+#
+# Dynamic parallel agent sprint using foreach. This is the generalized
+# abstraction of all sprint-specific templates (edge-case-tests-sprint,
+# foreach-sprint, etc.).
+#
+# USAGE:
+#
+#   # With inline JSON array of tasks:
+#   meow run sprint --var 'tasks=[
+#     {"name": "feature-1", "prompt": "Implement feature 1..."},
+#     {"name": "feature-2", "prompt": "Implement feature 2..."}
+#   ]'
+#
+#   # With a JSON file:
+#   meow run sprint --var-file tasks=my-sprint-tasks.json
+#
+#   # With options:
+#   meow run sprint \
+#     --var-file tasks=tasks.json \
+#     --var target_branch=feature/my-feature \
+#     --var max_agents=2
+#
+# TASK FORMAT:
+#
+#   Each task in the array must have:
+#     - name: string (used for worktree/branch naming, must be valid git branch chars)
+#     - prompt: string (the task prompt given to the agent)
+#
+#   Optional fields:
+#     - beads: string (bead IDs to close when done, e.g., "meow-abc meow-xyz")
+#
+# WORKFLOW:
+#
+#   Phase 1: Setup
+#     - Create worktrees for each task (serialized to avoid git conflicts)
+#     - Create integration worktree
+#     - Enrich tasks array with workdir paths
+#
+#   Phase 2: Parallel Agent Tracks
+#     - For each task: spawn → work → review → verify-clean → kill
+#     - All agents run in parallel (up to max_agents concurrent)
+#     - Uses lib/agent-track pattern
+#
+#   Phase 3: Integration
+#     - Agent merges all task branches into integration worktree
+#     - Handles merge conflicts (common when agents edit same files)
+#     - Runs tests to verify integration
+#
+#   Phase 4: Final Merge
+#     - Merges integration to target_branch (or pushes for PR)
+#     - Runs final tests
+#
+# ============================================================================
+
+[main]
+name = "sprint"
+description = "Dynamic parallel agent sprint with foreach"
+
+[main.variables]
+tasks = { required = true, description = "JSON array of {name, prompt} task objects" }
+target_branch = { default = "main", description = "Target branch for final merge" }
+skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
+max_agents = { default = "4", description = "Maximum concurrent agents" }
+spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
+
+cleanup = """
+echo "Cleaning up sprint worktrees..."
+
+# Parse task names and remove each worktree
+TASKS='{{tasks}}'
+for name in $(echo "$TASKS" | jq -r '.[].name' 2>/dev/null || echo ""); do
+  git worktree remove ".meow/worktrees/${name}-track" --force 2>/dev/null || rm -rf ".meow/worktrees/${name}-track"
+done
+
+# Remove integration worktree
+git worktree remove .meow/worktrees/sprint-integration-track --force 2>/dev/null || rm -rf .meow/worktrees/sprint-integration-track
+
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Setup - Create All Worktrees and Enrich Tasks Array
+# ============================================================================
+#
+# This MUST be a single shell step (not foreach) because:
+# 1. Git worktree operations are not concurrency-safe
+# 2. We need to output an enriched array with workdir paths for the next phase
+#
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+description = "Create worktrees and prepare enriched task list"
+command = """
+set -e
+mkdir -p .meow/worktrees
+
+# Parse the tasks JSON array
+TASKS='{{tasks}}'
+TASK_COUNT=$(echo "$TASKS" | jq 'length')
+
+if [ "$TASK_COUNT" -eq 0 ]; then
+  echo "ERROR: No tasks provided" >&2
+  exit 1
+fi
+
+echo "Creating $TASK_COUNT worktrees..." >&2
+
+# Build enriched tasks array with workdir paths
+ENRICHED='[]'
+TRACK_DIRS=''
+
+for i in $(seq 0 $((TASK_COUNT - 1))); do
+  # Extract task fields
+  TASK=$(echo "$TASKS" | jq -c ".[$i]")
+  NAME=$(echo "$TASK" | jq -r '.name')
+  PROMPT=$(echo "$TASK" | jq -r '.prompt')
+  BEADS=$(echo "$TASK" | jq -r '.beads // ""')
+
+  # Validate name
+  if [ -z "$NAME" ] || [ "$NAME" = "null" ]; then
+    echo "ERROR: Task $i missing 'name' field" >&2
+    exit 1
+  fi
+
+  # Create worktree
+  WORKTREE=".meow/worktrees/${NAME}-track"
+  BRANCH="${NAME}-track-$(date +%s)"
+
+  # Clean up any existing worktree
+  if [ -d "$WORKTREE" ]; then
+    echo "  Cleaning up existing worktree: $WORKTREE" >&2
+    git worktree remove "$WORKTREE" --force 2>/dev/null || rm -rf "$WORKTREE"
+  fi
+
+  echo "  Creating worktree: $WORKTREE ($BRANCH)" >&2
+  git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+  echo "$BRANCH" > "$WORKTREE/.meow-branch"
+
+  # Add to enriched array
+  ENRICHED=$(echo "$ENRICHED" | jq -c \
+    --arg name "$NAME" \
+    --arg prompt "$PROMPT" \
+    --arg beads "$BEADS" \
+    --arg workdir "$WORKTREE" \
+    --arg branch "$BRANCH" \
+    --argjson index "$i" \
+    '. + [{
+      "name": $name,
+      "prompt": $prompt,
+      "beads": $beads,
+      "workdir": $workdir,
+      "branch": $branch,
+      "index": $index
+    }]')
+
+  # Build track_dirs string for integration agent
+  if [ -z "$TRACK_DIRS" ]; then
+    TRACK_DIRS="${NAME}-track"
+  else
+    TRACK_DIRS="${TRACK_DIRS}, ${NAME}-track"
+  fi
+done
+
+# Create integration worktree
+INT_WORKTREE=".meow/worktrees/sprint-integration-track"
+INT_BRANCH="sprint-integration-track-$(date +%s)"
+
+if [ -d "$INT_WORKTREE" ]; then
+  echo "  Cleaning up existing integration worktree" >&2
+  git worktree remove "$INT_WORKTREE" --force 2>/dev/null || rm -rf "$INT_WORKTREE"
+fi
+
+echo "  Creating integration worktree: $INT_WORKTREE ($INT_BRANCH)" >&2
+git worktree add -b "$INT_BRANCH" "$INT_WORKTREE" HEAD >&2
+echo "$INT_BRANCH" > "$INT_WORKTREE/.meow-branch"
+
+echo "Setup complete: $TASK_COUNT task worktrees + integration" >&2
+
+# Output the enriched tasks array (this is captured as shell output)
+echo "$ENRICHED"
+"""
+
+[main.steps.shell_outputs]
+enriched_tasks = { source = "stdout" }
+
+# Store additional outputs in files for easy access
+[[main.steps]]
+id = "setup-metadata"
+executor = "shell"
+description = "Write metadata files for downstream steps"
+needs = ["setup"]
+command = """
+set -e
+
+# Write track dirs list
+TASKS='{{setup.outputs.enriched_tasks}}'
+TRACK_DIRS=$(echo "$TASKS" | jq -r '[.[].name] | map(. + "-track") | join(", ")')
+echo "$TRACK_DIRS" > .meow/worktrees/.track-dirs
+
+# Write integration worktree path
+echo ".meow/worktrees/sprint-integration-track" > .meow/worktrees/.integration-path
+
+echo "Metadata written"
+"""
+
+# ============================================================================
+# PHASE 2: Parallel Agent Tracks
+# ============================================================================
+#
+# Uses foreach to spawn an agent track for each task.
+# Each iteration expands the lib/agent-track template which handles:
+#   spawn → work → review → verify-clean → kill
+#
+
+[[main.steps]]
+id = "agents"
+executor = "foreach"
+items = "{{setup.outputs.enriched_tasks}}"
+item_var = "task"
+index_var = "i"
+template = ".agent-track-wrapper"
+parallel = true
+max_concurrent = "{{max_agents}}"
+needs = ["setup-metadata"]
+
+[main.steps.variables]
+spec_file = "{{spec_file}}"
+
+
+# ============================================================================
+# PHASE 3: Integration Agent (Merges all branches)
+# ============================================================================
+#
+# The integration agent merges all task branches into the integration worktree.
+# This is an agent (not shell) because merge conflicts are common when parallel
+# agents modify the same files (e.g., adding tests to e2e_test.go).
+#
+
+[[main.steps]]
+id = "integration"
+executor = "expand"
+template = ".sprint-integration"
+needs = ["agents"]
+
+[main.steps.variables]
+workdir = ".meow/worktrees/sprint-integration-track"
+
+
+# ============================================================================
+# PHASE 4: Final Merge to Target Branch
+# ============================================================================
+
+[[main.steps]]
+id = "final"
+executor = "expand"
+template = "lib/merge-agent"
+needs = ["integration.done"]
+
+[main.steps.variables]
+workdir = ".meow/worktrees/sprint-integration-track"
+branches = "sprint tasks"
+merge_message = "Merge: Sprint implementation"
+target_branch = "{{target_branch}}"
+skip_merge_to_target = "{{skip_merge_to_target}}"
+
+
+# ============================================================================
+# Done
+# ============================================================================
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["final.done"]
+command = """
+echo "=============================================="
+echo "  SPRINT COMPLETE"
+echo "=============================================="
+echo ""
+echo "Tasks completed:"
+TASKS='{{setup.outputs.enriched_tasks}}'
+echo "$TASKS" | jq -r '.[] | "  - \(.name): \(.branch)"'
+echo ""
+echo "Target branch: {{target_branch}}"
+echo "Skip merge mode: {{skip_merge_to_target}}"
+echo "=============================================="
+"""
+
+
+# ============================================================================
+# INTERNAL TEMPLATES
+# ============================================================================
+
+# Sprint-specific integration that reads track_dirs from file
+[sprint-integration]
+name = "sprint-integration"
+description = "Internal: Integration agent that reads track_dirs dynamically"
+internal = true
+
+[sprint-integration.variables]
+workdir = { required = true }
+
+[[sprint-integration.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "agent-integration"
+workdir = "{{workdir}}"
+
+[[sprint-integration.steps]]
+id = "work"
+executor = "agent"
+agent = "agent-integration"
+needs = ["spawn"]
+prompt = """
+# Integration Agent: Merge All Sprint Tracks
+
+Your job is to merge all feature branches into this integration worktree.
+When parallel agents work on the same files, conflicts are expected. Resolve them.
+
+## Find Branch Names
+
+Read the track directories list and get branch names:
+```bash
+# List of tracks to merge
+TRACK_DIRS=$(cat ../.track-dirs 2>/dev/null || cat .meow/worktrees/.track-dirs)
+echo "Tracks to merge: $TRACK_DIRS"
+
+# For each track, the branch is in ../<track-dir>/.meow-branch
+```
+
+## Merge Each Branch
+
+For each track directory:
+```bash
+BRANCH=$(cat ../<track-dir>/.meow-branch)
+git merge "$BRANCH" --no-edit -m "Merge: <track-name>"
+```
+
+If the merge succeeds, continue to the next branch.
+
+## If Conflicts Occur
+
+When you see "CONFLICT" in the output:
+1. Run `git status` to see conflicted files
+2. For `.meow-branch` conflicts: just pick either version
+   ```bash
+   git checkout --theirs .meow-branch
+   git add .meow-branch
+   ```
+3. For test file conflicts (e.g., `*_test.go`):
+   - Both branches typically added content at the end
+   - Keep BOTH sets of content (combine them)
+   - Remove conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+4. For other conflicts:
+   - Read both versions carefully
+   - Combine logically (don't lose either side's changes)
+5. Stage resolved files: `git add <file>`
+6. Complete the merge: `git commit -m "Merge: <track-name> (conflicts resolved)"`
+7. Continue with the next branch
+
+## After All Merges
+
+1. Run `go build ./...` to verify build passes
+2. Run `go test -short ./...` to verify tests pass
+3. If tests fail, fix the issues and commit
+
+When all tracks are merged and tests pass: `meow done`
+"""
+
+[[sprint-integration.steps]]
+id = "review"
+executor = "agent"
+agent = "agent-integration"
+needs = ["work"]
+prompt = """
+# Integration Review
+
+All tracks should be merged. Final verification:
+
+1. `git log --oneline -20` - verify all merges present
+2. `go build ./...` - verify build
+3. `go test -short ./...` - verify tests
+
+Fix any issues you find.
+
+When verified: `meow done`
+"""
+
+[[sprint-integration.steps]]
+id = "kill"
+executor = "kill"
+agent = "agent-integration"
+needs = ["review"]
+graceful = true
+
+[[sprint-integration.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Integration complete - all tracks merged successfully'"
+needs = ["kill"]
+
+
+# Wrapper around lib/agent-track that handles the spec_file logic
+[agent-track-wrapper]
+name = "agent-track-wrapper"
+description = "Internal: Wrapper for agent track with spec handling"
+internal = true
+
+[agent-track-wrapper.variables]
+task = { required = true }
+i = { required = true }
+spec_file = { default = "docs/MVP-SPEC-v2.md" }
+
+[[agent-track-wrapper.steps]]
+id = "track"
+executor = "expand"
+template = "lib/agent-track"
+
+[agent-track-wrapper.steps.variables]
+agent_name = "agent-{{i}}"
+track_name = "{{task.name}}"
+workdir = "{{task.workdir}}"
+task_prompt = """
+{{task.prompt}}
+
+## Bead References (if any)
+{{task.beads}}
+
+If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
+"""
+# Only include spec_file if it's not "none"
+spec_file = "{{spec_file}}"
+
+# Done marker that downstream can reference
+[[agent-track-wrapper.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Track {{task.name}} complete'"
+needs = ["track.done"]

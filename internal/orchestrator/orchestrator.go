@@ -249,7 +249,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	wf = freshWf
 
 	// Check timeouts for running agent steps
-	o.checkStepTimeouts(ctx, wf)
+	timeoutModified := o.checkStepTimeouts(ctx, wf)
 
 	// Check for foreach steps with implicit join that are ready to complete
 	o.checkForeachCompletion(wf)
@@ -286,6 +286,10 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 			}
 			return o.store.Save(ctx, wf)
 		}
+		// Save if timeout handling modified state (e.g., set InterruptedAt)
+		if timeoutModified {
+			return o.store.Save(ctx, wf)
+		}
 		return nil // Waiting for external completion
 	}
 
@@ -311,6 +315,11 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 			if !wf.AgentIsIdle(step.Agent.Agent) {
 				continue
 			}
+		}
+
+		// Check if step is throttled by parent foreach's max_concurrent
+		if o.isForeachThrottled(wf, step) {
+			continue
 		}
 
 		if err := o.dispatch(ctx, wf, step); err != nil {
@@ -355,6 +364,11 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 				freshStep.Outputs = ourStep.Outputs
 				freshStep.Error = ourStep.Error
 				freshStep.ExpandedInto = ourStep.ExpandedInto
+			}
+
+			// Always preserve InterruptedAt if set (for timeout tracking)
+			if ourStep.InterruptedAt != nil && freshStep.InterruptedAt == nil {
+				freshStep.InterruptedAt = ourStep.InterruptedAt
 			}
 			// If fresh is more advanced (IPC handler completed it), keep fresh state
 		}
@@ -688,7 +702,9 @@ const CleanupTimeout = 60 * time.Second
 
 // checkStepTimeouts checks for timed-out agent steps and handles timeout enforcement.
 // Per MVP-SPEC-v2: send C-c, wait 10 seconds, then mark as failed.
-func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow) {
+// Returns true if any step state was modified (requires save).
+func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow) bool {
+	modified := false
 	for _, step := range wf.Steps {
 		if step.Status != types.StepStatusRunning {
 			continue
@@ -730,6 +746,7 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 						"step", step.ID,
 						"error", err)
 				}
+				modified = true
 			}
 			continue
 		}
@@ -755,8 +772,10 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 			// Record when we sent the interrupt
 			now := time.Now()
 			step.InterruptedAt = &now
+			modified = true
 		}
 	}
+	return modified
 }
 
 // checkForeachCompletion checks for foreach steps with implicit join that are ready to complete.
@@ -798,6 +817,57 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
 				}
 			}
 		}
+	}
+}
+
+// isForeachThrottled checks if a step should be throttled due to its parent
+// foreach's max_concurrent limit.
+//
+// Returns true if:
+// 1. The step is expanded from a foreach step with max_concurrent > 0
+// 2. The number of currently running iterations >= max_concurrent
+//
+// This enables fair scheduling of foreach iterations without spawning all at once.
+func (o *Orchestrator) isForeachThrottled(wf *types.Workflow, step *types.Step) bool {
+	// Step must have been expanded from a parent step
+	if step.ExpandedFrom == "" {
+		return false
+	}
+
+	// Find the root foreach parent (may be nested)
+	parentID := step.ExpandedFrom
+	for {
+		parent, ok := wf.Steps[parentID]
+		if !ok {
+			return false
+		}
+
+		// Found a foreach parent?
+		if parent.Executor == types.ExecutorForeach && parent.Foreach != nil {
+			maxConcurrent := parent.Foreach.GetMaxConcurrent()
+			if maxConcurrent <= 0 {
+				// No limit
+				return false
+			}
+
+			// Count running iterations
+			runningCount := CountRunningIterations(parent, wf.Steps)
+			if runningCount >= maxConcurrent {
+				o.logger.Debug("step throttled by foreach max_concurrent",
+					"step", step.ID,
+					"foreachStep", parent.ID,
+					"maxConcurrent", maxConcurrent,
+					"runningCount", runningCount)
+				return true
+			}
+			return false
+		}
+
+		// Keep looking up the chain for a foreach ancestor
+		if parent.ExpandedFrom == "" {
+			return false
+		}
+		parentID = parent.ExpandedFrom
 	}
 }
 

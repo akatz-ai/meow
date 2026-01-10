@@ -144,7 +144,7 @@ type Step struct {
 	ItemVar       string `toml:"item_var,omitempty"`       // Variable name for current item
 	IndexVar      string `toml:"index_var,omitempty"`      // Variable name for index (optional)
 	Parallel      *bool  `toml:"parallel,omitempty"`       // Run iterations in parallel (default true)
-	MaxConcurrent int    `toml:"max_concurrent,omitempty"` // Limit concurrent executions
+	MaxConcurrent any `toml:"max_concurrent,omitempty"` // Limit concurrent executions (int or string for variables)
 	Join          *bool  `toml:"join,omitempty"`           // Wait for all iterations (default true)
 	// Template and Variables fields already defined above for expand executor
 
@@ -343,7 +343,7 @@ type InlineStep struct {
 	ItemVar       string `toml:"item_var,omitempty"`
 	IndexVar      string `toml:"index_var,omitempty"`
 	Parallel      *bool  `toml:"parallel,omitempty"`
-	MaxConcurrent int    `toml:"max_concurrent,omitempty"`
+	MaxConcurrent any    `toml:"max_concurrent,omitempty"`
 	Join          *bool  `toml:"join,omitempty"`
 	// Template and Variables fields already defined above for expand executor
 

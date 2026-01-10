@@ -340,6 +340,25 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		variables[k] = subV
 	}
 
+	// Convert and substitute max_concurrent (supports int or string like "{{max_agents}}")
+	var maxConcurrent string
+	switch v := ts.MaxConcurrent.(type) {
+	case string:
+		maxConcurrent = v
+	case int64:
+		maxConcurrent = fmt.Sprintf("%d", v)
+	case int:
+		maxConcurrent = fmt.Sprintf("%d", v)
+	case float64:
+		maxConcurrent = fmt.Sprintf("%d", int(v))
+	}
+	if maxConcurrent != "" {
+		maxConcurrent, err = b.VarContext.Substitute(maxConcurrent)
+		if err != nil {
+			return fmt.Errorf("substitute max_concurrent: %w", err)
+		}
+	}
+
 	step.Foreach = &types.ForeachConfig{
 		Items:         items,
 		ItemVar:       itemVar,
@@ -347,7 +366,7 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		Template:      template,
 		Variables:     variables,
 		Parallel:      ts.Parallel,
-		MaxConcurrent: ts.MaxConcurrent,
+		MaxConcurrent: maxConcurrent,
 		Join:          ts.Join,
 	}
 	return nil

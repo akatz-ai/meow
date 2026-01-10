@@ -369,6 +369,15 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 				}
 			}
 		}
+	case types.ExecutorForeach:
+		if step.Foreach != nil {
+			step.Foreach.Items = substituteVars(step.Foreach.Items, vars)
+			step.Foreach.Template = substituteVars(step.Foreach.Template, vars)
+			step.Foreach.MaxConcurrent = substituteVars(step.Foreach.MaxConcurrent, vars)
+			for k, v := range step.Foreach.Variables {
+				step.Foreach.Variables[k] = substituteVars(v, vars)
+			}
+		}
 	case types.ExecutorAgent:
 		if step.Agent != nil {
 			step.Agent.Agent = substituteVars(step.Agent.Agent, vars)

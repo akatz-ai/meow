@@ -152,14 +152,14 @@ type BranchConfig struct {
 // ForeachConfig for executor: foreach
 // Dynamically expands a template for each item in a list.
 type ForeachConfig struct {
-	Items         string            `yaml:"items" toml:"items"`                                 // JSON array expression to iterate over
-	ItemVar       string            `yaml:"item_var" toml:"item_var"`                           // Variable name for current item
-	IndexVar      string            `yaml:"index_var,omitempty" toml:"index_var,omitempty"`     // Optional variable name for index
-	Template      string            `yaml:"template" toml:"template"`                           // Template reference to expand
-	Variables     map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`     // Variables to pass to template
-	Parallel      *bool             `yaml:"parallel,omitempty" toml:"parallel,omitempty"`       // Run in parallel (default: true)
-	MaxConcurrent int               `yaml:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"` // Limit concurrent iterations
-	Join          *bool             `yaml:"join,omitempty" toml:"join,omitempty"`               // Wait for all iterations (default: true)
+	Items         string            `yaml:"items" toml:"items"`                                       // JSON array expression to iterate over
+	ItemVar       string            `yaml:"item_var" toml:"item_var"`                                 // Variable name for current item
+	IndexVar      string            `yaml:"index_var,omitempty" toml:"index_var,omitempty"`           // Optional variable name for index
+	Template      string            `yaml:"template" toml:"template"`                                 // Template reference to expand
+	Variables     map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`           // Variables to pass to template
+	Parallel      *bool             `yaml:"parallel,omitempty" toml:"parallel,omitempty"`             // Run in parallel (default: true)
+	MaxConcurrent string            `yaml:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"` // Limit concurrent iterations (supports variables like "{{max_agents}}")
+	Join          *bool             `yaml:"join,omitempty" toml:"join,omitempty"`                     // Wait for all iterations (default: true)
 }
 
 // IsParallel returns whether iterations should run in parallel (default: true).
@@ -176,6 +176,22 @@ func (f *ForeachConfig) IsJoin() bool {
 		return true // Default to join
 	}
 	return *f.Join
+}
+
+// GetMaxConcurrent parses the MaxConcurrent string and returns the limit.
+// Returns 0 if not set or invalid (0 means unlimited).
+// This is called after variable substitution has occurred.
+func (f *ForeachConfig) GetMaxConcurrent() int {
+	if f.MaxConcurrent == "" {
+		return 0 // No limit
+	}
+	// Parse as integer
+	var n int
+	_, err := fmt.Sscanf(f.MaxConcurrent, "%d", &n)
+	if err != nil || n < 0 {
+		return 0 // Invalid or negative = no limit
+	}
+	return n
 }
 
 // AgentOutputDef defines an expected output from an agent step.

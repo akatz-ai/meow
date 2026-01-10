@@ -334,8 +334,11 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	if v, ok := data["parallel"].(bool); ok {
 		s.Parallel = &v
 	}
-	if v, ok := data["max_concurrent"].(int64); ok {
-		s.MaxConcurrent = int(v)
+	// Handle max_concurrent as string (new) or int64 (backwards compat)
+	if v, ok := data["max_concurrent"].(string); ok {
+		s.MaxConcurrent = v
+	} else if v, ok := data["max_concurrent"].(int64); ok {
+		s.MaxConcurrent = fmt.Sprintf("%d", v)
 	}
 	if v, ok := data["join"].(bool); ok {
 		s.Join = &v
@@ -648,8 +651,11 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	if v, ok := data["parallel"].(bool); ok {
 		step.Parallel = &v
 	}
-	if v, ok := data["max_concurrent"].(int64); ok {
-		step.MaxConcurrent = int(v)
+	// Handle max_concurrent as string (new) or int64 (backwards compat)
+	if v, ok := data["max_concurrent"].(string); ok {
+		step.MaxConcurrent = v
+	} else if v, ok := data["max_concurrent"].(int64); ok {
+		step.MaxConcurrent = fmt.Sprintf("%d", v)
 	}
 	if v, ok := data["join"].(bool); ok {
 		step.Join = &v
