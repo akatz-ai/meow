@@ -2192,6 +2192,46 @@ On POSIX systems, rename is atomic. This prevents corruption from mid-write cras
 - If `.yaml.tmp` exists and `.yaml` is valid: delete temp file, use main
 - If `.yaml` is corrupt/missing but `.tmp` exists: rename temp to main
 
+### Concurrent Workflow Execution
+
+Multiple workflows can run concurrently. Each orchestrator process locks only its own workflow file, leaving other workflows unaffected.
+
+**Per-Workflow Locking:**
+```
+.meow/workflows/
+├── wf-abc123.yaml        # Workflow state
+├── wf-abc123.yaml.lock   # Lock held by orchestrator running wf-abc123
+├── wf-def456.yaml        # Another workflow
+└── wf-def456.yaml.lock   # Lock held by different orchestrator
+```
+
+**Lock Lifecycle:**
+1. `meow run` generates a workflow ID
+2. Acquires exclusive lock on `{workflow_id}.yaml.lock` using `flock(LOCK_EX|LOCK_NB)`
+3. If lock fails → another orchestrator is running this workflow → exit with error
+4. Orchestrator holds lock for entire execution
+5. On exit (success, failure, or signal) → lock released, lock file deleted
+
+**What This Enables:**
+```bash
+# Terminal 1: Run a feature implementation workflow
+meow run feature-impl.meow.toml --var task=PROJ-123
+
+# Terminal 2: Simultaneously run a different workflow
+meow run code-review.meow.toml --var pr=456
+
+# Both run in parallel, each with their own agents and state
+```
+
+**What's Still Prevented:**
+- Running the **same** workflow ID twice (lock conflict)
+- Multiple orchestrators writing to the same workflow file (data corruption)
+
+**Design Rationale:**
+- IPC sockets are already per-workflow (`/tmp/meow-{workflow_id}.sock`)
+- Tmux sessions are already per-workflow (`meow-{workflow_id}-{agent}`)
+- Per-workflow locks complete the isolation model
+
 ### Crash Recovery
 
 On orchestrator startup (fresh or resume):
