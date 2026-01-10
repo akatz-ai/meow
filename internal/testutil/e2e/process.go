@@ -17,7 +17,13 @@ type OrchestratorProcess struct {
 	pid    int
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
-	done   chan error
+
+	// done receives the exit error when the process completes.
+	done chan error
+	// exited is closed when the process exits, for non-blocking checks.
+	exited chan struct{}
+	// exitErr stores the error from cmd.Wait() for multiple reads.
+	exitErr error
 
 	// harness is the test harness that created this process.
 	harness *Harness
@@ -44,14 +50,15 @@ func (p *OrchestratorProcess) Signal(sig os.Signal) error {
 
 // Wait blocks until the process exits and returns the exit error.
 func (p *OrchestratorProcess) Wait() error {
-	return <-p.done
+	<-p.exited
+	return p.exitErr
 }
 
 // WaitWithTimeout waits for the process to exit with a timeout.
 func (p *OrchestratorProcess) WaitWithTimeout(timeout time.Duration) error {
 	select {
-	case err := <-p.done:
-		return err
+	case <-p.exited:
+		return p.exitErr
 	case <-time.After(timeout):
 		return fmt.Errorf("timeout waiting for process to exit")
 	}
@@ -60,7 +67,7 @@ func (p *OrchestratorProcess) WaitWithTimeout(timeout time.Duration) error {
 // IsDone returns true if the process has exited.
 func (p *OrchestratorProcess) IsDone() bool {
 	select {
-	case <-p.done:
+	case <-p.exited:
 		return true
 	default:
 		return false
@@ -144,12 +151,16 @@ func (h *Harness) StartOrchestrator(args ...string) (*OrchestratorProcess, error
 		stdout:  &stdout,
 		stderr:  &stderr,
 		done:    make(chan error, 1),
+		exited:  make(chan struct{}),
 		harness: h,
 	}
 
 	// Wait for process in background
 	go func() {
-		proc.done <- cmd.Wait()
+		err := cmd.Wait()
+		proc.exitErr = err
+		proc.done <- err
+		close(proc.exited)
 	}()
 
 	// Register cleanup
