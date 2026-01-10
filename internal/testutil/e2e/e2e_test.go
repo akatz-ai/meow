@@ -2531,3 +2531,493 @@ graceful = true
 		t.Errorf("expected workflow to fail due to timeout, but it completed")
 	}
 }
+
+// ===========================================================================
+// Crash Recovery E2E Tests
+// ===========================================================================
+
+// TestE2E_CrashRecovery_PendingSteps tests recovery when workflow has pending steps.
+// Scenario: Workflow has step1 done, step2/step3 pending. Simulate crash by creating
+// workflow state directly, then resume and verify completion.
+func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow state directly - simulating state after step1 done
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'step1 done'"},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2 running'"},
+		},
+		"step3": {
+			ID:       "step3",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step2"},
+			Shell:    &types.ShellConfig{Command: "echo 'step3 running'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-pending", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Update workflow status to running (simulating interrupted state)
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-pending")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Wait for completion
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify all steps are done
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	for stepID, step := range wf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("step %s status = %s, want done", stepID, step.Status)
+		}
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_RunningShellStep tests recovery when a shell step was running.
+// Scenario: Shell step was "running" when crash occurred. Should be reset to pending
+// and re-executed on resume.
+func TestE2E_CrashRecovery_RunningShellStep(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create marker file path to track idempotent execution
+	markerFile := filepath.Join(h.TempDir, "shell-recovery-marker")
+
+	// Create a workflow with a "running" shell step (simulating crash mid-execution)
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Shell: &types.ShellConfig{
+				// Idempotent command - creates marker file
+				Command: fmt.Sprintf("touch %s && echo 'executed'", markerFile),
+			},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-shell", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Set workflow to running
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-shell")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify workflow completed
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+
+	// Verify shell step was re-executed (marker file should exist)
+	if _, err := os.Stat(markerFile); os.IsNotExist(err) {
+		t.Error("marker file not created - shell step was not re-executed")
+	}
+
+	// Verify step1 is done (was reset and re-executed)
+	step1, ok := wf.Steps["step1"]
+	if !ok {
+		t.Fatal("step1 not found")
+	}
+	if step1.Status != types.StepStatusDone {
+		t.Errorf("step1 status = %s, want done", step1.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_RunningAgentStep_DeadAgent tests recovery when an agent step
+// was running but the agent is now dead.
+// Scenario: Agent step was "running", agent tmux session no longer exists.
+// The recovery should reset the step to pending, but since the agent is dead
+// and there's no way to re-spawn it (spawn step already done), the workflow
+// will eventually fail. This test verifies the recovery behavior is correct.
+func TestE2E_CrashRecovery_RunningAgentStep_DeadAgent(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "running" agent step, but no agent session
+	steps := map[string]*types.Step{
+		"spawn": {
+			ID:       "spawn",
+			Executor: types.ExecutorSpawn,
+			Status:   types.StepStatusDone,
+			Spawn: &types.SpawnConfig{
+				Agent: "test-agent",
+			},
+		},
+		"work": {
+			ID:       "work",
+			Executor: types.ExecutorAgent,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Needs:    []string{"spawn"},
+			Agent: &types.AgentConfig{
+				Agent:  "test-agent",
+				Prompt: "Do some work",
+			},
+		},
+	}
+
+	// NOTE: No tmux session is created - simulating that agent died in crash
+	// The orchestrator should detect this and reset the step to pending
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-agent-dead", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Set workflow to running with agent info
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	wf.RegisterAgent("test-agent", &types.AgentInfo{
+		TmuxSession: "meow-wf-recovery-agent-dead-test-agent",
+		Status:      "active",
+		CurrentStep: "work",
+	})
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow - this should detect dead agent and reset step
+	proc, err := h.RestartOrchestrator("wf-recovery-agent-dead")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Give the orchestrator a short time to process recovery and hit the dispatch error
+	// The orchestrator may not exit cleanly if the workflow is stuck, so we use a short timeout
+	_ = proc.WaitWithTimeout(5 * time.Second)
+
+	// Check the stderr output for recovery messages
+	stderr := proc.Stderr()
+
+	// Verify recovery detected the dead agent
+	if !strings.Contains(stderr, "resetting step from dead agent") {
+		t.Errorf("expected recovery to reset step from dead agent\nstderr: %s", stderr)
+	}
+
+	// Verify the step was identified
+	if !strings.Contains(stderr, "step=work") {
+		t.Errorf("expected recovery to mention work step\nstderr: %s", stderr)
+	}
+
+	// Kill the process if still running (it may hang because agent can't be re-spawned)
+	if !proc.IsDone() {
+		_ = proc.Kill()
+	}
+
+	// Reload workflow to verify recovery state
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	// After recovery, the work step should have been reset to pending
+	// (though it may have been dispatched and failed by now)
+	t.Logf("workflow status: %s", wf.Status)
+	for stepID, step := range wf.Steps {
+		t.Logf("step %s: status=%s", stepID, step.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_CompletingStep tests recovery when a step was in "completing" state.
+// Scenario: Agent called meow done, orchestrator was processing when crash occurred.
+// The step should be treated as "running" and wait for agent completion.
+func TestE2E_CrashRecovery_CompletingStep(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "completing" shell step (unusual but tests edge case)
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusCompleting, // Was completing when crash happened
+			Shell:    &types.ShellConfig{Command: "echo 'step1'"},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completing", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-completing")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify workflow completed
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+
+	// Both steps should be done
+	for stepID, step := range wf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("step %s status = %s, want done", stepID, step.Status)
+		}
+	}
+}
+
+// TestE2E_CrashRecovery_PartialExpansion tests recovery when expand step was running.
+// Scenario: Expand step was mid-execution, some child steps may exist.
+// Should delete partial children and re-expand.
+func TestE2E_CrashRecovery_PartialExpansion(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "running" expand step and some partial children
+	steps := map[string]*types.Step{
+		"before": {
+			ID:       "before",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'before'"},
+		},
+		"expand-step": {
+			ID:       "expand-step",
+			Executor: types.ExecutorExpand,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Needs:    []string{"before"},
+			Expand: &types.ExpandConfig{
+				Template: ".sub-workflow",
+			},
+			ExpandedInto: []string{"expand-step.child1"}, // Partial expansion
+		},
+		// Partial child step - should be deleted on recovery
+		"expand-step.child1": {
+			ID:           "expand-step.child1",
+			Executor:     types.ExecutorShell,
+			Status:       types.StepStatusPending,
+			ExpandedFrom: "expand-step",
+			Shell:        &types.ShellConfig{Command: "echo 'child1'"},
+		},
+		"after": {
+			ID:       "after",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"expand-step"},
+			Shell:    &types.ShellConfig{Command: "echo 'after'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-expand", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Write a template for the expand step to use
+	template := `
+[sub-workflow]
+name = "sub-workflow"
+internal = true
+
+[[sub-workflow.steps]]
+id = "real-child"
+executor = "shell"
+command = "echo 'properly expanded'"
+`
+	if err := h.WriteTemplate("wf-recovery-expand.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-expand")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Wait briefly for recovery to run - we expect the orchestrator to timeout
+	// because the template path won't resolve correctly (we're testing recovery, not expansion)
+	_ = proc.WaitWithTimeout(5 * time.Second)
+
+	// Check stderr for recovery messages - this is the key verification
+	stderr := proc.Stderr()
+	t.Logf("stderr: %s", stderr)
+
+	// Verify recovery detected and handled the partial expansion
+	if !strings.Contains(stderr, "deleting partial expansion child") {
+		t.Error("expected recovery to delete partial expansion child")
+	}
+	if !strings.Contains(stderr, "resetting orchestrator step") {
+		t.Error("expected recovery to reset expand step")
+	}
+	if !strings.Contains(stderr, "step=expand-step") {
+		t.Error("expected recovery to mention expand-step")
+	}
+
+	// Kill the orchestrator if still running (template error may cause it to hang)
+	if !proc.IsDone() {
+		_ = proc.Kill()
+	}
+
+	// Reload workflow to verify recovery state
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	// The partial child should have been deleted during recovery
+	// (Note: it may be recreated if the expand ran again, but the original was deleted)
+	t.Logf("steps after recovery: %v", func() []string {
+		var ids []string
+		for id := range wf.Steps {
+			ids = append(ids, id)
+		}
+		return ids
+	}())
+}
+
+// TestE2E_CrashRecovery_WorkflowCompleted tests that terminal workflows can't be resumed.
+func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a completed workflow
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'done'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completed", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusDone
+	wf.Complete()
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Try to resume - should fail with error
+	proc, err := h.RestartOrchestrator("wf-recovery-completed")
+	if err != nil {
+		t.Fatalf("failed to start orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(10 * time.Second)
+
+	// The resume command should exit with an error since workflow is already done
+	stderr := proc.Stderr()
+	t.Logf("stderr: %s", stderr)
+
+	// Verify we get an error (either about already done or process exits non-zero)
+	if err == nil && !strings.Contains(stderr, "already") {
+		t.Error("expected resume of completed workflow to fail")
+	}
+}

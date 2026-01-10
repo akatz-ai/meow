@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -178,12 +176,12 @@ func (h *Harness) StartOrchestrator(args ...string) (*OrchestratorProcess, error
 // RestartOrchestrator restarts the orchestrator for a specific workflow.
 // The workflow state should already exist from a previous run.
 func (h *Harness) RestartOrchestrator(workflowID string) (*OrchestratorProcess, error) {
-	// The orchestrator should detect and resume the workflow
-	return h.StartOrchestrator("run", "--resume", workflowID)
+	// Use the resume command to continue the workflow
+	return h.StartOrchestrator("resume", workflowID)
 }
 
 // findMeowBinary finds the meow binary to use.
-// Tries in order: MEOW_BIN env var, E2E test binary location, local build.
+// Tries in order: MEOW_BIN env var, E2E test binary, local build.
 func (h *Harness) findMeowBinary() (string, error) {
 	// Check env var first
 	if bin := os.Getenv("MEOW_BIN"); bin != "" {
@@ -192,9 +190,10 @@ func (h *Harness) findMeowBinary() (string, error) {
 		}
 	}
 
-	// Try to find in common locations (including E2E test build location)
+	// Try to find in common locations
+	// E2E tests build to /tmp/meow-e2e-bin (see TestMain in e2e_test.go)
 	locations := []string{
-		"/tmp/meow-e2e-bin", // Built by TestMain in E2E tests
+		"/tmp/meow-e2e-bin", // E2E test binary location
 		"./meow",
 		"./bin/meow",
 		"../../cmd/meow/meow",
@@ -217,12 +216,6 @@ func (h *Harness) StartOrchestratorWithTemplate(templateName, templateContent st
 		return nil, fmt.Errorf("writing template: %w", err)
 	}
 
-	// Build full path to template
-	templatePath := filepath.Join(h.TemplateDir, templateName)
-	if !strings.HasSuffix(templatePath, ".toml") {
-		templatePath += ".toml"
-	}
-
-	// Start orchestrator with full template path
-	return h.StartOrchestrator("run", templatePath)
+	// Start orchestrator
+	return h.StartOrchestrator("run", templateName)
 }
