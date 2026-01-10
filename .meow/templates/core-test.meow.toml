@@ -27,14 +27,12 @@ id = "check-setup"
 executor = "branch"
 description = "Verify setup succeeded"
 needs = ["setup"]
-
-[main.steps.branch]
 condition = "test -f /tmp/meow-test-marker"
 
-[main.steps.branch.on_true]
+[main.steps.on_true]
 inline = []
 
-[main.steps.branch.on_false]
+[main.steps.on_false]
 inline = [
     { id = "create-marker", executor = "shell", command = "touch /tmp/meow-test-marker && echo 'Marker created'" }
 ]
