@@ -24,19 +24,23 @@ type Simulator struct {
 
 	// State tracking for fail_then_succeed
 	attemptCounts map[string]int
+
+	// State tracking for output sequences
+	sequenceCounts map[string]int
 }
 
 // NewSimulator creates a new simulator instance.
 func NewSimulator(config SimConfig, logger *slog.Logger) *Simulator {
 	return &Simulator{
-		config:        config,
-		logger:        logger,
-		state:         StateStarting,
-		ipc:           NewIPCClient(os.Getenv("MEOW_ORCH_SOCK")),
-		agentID:       os.Getenv("MEOW_AGENT"),
-		workflowID:    os.Getenv("MEOW_WORKFLOW"),
-		stepID:        os.Getenv("MEOW_STEP"),
-		attemptCounts: make(map[string]int),
+		config:         config,
+		logger:         logger,
+		state:          StateStarting,
+		ipc:            NewIPCClient(os.Getenv("MEOW_ORCH_SOCK")),
+		agentID:        os.Getenv("MEOW_AGENT"),
+		workflowID:     os.Getenv("MEOW_WORKFLOW"),
+		stepID:         os.Getenv("MEOW_STEP"),
+		attemptCounts:  make(map[string]int),
+		sequenceCounts: make(map[string]int),
 	}
 }
 

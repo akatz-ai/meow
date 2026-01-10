@@ -1361,3 +1361,125 @@ func TestE2E_CreateTestWorkflow(t *testing.T) {
 		t.Errorf("expected step1 status done, got %s", status)
 	}
 }
+
+func TestE2E_SimConfigBuilder_WithHangBehavior(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	config := e2e.NewSimConfigBuilder().
+		WithHangBehavior("stuck task").
+		Build()
+
+	if err := h.WriteSimConfig(config); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	// Verify file was written with hang behavior
+	data, err := os.ReadFile(h.SimConfigPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	var loaded e2e.SimTestConfig
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal config: %v", err)
+	}
+
+	if len(loaded.Behaviors) != 1 {
+		t.Fatalf("expected 1 behavior, got %d", len(loaded.Behaviors))
+	}
+
+	if loaded.Behaviors[0].Match != "stuck task" {
+		t.Errorf("expected match 'stuck task', got %q", loaded.Behaviors[0].Match)
+	}
+
+	if loaded.Behaviors[0].Action.Type != e2e.ActionHang {
+		t.Errorf("expected action type 'hang', got %q", loaded.Behaviors[0].Action.Type)
+	}
+}
+
+func TestE2E_SimConfigBuilder_WithBehaviorSequence(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	config := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("implement", []map[string]any{
+			{"wrong": "first"},
+			{"task_id": "correct"},
+		}).
+		Build()
+
+	if err := h.WriteSimConfig(config); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	// Verify file was written with sequence behavior
+	data, err := os.ReadFile(h.SimConfigPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	var loaded e2e.SimTestConfig
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal config: %v", err)
+	}
+
+	if len(loaded.Behaviors) != 1 {
+		t.Fatalf("expected 1 behavior, got %d", len(loaded.Behaviors))
+	}
+
+	if loaded.Behaviors[0].Match != "implement" {
+		t.Errorf("expected match 'implement', got %q", loaded.Behaviors[0].Match)
+	}
+
+	if len(loaded.Behaviors[0].Action.OutputsSequence) != 2 {
+		t.Errorf("expected 2 outputs in sequence, got %d", len(loaded.Behaviors[0].Action.OutputsSequence))
+	}
+}
+
+func TestE2E_AgentSessionControl(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Initially, no agent sessions should exist
+	agents, err := h.ListAgentSessions()
+	if err != nil {
+		t.Fatalf("ListAgentSessions failed: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents initially, got %d", len(agents))
+	}
+
+	// Create a tmux session with agent naming convention
+	if err := h.TmuxNewSession("meow-test-agent"); err != nil {
+		t.Fatalf("failed to create tmux session: %v", err)
+	}
+
+	// Agent should now be alive
+	if !h.IsAgentSessionAlive("test-agent") {
+		t.Error("expected agent session to be alive")
+	}
+
+	// Should appear in list
+	agents, err = h.ListAgentSessions()
+	if err != nil {
+		t.Fatalf("ListAgentSessions failed: %v", err)
+	}
+	found := false
+	for _, a := range agents {
+		if a == "test-agent" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'test-agent' in agents list, got %v", agents)
+	}
+
+	// Kill the agent
+	if err := h.KillAgentSession("test-agent"); err != nil {
+		t.Fatalf("KillAgentSession failed: %v", err)
+	}
+
+	// Agent should no longer be alive
+	if h.IsAgentSessionAlive("test-agent") {
+		t.Error("expected agent session to be dead after kill")
+	}
+}

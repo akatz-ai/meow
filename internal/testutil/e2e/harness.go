@@ -229,3 +229,43 @@ func (h *Harness) TmuxSessionExists(name string) bool {
 	cmd := exec.Command("tmux", "-S", h.TmuxSocket, "has-session", "-t", name)
 	return cmd.Run() == nil
 }
+
+// agentSessionName returns the tmux session name for an agent.
+// Uses the MEOW naming convention: meow-{workflowID}-{agentID}
+// For tests without a workflow ID, just uses meow-{agentID}
+func (h *Harness) agentSessionName(agentID string) string {
+	return fmt.Sprintf("meow-%s", agentID)
+}
+
+// KillAgentSession terminates an agent's tmux session.
+func (h *Harness) KillAgentSession(agentID string) error {
+	sessionName := h.agentSessionName(agentID)
+	return h.TmuxKillSession(sessionName)
+}
+
+// IsAgentSessionAlive checks if an agent's tmux session exists.
+func (h *Harness) IsAgentSessionAlive(agentID string) bool {
+	sessionName := h.agentSessionName(agentID)
+	return h.TmuxSessionExists(sessionName)
+}
+
+// ListAgentSessions returns all agent session IDs on the test socket.
+// Only returns sessions that follow the meow-{agentID} naming convention.
+func (h *Harness) ListAgentSessions() ([]string, error) {
+	cmd := exec.Command("tmux", "-S", h.TmuxSocket, "list-sessions", "-F", "#{session_name}")
+	out, err := cmd.Output()
+	if err != nil {
+		// No sessions = empty list, not an error
+		return nil, nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var agents []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "meow-") {
+			agentID := strings.TrimPrefix(line, "meow-")
+			agents = append(agents, agentID)
+		}
+	}
+	return agents, nil
+}
