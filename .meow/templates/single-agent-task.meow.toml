@@ -28,7 +28,10 @@ agent_name = { default = "work-agent", description = "Name for the work agent" }
 track_name = { default = "work", description = "Human-readable track name" }
 task_prompt = { required = true, description = "The task prompt for the agent" }
 
-cleanup = """
+# Cleanup is opt-in. Define cleanup_on_success, cleanup_on_failure, or cleanup_on_stop
+# to trigger cleanup (and agent killing) on that specific exit condition.
+# If no cleanup is defined, agents and state are preserved on exit.
+cleanup_on_success = """
 echo "Cleaning up worktree..."
 git worktree remove .meow/worktrees/{{track_name}}-track --force 2>/dev/null || true
 echo "Cleanup complete"

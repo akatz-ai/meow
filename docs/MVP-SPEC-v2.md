@@ -926,8 +926,8 @@ A template file can contain multiple workflows:
 name = "work-loop"
 description = "Continuous work selection and implementation loop"
 
-# Cleanup script runs on workflow end (success, failure, SIGINT, meow stop)
-cleanup = """
+# Cleanup is opt-in. Only clean up on success (preserve state on failure for debugging)
+cleanup_on_success = """
 git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 rm -rf /tmp/meow-{{workflow_id}} 2>/dev/null || true
 """
@@ -1060,7 +1060,11 @@ needs = ["verify-passing"]
 name = "human-readable-name"     # Required
 description = "..."              # Optional
 internal = true                  # Cannot be called from outside this file
-cleanup = "shell script..."      # Optional cleanup on workflow end
+
+# Cleanup is opt-in (all optional, no cleanup by default)
+cleanup_on_success = "..."       # Runs when all steps complete successfully
+cleanup_on_failure = "..."       # Runs when a step fails
+cleanup_on_stop = "..."          # Runs on SIGINT/SIGTERM/meow stop
 
 [workflow-name.variables]
 var_name = { required = true, type = "string", description = "..." }
@@ -2162,9 +2166,10 @@ template: work-loop.meow.toml
 status: running
 started_at: 2026-01-08T21:00:00Z
 
-# Cleanup script (from template)
-cleanup: |
+# Cleanup scripts (from template) - all opt-in
+cleanup_on_success: |
   git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
+# cleanup_on_failure and cleanup_on_stop omitted - preserve state on those exits
 
 # Resolved variables
 vars:
@@ -2368,35 +2373,51 @@ Recovery may cause issues when:
 
 ---
 
-## Workflow Cleanup
+## Workflow Cleanup (Opt-In)
 
-Templates can define a cleanup script that runs when the workflow ends.
+Cleanup is **opt-in**. By default, no cleanup runs and all agents/state are preserved when a workflow exits. This allows debugging failed workflows and resuming interrupted work.
+
+Templates can define conditional cleanup scripts that run on specific exit conditions.
 
 ### Definition
 
 ```toml
 [main]
 name = "my-workflow"
-cleanup = """
-# Shell script for cleanup
-# Runs on: success, failure, SIGINT, meow stop
-# Environment: workflow variables available
-# Timeout: 60 seconds
 
-git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
-rm -rf /tmp/meow-{{workflow_id}} 2>/dev/null || true
+# Cleanup scripts are opt-in - define only the triggers you want
+cleanup_on_success = """
+# Runs when all steps complete successfully
+git worktree remove .meow/worktrees/{{track_name}}-track --force 2>/dev/null || true
+"""
+
+cleanup_on_failure = """
+# Runs when a step fails (optional - often you want to preserve state for debugging)
+echo "Workflow failed - preserving worktree for debugging"
+"""
+
+cleanup_on_stop = """
+# Runs on SIGINT/SIGTERM or meow stop (optional)
+echo "Stopped by user"
 """
 ```
 
-### When Cleanup Runs
+### Cleanup Triggers
 
-- Workflow completes successfully (all steps done)
-- Workflow fails (step failure with `on_error: fail`)
-- User interrupts orchestrator (Ctrl+C / SIGINT / SIGTERM)
-- User runs `meow stop <workflow_id>`
-- Orchestrator restarts and finds workflow in `running` or `cleaning_up` state
+| Trigger | When It Runs | Typical Use |
+|---------|--------------|-------------|
+| `cleanup_on_success` | All steps complete successfully | Remove worktrees, temp files |
+| `cleanup_on_failure` | A step fails with `on_error: fail` | Log state, notify, preserve for debugging |
+| `cleanup_on_stop` | User Ctrl+C, SIGTERM, or `meow stop` | Graceful shutdown |
+
+**Default behavior (no cleanup defined):**
+- Agents remain running in tmux sessions
+- Worktrees and temp files preserved
+- Workflow marked as done/failed/stopped without cleanup phase
 
 ### Cleanup Sequence
+
+When cleanup is triggered (only if a cleanup script is defined for that trigger):
 
 1. Workflow status set to `cleaning_up`
 2. Persist state (so cleanup survives crash)
@@ -2414,27 +2435,23 @@ rm -rf /tmp/meow-{{workflow_id}} 2>/dev/null || true
 
 ### Signal Handling
 
-The orchestrator traps SIGINT and SIGTERM:
+When the orchestrator receives SIGINT or SIGTERM:
+- If `cleanup_on_stop` is defined: runs full cleanup sequence
+- If `cleanup_on_stop` is **not** defined: just marks workflow as stopped (preserves agents/state)
 
 ```go
-func main() {
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-    go func() {
-        <-sigChan
-        log.Println("Received interrupt, cleaning up...")
-        runCleanup(workflow, "stopped")
-        os.Exit(0)
-    }()
-
-    run(workflow)
+func handleSignal(wf *Workflow) {
+    if wf.HasCleanup(StatusStopped) {
+        runCleanup(wf, "stopped")  // Kills agents, runs script
+    } else {
+        wf.Stop()  // Just mark as stopped, preserve everything
+    }
 }
 ```
 
 ### Best Practices
 
-Cleanup scripts should be **idempotent** (safe to run multiple times):
+**1. Cleanup scripts should be idempotent** (safe to run multiple times):
 
 ```bash
 # Good: handles already-removed worktree
@@ -2442,11 +2459,23 @@ git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 
 # Good: handles missing directory
 rm -rf .meow/temp/{{workflow_id}} 2>/dev/null || true
+```
 
-# Good: handles multiple agents
-for agent in frontend backend coordinator; do
-    git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
-done
+**2. Preserve state on failure for debugging:**
+
+```toml
+# Only clean up on success - preserve worktree on failure for debugging
+cleanup_on_success = """
+git worktree remove .meow/worktrees/{{track_name}}-track --force
+"""
+# cleanup_on_failure intentionally omitted - want to debug
+```
+
+**3. Use cleanup_on_stop sparingly:**
+
+```toml
+# Most workflows should NOT define cleanup_on_stop
+# This preserves agents so you can resume later
 ```
 
 **Variables in cleanup:** Only reference variables that are guaranteed to exist. Workflow-level variables (from `--var`) are always available. Step outputs may not exist if the workflow failed early.
@@ -2873,7 +2902,9 @@ needs = ["cleanup-worktree"]
 
 [main]
 name = "simple-loop"
-cleanup = """
+
+# Only clean up on success - preserve worktree on failure for debugging
+cleanup_on_success = """
 git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 """
 
@@ -2975,7 +3006,8 @@ variables = { agent = "{{agent}}" }
 
 [main]
 name = "deploy"
-cleanup = """
+
+cleanup_on_success = """
 git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 """
 
@@ -3078,7 +3110,8 @@ needs = ["deploy-prod"]
 
 [main]
 name = "parallel-impl"
-cleanup = """
+
+cleanup_on_success = """
 for agent in planner frontend backend watchdog; do
     git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
 done
@@ -3459,18 +3492,19 @@ The more clearly you define "what done looks like," the better agents can handle
 
 ### Worktree Management
 
-Worktrees are user-managed. The cleanup hook handles teardown automatically:
+Worktrees are user-managed. Use opt-in cleanup to handle teardown on success:
 
 ```toml
 [main]
-cleanup = """
+# Only clean up worktrees on success - preserve on failure for debugging
+cleanup_on_success = """
 git worktree remove .meow/worktrees/{{agent}} --force 2>/dev/null || true
 """
 ```
 
 For multi-agent workflows:
 ```toml
-cleanup = """
+cleanup_on_success = """
 for agent in frontend backend coordinator; do
     git worktree remove ".meow/worktrees/$agent" --force 2>/dev/null || true
 done

@@ -56,8 +56,11 @@ type Workflow struct {
 	Variables      map[string]string `yaml:"variables,omitempty"`
 	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Workflow-level default adapter
 
-	// Cleanup script (from template) - runs on workflow end
-	Cleanup string `yaml:"cleanup,omitempty"`
+	// Conditional cleanup scripts (from template) - all are opt-in, no cleanup by default
+	// Each runs on the specified trigger, kills agents, then executes the script
+	CleanupOnSuccess string `yaml:"cleanup_on_success,omitempty"` // Runs when all steps complete successfully
+	CleanupOnFailure string `yaml:"cleanup_on_failure,omitempty"` // Runs when a step fails
+	CleanupOnStop    string `yaml:"cleanup_on_stop,omitempty"`    // Runs on SIGINT/SIGTERM or meow stop
 
 	// Prior status before cleanup - used to determine final status after cleanup
 	PriorStatus WorkflowStatus `yaml:"prior_status,omitempty"`
@@ -272,4 +275,29 @@ func (w *Workflow) AgentIsIdle(agentID string) bool {
 		}
 	}
 	return true
+}
+
+// GetCleanupScript returns the cleanup script for the given reason, or empty string if none defined.
+// Cleanup is opt-in: returns empty string unless a cleanup script is explicitly defined for this trigger.
+func (w *Workflow) GetCleanupScript(reason WorkflowStatus) string {
+	switch reason {
+	case WorkflowStatusDone:
+		return w.CleanupOnSuccess
+	case WorkflowStatusFailed:
+		return w.CleanupOnFailure
+	case WorkflowStatusStopped:
+		return w.CleanupOnStop
+	default:
+		return ""
+	}
+}
+
+// HasCleanup returns true if any cleanup script is defined for the given reason.
+func (w *Workflow) HasCleanup(reason WorkflowStatus) bool {
+	return w.GetCleanupScript(reason) != ""
+}
+
+// HasAnyCleanup returns true if any cleanup script is defined.
+func (w *Workflow) HasAnyCleanup() bool {
+	return w.CleanupOnSuccess != "" || w.CleanupOnFailure != "" || w.CleanupOnStop != ""
 }

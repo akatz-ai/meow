@@ -31,7 +31,8 @@ task_prompt_2 = { required = true, description = "Task for second agent" }
 
 integration_track = { default = "integration", description = "Integration track name" }
 
-cleanup = """
+# Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
+cleanup_on_success = """
 echo "Cleaning up worktrees..."
 git worktree remove .meow/worktrees/{{track_name_1}}-track --force 2>/dev/null || true
 git worktree remove .meow/worktrees/{{track_name_2}}-track --force 2>/dev/null || true

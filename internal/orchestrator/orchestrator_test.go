@@ -963,10 +963,10 @@ func TestOrchestrator_CleanupOnCompletion(t *testing.T) {
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	// Create workflow with cleanup script
+	// Create workflow with cleanup_on_success script (opt-in cleanup)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
-	wf.Cleanup = "echo cleanup executed"
+	wf.CleanupOnSuccess = "echo cleanup executed"
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
 		Executor: types.ExecutorShell,
@@ -1001,10 +1001,10 @@ func TestOrchestrator_RunCleanup(t *testing.T) {
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	// Create workflow with cleanup script
+	// Create workflow with cleanup_on_success script (testing RunCleanup with Done reason)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
-	wf.Cleanup = "echo cleanup"
+	wf.CleanupOnSuccess = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	// Register some agents
@@ -1047,7 +1047,7 @@ func TestOrchestrator_RunCleanup_FailedWorkflow(t *testing.T) {
 
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
-	wf.Cleanup = "echo cleanup"
+	wf.CleanupOnFailure = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)
@@ -1074,7 +1074,7 @@ func TestOrchestrator_RunCleanup_Stopped(t *testing.T) {
 
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
-	wf.Cleanup = "echo cleanup"
+	wf.CleanupOnStop = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)
@@ -1340,11 +1340,11 @@ func TestOrchestrator_Recover_CleaningUpWorkflow(t *testing.T) {
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	// Create workflow that was in cleaning_up state
+	// Create workflow that was in cleaning_up state (prior status determines which cleanup script to use)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusCleaningUp
 	wf.PriorStatus = types.WorkflowStatusDone
-	wf.Cleanup = "echo cleanup"
+	wf.CleanupOnSuccess = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)

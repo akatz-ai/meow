@@ -66,7 +66,8 @@ skip_merge_to_target = { default = "false", description = "If true, push branch 
 max_agents = { default = "4", description = "Maximum concurrent agents" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
 
-cleanup = """
+# Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
+cleanup_on_success = """
 echo "Cleaning up sprint worktrees..."
 
 # Parse task names and remove each worktree

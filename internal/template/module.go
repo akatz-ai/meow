@@ -32,6 +32,11 @@ type Workflow struct {
 	Internal    bool            `toml:"internal,omitempty"` // Cannot be called from outside
 	Variables   map[string]*Var `toml:"variables,omitempty"`
 	Steps       []*Step         `toml:"steps"`
+
+	// Conditional cleanup scripts - all opt-in, no cleanup by default
+	CleanupOnSuccess string `toml:"cleanup_on_success,omitempty"` // Runs when all steps complete successfully
+	CleanupOnFailure string `toml:"cleanup_on_failure,omitempty"` // Runs when a step fails
+	CleanupOnStop    string `toml:"cleanup_on_stop,omitempty"`    // Runs on SIGINT/SIGTERM or meow stop
 }
 
 // GetWorkflow returns the workflow with the given name, or nil if not found.
@@ -137,6 +142,25 @@ func parseWorkflow(name string, data map[string]any) (*Workflow, error) {
 	if v, ok := data["internal"].(bool); ok {
 		w.Internal = v
 	}
+
+	// Parse conditional cleanup scripts (opt-in)
+	if v, ok := data["cleanup_on_success"].(string); ok {
+		w.CleanupOnSuccess = v
+	}
+	if v, ok := data["cleanup_on_failure"].(string); ok {
+		w.CleanupOnFailure = v
+	}
+	if v, ok := data["cleanup_on_stop"].(string); ok {
+		w.CleanupOnStop = v
+	}
+	// Legacy "cleanup" field - treat as cleanup_on_success for backwards compatibility
+	// but log a warning (callers should migrate to explicit triggers)
+	if v, ok := data["cleanup"].(string); ok {
+		if w.CleanupOnSuccess == "" {
+			w.CleanupOnSuccess = v
+		}
+	}
+
 	// Note: ephemeral and hooks_to are no longer supported
 	// They are ignored if present in templates for backwards compatibility
 

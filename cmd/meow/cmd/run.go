@@ -124,6 +124,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create a Workflow object
 	wf := types.NewWorkflow(workflowID, templatePath, vars)
 
+	// Copy conditional cleanup scripts from template (opt-in cleanup)
+	wf.CleanupOnSuccess = templateWorkflow.CleanupOnSuccess
+	wf.CleanupOnFailure = templateWorkflow.CleanupOnFailure
+	wf.CleanupOnStop = templateWorkflow.CleanupOnStop
+
 	// Add all steps to the workflow
 	for _, step := range result.Steps {
 		if err := wf.AddStep(step); err != nil {

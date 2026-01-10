@@ -154,7 +154,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	}
 }
 
-// cleanupOnSignal runs cleanup when orchestrator receives SIGINT/SIGTERM.
+// cleanupOnSignal handles SIGINT/SIGTERM by optionally running cleanup_on_stop.
+// If no cleanup_on_stop is defined, just marks workflow as stopped (preserving agents/state).
 func (o *Orchestrator) cleanupOnSignal(ctx context.Context) error {
 	if o.workflowID == "" {
 		return nil
@@ -168,9 +169,17 @@ func (o *Orchestrator) cleanupOnSignal(ctx context.Context) error {
 		return nil
 	}
 
-	// Use a background context for cleanup since the original may be cancelled
-	cleanupCtx := context.Background()
-	return o.RunCleanup(cleanupCtx, wf, types.WorkflowStatusStopped)
+	// Check if cleanup_on_stop is defined (opt-in cleanup)
+	if wf.HasCleanup(types.WorkflowStatusStopped) {
+		// Use a background context for cleanup since the original may be cancelled
+		cleanupCtx := context.Background()
+		return o.RunCleanup(cleanupCtx, wf, types.WorkflowStatusStopped)
+	}
+
+	// No cleanup_on_stop defined - just mark as stopped, preserve agents/state
+	o.logger.Info("workflow stopped (no cleanup_on_stop defined, preserving agents/state)", "id", wf.ID)
+	wf.Stop()
+	return o.store.Save(ctx, wf)
 }
 
 // Shutdown gracefully stops the orchestrator.
@@ -263,8 +272,8 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 				finalStatus = types.WorkflowStatusFailed
 			}
 
-			// If workflow has cleanup script, run full cleanup sequence
-			if wf.Cleanup != "" {
+			// Check if cleanup is defined for this trigger (opt-in cleanup)
+			if wf.HasCleanup(finalStatus) {
 				o.logger.Info("workflow complete, running cleanup", "id", wf.ID, "reason", finalStatus)
 				// Unlock before RunCleanup since it may do I/O
 				o.wfMu.Unlock()
@@ -276,13 +285,14 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 				return nil
 			}
 
-			// No cleanup script - set terminal status directly
+			// No cleanup defined for this trigger - set terminal status directly
+			// State/agents are preserved (opt-in cleanup design)
 			if finalStatus == types.WorkflowStatusFailed {
 				wf.Fail()
-				o.logger.Info("workflow failed", "id", wf.ID)
+				o.logger.Info("workflow failed (no cleanup defined)", "id", wf.ID)
 			} else {
 				wf.Complete()
-				o.logger.Info("workflow completed", "id", wf.ID)
+				o.logger.Info("workflow completed (no cleanup defined)", "id", wf.ID)
 			}
 			return o.store.Save(ctx, wf)
 		}
@@ -874,6 +884,7 @@ func (o *Orchestrator) isForeachThrottled(wf *types.Workflow, step *types.Step) 
 // --- Cleanup Methods ---
 
 // RunCleanup executes the cleanup sequence for a workflow.
+// Cleanup is opt-in: only runs if a cleanup script is defined for the given reason.
 // Per MVP-SPEC-v2:
 // 1. Set status to cleaning_up
 // 2. Persist state
@@ -882,10 +893,11 @@ func (o *Orchestrator) isForeachThrottled(wf *types.Workflow, step *types.Step) 
 // 5. Set final status
 // 6. Persist final state
 func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reason types.WorkflowStatus) error {
+	cleanupScript := wf.GetCleanupScript(reason)
 	o.logger.Info("starting workflow cleanup",
 		"workflow", wf.ID,
 		"reason", reason,
-		"hasCleanupScript", wf.Cleanup != "")
+		"hasCleanupScript", cleanupScript != "")
 
 	// 1. Set status to cleaning_up
 	if err := wf.StartCleanup(reason); err != nil {
@@ -906,9 +918,9 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reaso
 		}
 	}
 
-	// 4. Execute cleanup script (if defined)
-	if wf.Cleanup != "" {
-		if err := o.runCleanupScript(ctx, wf); err != nil {
+	// 4. Execute cleanup script (if defined for this trigger)
+	if cleanupScript != "" {
+		if err := o.runCleanupScript(ctx, wf, cleanupScript); err != nil {
 			o.logger.Error("cleanup script failed", "error", err)
 			// Cleanup script errors are logged but don't prevent workflow termination
 		}
@@ -929,9 +941,9 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reaso
 	return nil
 }
 
-// runCleanupScript executes the cleanup script with timeout.
-func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Workflow) error {
-	if wf.Cleanup == "" {
+// runCleanupScript executes a cleanup script with timeout.
+func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Workflow, script string) error {
+	if script == "" {
 		return nil
 	}
 
@@ -942,7 +954,7 @@ func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Workflow)
 	o.logger.Info("running cleanup script", "workflow", wf.ID)
 
 	// Execute the cleanup script via bash
-	cmd := exec.CommandContext(cleanupCtx, "bash", "-c", wf.Cleanup)
+	cmd := exec.CommandContext(cleanupCtx, "bash", "-c", script)
 
 	// Set environment variables from workflow
 	cmd.Env = os.Environ()
@@ -1118,9 +1130,12 @@ func (o *Orchestrator) resumeCleanup(ctx context.Context, wf *types.Workflow) er
 		}
 	}
 
+	// Get the cleanup script for the prior status (reason cleanup was triggered)
+	cleanupScript := wf.GetCleanupScript(wf.PriorStatus)
+
 	// Run cleanup script again (should be idempotent)
-	if wf.Cleanup != "" {
-		if err := o.runCleanupScript(ctx, wf); err != nil {
+	if cleanupScript != "" {
+		if err := o.runCleanupScript(ctx, wf, cleanupScript); err != nil {
 			o.logger.Warn("cleanup script failed during resume", "error", err)
 		}
 	}
