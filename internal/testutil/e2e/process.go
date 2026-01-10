@@ -176,12 +176,12 @@ func (h *Harness) StartOrchestrator(args ...string) (*OrchestratorProcess, error
 // RestartOrchestrator restarts the orchestrator for a specific workflow.
 // The workflow state should already exist from a previous run.
 func (h *Harness) RestartOrchestrator(workflowID string) (*OrchestratorProcess, error) {
-	// The orchestrator should detect and resume the workflow
-	return h.StartOrchestrator("run", "--resume", workflowID)
+	// Use the resume command to continue the workflow
+	return h.StartOrchestrator("resume", workflowID)
 }
 
 // findMeowBinary finds the meow binary to use.
-// Tries in order: MEOW_BIN env var, go run, local build.
+// Tries in order: MEOW_BIN env var, E2E test binary, local build.
 func (h *Harness) findMeowBinary() (string, error) {
 	// Check env var first
 	if bin := os.Getenv("MEOW_BIN"); bin != "" {
@@ -191,7 +191,9 @@ func (h *Harness) findMeowBinary() (string, error) {
 	}
 
 	// Try to find in common locations
+	// E2E tests build to /tmp/meow-e2e-bin (see TestMain in e2e_test.go)
 	locations := []string{
+		"/tmp/meow-e2e-bin", // E2E test binary location
 		"./meow",
 		"./bin/meow",
 		"../../cmd/meow/meow",
@@ -201,12 +203,6 @@ func (h *Harness) findMeowBinary() (string, error) {
 		if _, err := os.Stat(loc); err == nil {
 			return loc, nil
 		}
-	}
-
-	// Fall back to go run (slower but always works)
-	// We'll use exec.LookPath to see if go is available
-	if _, err := exec.LookPath("go"); err == nil {
-		return "go", nil
 	}
 
 	return "", fmt.Errorf("meow binary not found: set MEOW_BIN or build with 'go build ./cmd/meow'")
