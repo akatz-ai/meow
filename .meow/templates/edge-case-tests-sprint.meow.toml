@@ -347,59 +347,151 @@ Implement E2E tests for orchestrator crash recovery.
 """
 
 # ============================================================================
-# PHASE 4: Merge All Tracks
+# PHASE 4: Integration Agent (Merges tracks, resolves conflicts)
 # ============================================================================
+#
+# NOTE: This uses an agent instead of a shell step because merging parallel
+# tracks often causes conflicts (e.g., multiple agents adding tests to the
+# same file). An agent can resolve conflicts that a shell script cannot.
+#
 
 [[main.steps]]
-id = "merge-all"
-executor = "shell"
-description = "Merge all tracks into integration worktree"
-needs = ["timeout-tests.done", "crash-tests.done", "validation-tests.done", "recovery-tests.done", "worktree-integration.create"]
-command = """
-set -e
-cd .meow/worktrees/edge-case-integration-track
+id = "spawn-integration"
+executor = "spawn"
+agent = "agent-integration"
+workdir = "{{create-worktree-integration.outputs.path}}"
+needs = ["timeout-done", "crash-done", "validation-done", "recovery-done", "create-worktree-integration"]
 
-# Read branch names
+[[main.steps]]
+id = "work-integration"
+executor = "agent"
+agent = "agent-integration"
+needs = ["spawn-integration"]
+prompt = """
+# Integration Agent: Merge All Tracks
+
+Your job is to merge all feature branches into this integration worktree.
+When parallel agents work on the same files, conflicts are expected. Resolve them.
+
+## Branch Names
+Read the branch names from the worktree marker files:
+```bash
 BRANCH_INFRA=$(cat ../infra-track/.meow-branch)
 BRANCH_TIMEOUT=$(cat ../timeout-tests-track/.meow-branch)
 BRANCH_CRASH=$(cat ../crash-tests-track/.meow-branch)
 BRANCH_VALIDATION=$(cat ../validation-tests-track/.meow-branch)
 BRANCH_RECOVERY=$(cat ../recovery-tests-track/.meow-branch)
+```
 
-echo "Merging infrastructure track ($BRANCH_INFRA)..."
-git merge "$BRANCH_INFRA" --no-edit -m "Merge: E2E infrastructure enhancements"
+## Merge Each Branch (in order)
+For each branch, run:
+```bash
+git merge "$BRANCH_NAME" --no-edit -m "Merge: <description>"
+```
 
-echo "Merging timeout tests track ($BRANCH_TIMEOUT)..."
-git merge "$BRANCH_TIMEOUT" --no-edit -m "Merge: Agent timeout tests"
+If the merge succeeds, continue to the next branch.
 
-echo "Merging crash tests track ($BRANCH_CRASH)..."
-git merge "$BRANCH_CRASH" --no-edit -m "Merge: Agent crash tests"
+## If Conflicts Occur
+When you see "CONFLICT" in the output:
+1. Run `git status` to see conflicted files
+2. For `.meow-branch` conflicts: just pick either version (`git checkout --theirs .meow-branch`)
+3. For test file conflicts (e.g., `e2e_test.go`):
+   - Both branches added tests to the end of the file
+   - Keep BOTH sets of tests (combine them, don't choose one)
+   - Remove conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+4. Stage resolved files: `git add <file>`
+5. Complete the merge: `git commit -m "Merge: <description> (conflicts resolved)"`
+6. Continue with the next branch
 
-echo "Merging validation tests track ($BRANCH_VALIDATION)..."
-git merge "$BRANCH_VALIDATION" --no-edit -m "Merge: Output validation tests"
+## After All Merges
+1. Run `go build ./...` to verify build
+2. Run `go test -short ./...` to verify tests pass
+3. If tests fail, fix the issues and commit
 
-echo "Merging recovery tests track ($BRANCH_RECOVERY)..."
-git merge "$BRANCH_RECOVERY" --no-edit -m "Merge: Crash recovery tests"
-
-echo "All tracks merged"
-git log --oneline -20
+When all tracks are merged and tests pass: `meow done`
 """
 
+[[main.steps]]
+id = "review-integration"
+executor = "agent"
+agent = "agent-integration"
+needs = ["work-integration"]
+prompt = """
+# Integration Review
+
+All tracks should be merged. Final verification:
+
+1. `git log --oneline -20` - verify all merges present
+2. `go test ./internal/testutil/e2e/... -short` - run the new E2E tests
+3. Fix any issues
+
+When verified: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-integration"
+executor = "kill"
+agent = "agent-integration"
+needs = ["review-integration"]
+graceful = true
+
+[[main.steps]]
+id = "integration-done"
+executor = "shell"
+command = "echo 'Integration complete - all tracks merged'"
+needs = ["kill-integration"]
+
 # ============================================================================
-# PHASE 5: Final Review and Merge
+# PHASE 5: Final Merge to Main
 # ============================================================================
 
 [[main.steps]]
-id = "final"
-executor = "expand"
-template = "lib/merge-agent"
-needs = ["merge-all"]
-[main.steps.variables]
-workdir = "{{worktree-integration.create.outputs.path}}"
-branches = "infra, timeout-tests, crash-tests, validation-tests, recovery-tests"
-merge_message = "feat(e2e): Edge case test coverage [meow-ix1g]"
-target_branch = "{{target_branch}}"
-skip_merge_to_target = "{{skip_merge_to_target}}"
+id = "spawn-merge"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{create-worktree-integration.outputs.path}}"
+needs = ["integration-done"]
+
+[[main.steps]]
+id = "do-merge"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn-merge"]
+prompt = """
+# Merge to {{target_branch}}
+
+## Skip Merge Mode: {{skip_merge_to_target}}
+
+### If skip_merge_to_target is "true":
+Push integration branch for PR:
+```bash
+BRANCH=$(cat .meow-branch)
+cd /data/projects/meow-machine
+git push -u origin "$BRANCH"
+echo "Branch $BRANCH pushed"
+```
+
+### If skip_merge_to_target is "false":
+Merge to {{target_branch}}:
+```bash
+cd /data/projects/meow-machine
+BRANCH=$(cat .meow/worktrees/edge-integration-track/.meow-branch)
+git checkout {{target_branch}}
+git pull origin {{target_branch}} || true
+git merge "$BRANCH" --no-edit -m "feat(e2e): Edge case test coverage [meow-ix1g]"
+go test -short ./... 2>&1 | tail -30
+git push origin {{target_branch}}
+```
+
+When complete: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-merge"
+executor = "kill"
+agent = "merge-agent"
+needs = ["do-merge"]
+graceful = true
 
 # ============================================================================
 # Done
