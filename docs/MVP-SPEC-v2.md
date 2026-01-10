@@ -1,4 +1,4 @@
-# MEOW Stack MVP Specification v2
+# MEOW MVP Specification v2
 
 **MEOW** (Meow Executors Orchestrate Work) is terminal agent orchestration without the framework tax.
 
