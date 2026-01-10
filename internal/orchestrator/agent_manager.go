@@ -19,9 +19,10 @@ import (
 type TmuxAgentManager struct {
 	logger *slog.Logger
 
-	mu      sync.RWMutex
-	agents  map[string]*agentState // agentID -> state
-	workdir string                 // Base working directory
+	mu         sync.RWMutex
+	agents     map[string]*agentState // agentID -> state
+	workdir    string                 // Base working directory
+	tmuxSocket string                 // Custom tmux socket path (empty = default)
 }
 
 type agentState struct {
@@ -32,15 +33,24 @@ type agentState struct {
 }
 
 // NewTmuxAgentManager creates a new TmuxAgentManager.
+// If MEOW_TMUX_SOCKET environment variable is set, uses that socket path.
 func NewTmuxAgentManager(workdir string, logger *slog.Logger) *TmuxAgentManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	tmuxSocket := os.Getenv("MEOW_TMUX_SOCKET")
 	return &TmuxAgentManager{
-		logger:  logger.With("component", "agent-manager"),
-		agents:  make(map[string]*agentState),
-		workdir: workdir,
+		logger:     logger.With("component", "agent-manager"),
+		agents:     make(map[string]*agentState),
+		workdir:    workdir,
+		tmuxSocket: tmuxSocket,
 	}
+}
+
+// SetTmuxSocket sets a custom tmux socket path.
+// This is primarily for testing with isolated tmux servers.
+func (m *TmuxAgentManager) SetTmuxSocket(socket string) {
+	m.tmuxSocket = socket
 }
 
 // Start spawns an agent in a tmux session with Claude Code.
@@ -273,8 +283,17 @@ func (m *TmuxAgentManager) GetWorkdir(agentID string) string {
 
 // --- tmux helpers ---
 
+// tmuxArgs builds a tmux command with optional socket argument.
+func (m *TmuxAgentManager) tmuxArgs(args ...string) []string {
+	if m.tmuxSocket != "" {
+		return append([]string{"-S", m.tmuxSocket}, args...)
+	}
+	return args
+}
+
 func (m *TmuxAgentManager) sessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
+	args := m.tmuxArgs("has-session", "-t", name)
+	cmd := exec.Command("tmux", args...)
 	return cmd.Run() == nil
 }
 
@@ -289,7 +308,7 @@ func (m *TmuxAgentManager) createSession(ctx context.Context, name, workdir stri
 	// The command runs exports and then the shell command (typically claude)
 	fullCmd := fmt.Sprintf("%s%s", envExports.String(), shellCmd)
 
-	args := []string{
+	baseArgs := []string{
 		"new-session",
 		"-d",         // detached
 		"-s", name,   // session name
@@ -298,6 +317,7 @@ func (m *TmuxAgentManager) createSession(ctx context.Context, name, workdir stri
 		"-y", "50",   // height
 		"sh", "-c", fullCmd, // command to run
 	}
+	args := m.tmuxArgs(baseArgs...)
 
 	m.logger.Debug("creating tmux session", "args", args)
 
@@ -321,7 +341,8 @@ func (m *TmuxAgentManager) createSession(ctx context.Context, name, workdir stri
 }
 
 func (m *TmuxAgentManager) killSession(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", name)
+	args := m.tmuxArgs("kill-session", "-t", name)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -331,7 +352,8 @@ func (m *TmuxAgentManager) killSession(ctx context.Context, name string) error {
 }
 
 func (m *TmuxAgentManager) sendKeys(ctx context.Context, session string, keys string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, keys)
+	args := m.tmuxArgs("send-keys", "-t", session, keys)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -343,7 +365,8 @@ func (m *TmuxAgentManager) sendKeys(ctx context.Context, session string, keys st
 // sendKeysLiteral sends text using tmux's literal mode (-l flag).
 // This properly handles special characters and multiline text.
 func (m *TmuxAgentManager) sendKeysLiteral(ctx context.Context, session string, text string) error {
-	cmd := exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "-l", text)
+	args := m.tmuxArgs("send-keys", "-t", session, "-l", text)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -386,7 +409,8 @@ func (m *TmuxAgentManager) waitForClaudeReady(ctx context.Context, session strin
 
 // capturePane captures the last N lines of a tmux pane.
 func (m *TmuxAgentManager) capturePane(ctx context.Context, session string, lines int) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-p", "-t", session, "-S", fmt.Sprintf("-%d", lines))
+	args := m.tmuxArgs("capture-pane", "-p", "-t", session, "-S", fmt.Sprintf("-%d", lines))
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -406,8 +430,10 @@ func (m *TmuxAgentManager) capturePane(ctx context.Context, session string, line
 func (m *TmuxAgentManager) cancelCopyMode(ctx context.Context, session string) {
 	// Send escape to exit any mode, followed by q to exit copy mode
 	// These are no-ops if not in copy mode
-	exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "Escape").Run()
+	args := m.tmuxArgs("send-keys", "-t", session, "Escape")
+	exec.CommandContext(ctx, "tmux", args...).Run()
 	time.Sleep(50 * time.Millisecond)
-	exec.CommandContext(ctx, "tmux", "send-keys", "-t", session, "q").Run()
+	args = m.tmuxArgs("send-keys", "-t", session, "q")
+	exec.CommandContext(ctx, "tmux", args...).Run()
 	time.Sleep(50 * time.Millisecond)
 }

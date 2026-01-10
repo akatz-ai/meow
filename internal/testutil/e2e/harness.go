@@ -166,6 +166,7 @@ func (h *Harness) Env() []string {
 		fmt.Sprintf("MEOW_ADAPTER_DIR=%s", h.AdapterDir),
 		fmt.Sprintf("MEOW_SIM_CONFIG=%s", h.SimConfigPath),
 		fmt.Sprintf("TMUX_TMPDIR=%s", h.TempDir),
+		fmt.Sprintf("MEOW_TMUX_SOCKET=%s", h.TmuxSocket),
 	)
 	return env
 }

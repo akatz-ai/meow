@@ -242,7 +242,6 @@ command = "echo 'got: {{produce.outputs.result}}'"
 // ===========================================================================
 
 func TestE2E_SingleAgentStep(t *testing.T) {
-	t.Skip("TODO: Agent tests need tmux socket isolation in agent_manager")
 	h := e2e.NewHarness(t)
 
 	// Configure simulator to complete immediately
@@ -310,7 +309,6 @@ graceful = true
 }
 
 func TestE2E_AgentWithOutputs(t *testing.T) {
-	t.Skip("TODO: Agent tests need tmux socket isolation in agent_manager")
 	h := e2e.NewHarness(t)
 
 	// Configure simulator to produce outputs
@@ -375,7 +373,6 @@ graceful = true
 }
 
 func TestE2E_ParallelAgents(t *testing.T) {
-	t.Skip("TODO: Agent tests need tmux socket isolation in agent_manager")
 	h := e2e.NewHarness(t)
 
 	simConfig := e2e.NewSimConfigBuilder().
