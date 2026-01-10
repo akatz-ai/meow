@@ -64,14 +64,15 @@ const (
 
 // Action defines the simulator's response action.
 type Action struct {
-	Type        ActionType     `yaml:"type"`
-	Delay       time.Duration  `yaml:"delay"`
-	Outputs     map[string]any `yaml:"outputs"`
-	Events      []EventDef     `yaml:"events"`
-	Question    string         `yaml:"question"`
-	FailCount   int            `yaml:"fail_count"`
-	FailMessage string         `yaml:"fail_message"`
-	ExitCode    int            `yaml:"exit_code"`
+	Type            ActionType       `yaml:"type"`
+	Delay           time.Duration    `yaml:"delay"`
+	Outputs         map[string]any   `yaml:"outputs"`
+	OutputsSequence []map[string]any `yaml:"outputs_sequence"` // For sequence mode: different outputs per call
+	Events          []EventDef       `yaml:"events"`
+	Question        string           `yaml:"question"`
+	FailCount       int              `yaml:"fail_count"`
+	FailMessage     string           `yaml:"fail_message"`
+	ExitCode        int              `yaml:"exit_code"`
 }
 
 // EventDef defines a tool event to emit.
@@ -203,6 +204,59 @@ func (b *SimConfigBuilder) WithToolEvents(enabled bool) *SimConfigBuilder {
 // WithLogLevel sets the logging level.
 func (b *SimConfigBuilder) WithLogLevel(level string) *SimConfigBuilder {
 	b.config.Logging.Level = level
+	return b
+}
+
+// WithHangBehavior adds a behavior that hangs forever (for timeout testing).
+func (b *SimConfigBuilder) WithHangBehavior(pattern string) *SimConfigBuilder {
+	behavior := Behavior{
+		Match: pattern,
+		Type:  "contains",
+		Action: Action{
+			Type: ActionHang,
+		},
+	}
+	b.config.Behaviors = append(b.config.Behaviors, behavior)
+	return b
+}
+
+// WithBehaviorSequence adds a behavior that produces different outputs on successive calls.
+// The first call returns outputs[0], second returns outputs[1], etc.
+// After the sequence is exhausted, the last output is repeated.
+func (b *SimConfigBuilder) WithBehaviorSequence(pattern string, outputs []map[string]any) *SimConfigBuilder {
+	behavior := Behavior{
+		Match: pattern,
+		Type:  "contains",
+		Action: Action{
+			Type:            ActionComplete,
+			Delay:           10 * time.Millisecond,
+			OutputsSequence: outputs,
+		},
+	}
+	b.config.Behaviors = append(b.config.Behaviors, behavior)
+	return b
+}
+
+// WithCrashBehavior adds a behavior that causes the simulator to crash (exit) with the specified exit code.
+// This is useful for testing crash detection and recovery scenarios.
+func (b *SimConfigBuilder) WithCrashBehavior(pattern string, exitCode int) *SimConfigBuilder {
+	behavior := Behavior{
+		Match: pattern,
+		Type:  "contains",
+		Action: Action{
+			Type:     ActionCrash,
+			ExitCode: exitCode,
+		},
+	}
+	b.config.Behaviors = append(b.config.Behaviors, behavior)
+	return b
+}
+
+// WithDefaultCrash sets the default action to crash with the specified exit code.
+// All prompts that don't match a specific behavior will cause a crash.
+func (b *SimConfigBuilder) WithDefaultCrash(exitCode int) *SimConfigBuilder {
+	b.config.Default.Behavior.Action.Type = ActionCrash
+	b.config.Default.Behavior.Action.ExitCode = exitCode
 	return b
 }
 

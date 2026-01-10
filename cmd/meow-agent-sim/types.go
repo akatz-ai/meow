@@ -62,14 +62,15 @@ type Behavior struct {
 
 // Action defines the simulator's response action
 type Action struct {
-    Type        ActionType     `yaml:"type"`
-    Delay       time.Duration  `yaml:"delay"`
-    Outputs     map[string]any `yaml:"outputs"`
-    Events      []EventDef     `yaml:"events"`
-    Question    string         `yaml:"question"`
-    FailCount   int            `yaml:"fail_count"`
-    FailMessage string         `yaml:"fail_message"`
-    ExitCode    int            `yaml:"exit_code"`
+    Type            ActionType       `yaml:"type"`
+    Delay           time.Duration    `yaml:"delay"`
+    Outputs         map[string]any   `yaml:"outputs"`
+    OutputsSequence []map[string]any `yaml:"outputs_sequence"` // For sequence mode: different outputs per call
+    Events          []EventDef       `yaml:"events"`
+    Question        string           `yaml:"question"`
+    FailCount       int              `yaml:"fail_count"`
+    FailMessage     string           `yaml:"fail_message"`
+    ExitCode        int              `yaml:"exit_code"`
 }
 
 // EventDef defines a tool event to emit

@@ -123,7 +123,7 @@ func (s *Simulator) actionComplete(action Action) error {
 	fmt.Println("Task completed successfully.")
 
 	// Call meow done with outputs
-	outputs := action.Outputs
+	outputs := s.getOutputs(action)
 	if outputs == nil {
 		outputs = map[string]any{}
 	}
@@ -135,6 +135,38 @@ func (s *Simulator) actionComplete(action Action) error {
 
 	s.transitionTo(StateIdle)
 	return nil
+}
+
+// getOutputs returns the appropriate outputs for an action.
+// If OutputsSequence is set, it returns the output for the current call count,
+// repeating the last output after the sequence is exhausted.
+func (s *Simulator) getOutputs(action Action) map[string]any {
+	if len(action.OutputsSequence) == 0 {
+		return action.Outputs
+	}
+
+	// Use a consistent key for tracking sequence position
+	// We need to track this separately from attemptCounts which is used for fail_then_succeed
+	// For now, use the current step ID as the key
+	key := "sequence:" + s.stepID
+	if s.sequenceCounts == nil {
+		s.sequenceCounts = make(map[string]int)
+	}
+
+	idx := s.sequenceCounts[key]
+	s.sequenceCounts[key]++
+
+	if idx >= len(action.OutputsSequence) {
+		// Repeat last output after sequence exhausted
+		idx = len(action.OutputsSequence) - 1
+	}
+
+	s.logger.Debug("using outputs from sequence",
+		"index", idx,
+		"total", len(action.OutputsSequence),
+	)
+
+	return action.OutputsSequence[idx]
 }
 
 // actionAsk prints a question and transitions to ASKING state.

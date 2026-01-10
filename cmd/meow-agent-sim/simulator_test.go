@@ -52,11 +52,12 @@ func newTestSimulator(config SimConfig) (*Simulator, *mockIPCClient) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mock := newMockIPCClient()
 	sim := &Simulator{
-		config:        config,
-		logger:        logger,
-		state:         StateStarting,
-		ipc:           mock,
-		attemptCounts: make(map[string]int),
+		config:         config,
+		logger:         logger,
+		state:          StateStarting,
+		ipc:            mock,
+		attemptCounts:  make(map[string]int),
+		sequenceCounts: make(map[string]int),
 	}
 	return sim, mock
 }
@@ -976,5 +977,166 @@ func TestNewDefaultSimConfig(t *testing.T) {
 	// Verify logging defaults
 	if config.Logging.Level != "info" {
 		t.Errorf("Logging.Level = %q, want %q", config.Logging.Level, "info")
+	}
+}
+
+// =============================================================================
+// TestOutputsSequence - Test output sequence support
+// =============================================================================
+
+func TestOutputsSequence_ReturnsSequentialOutputs(t *testing.T) {
+	config := SimConfig{
+		Timing: TimingConfig{
+			DefaultWorkDelay: 0,
+		},
+		Behaviors: []Behavior{
+			{
+				Match: "implement",
+				Type:  "contains",
+				Action: Action{
+					Type: ActionComplete,
+					OutputsSequence: []map[string]any{
+						{"wrong": "first"},
+						{"still_wrong": "second"},
+						{"task_id": "correct"},
+					},
+				},
+			},
+		},
+		Default: DefaultConfig{
+			Behavior: Behavior{
+				Action: Action{Type: ActionComplete},
+			},
+		},
+	}
+
+	sim, mock := newTestSimulator(config)
+	sim.stepID = "test-step" // Set a step ID for sequence tracking
+
+	// First call should return first output
+	sim.state = StateIdle
+	err := sim.handleInput("implement feature")
+	if err != nil {
+		t.Fatalf("handleInput (call 1) failed: %v", err)
+	}
+	if len(mock.stepDoneCalls) != 1 {
+		t.Fatalf("Expected 1 stepDone call, got %d", len(mock.stepDoneCalls))
+	}
+	if mock.stepDoneCalls[0]["wrong"] != "first" {
+		t.Errorf("Call 1: got %v, want {wrong: first}", mock.stepDoneCalls[0])
+	}
+
+	// Second call should return second output
+	sim.state = StateIdle
+	err = sim.handleInput("implement feature")
+	if err != nil {
+		t.Fatalf("handleInput (call 2) failed: %v", err)
+	}
+	if len(mock.stepDoneCalls) != 2 {
+		t.Fatalf("Expected 2 stepDone calls, got %d", len(mock.stepDoneCalls))
+	}
+	if mock.stepDoneCalls[1]["still_wrong"] != "second" {
+		t.Errorf("Call 2: got %v, want {still_wrong: second}", mock.stepDoneCalls[1])
+	}
+
+	// Third call should return third output
+	sim.state = StateIdle
+	err = sim.handleInput("implement feature")
+	if err != nil {
+		t.Fatalf("handleInput (call 3) failed: %v", err)
+	}
+	if len(mock.stepDoneCalls) != 3 {
+		t.Fatalf("Expected 3 stepDone calls, got %d", len(mock.stepDoneCalls))
+	}
+	if mock.stepDoneCalls[2]["task_id"] != "correct" {
+		t.Errorf("Call 3: got %v, want {task_id: correct}", mock.stepDoneCalls[2])
+	}
+}
+
+func TestOutputsSequence_RepeatsLastAfterExhausted(t *testing.T) {
+	config := SimConfig{
+		Timing: TimingConfig{
+			DefaultWorkDelay: 0,
+		},
+		Behaviors: []Behavior{
+			{
+				Match: "retry",
+				Type:  "contains",
+				Action: Action{
+					Type: ActionComplete,
+					OutputsSequence: []map[string]any{
+						{"status": "fail"},
+						{"status": "success"},
+					},
+				},
+			},
+		},
+		Default: DefaultConfig{
+			Behavior: Behavior{
+				Action: Action{Type: ActionComplete},
+			},
+		},
+	}
+
+	sim, mock := newTestSimulator(config)
+	sim.stepID = "retry-step"
+
+	// First two calls use sequence
+	sim.state = StateIdle
+	sim.handleInput("retry this")
+	sim.state = StateIdle
+	sim.handleInput("retry this")
+
+	// Third and fourth calls should repeat last output
+	sim.state = StateIdle
+	sim.handleInput("retry this")
+	if mock.stepDoneCalls[2]["status"] != "success" {
+		t.Errorf("Call 3: got %v, want {status: success}", mock.stepDoneCalls[2])
+	}
+
+	sim.state = StateIdle
+	sim.handleInput("retry this")
+	if mock.stepDoneCalls[3]["status"] != "success" {
+		t.Errorf("Call 4: got %v, want {status: success}", mock.stepDoneCalls[3])
+	}
+}
+
+func TestOutputsSequence_FallsBackToOutputsIfSequenceEmpty(t *testing.T) {
+	config := SimConfig{
+		Timing: TimingConfig{
+			DefaultWorkDelay: 0,
+		},
+		Behaviors: []Behavior{
+			{
+				Match: "normal",
+				Type:  "contains",
+				Action: Action{
+					Type:            ActionComplete,
+					Outputs:         map[string]any{"regular": "output"},
+					OutputsSequence: nil, // No sequence
+				},
+			},
+		},
+		Default: DefaultConfig{
+			Behavior: Behavior{
+				Action: Action{Type: ActionComplete},
+			},
+		},
+	}
+
+	sim, mock := newTestSimulator(config)
+	sim.stepID = "normal-step"
+
+	sim.state = StateIdle
+	sim.handleInput("normal task")
+	if mock.stepDoneCalls[0]["regular"] != "output" {
+		t.Errorf("Got %v, want {regular: output}", mock.stepDoneCalls[0])
+	}
+
+	// Second call should also return regular output (no sequence)
+	sim.state = StateIdle
+	sim.handleInput("normal task")
+	if mock.stepDoneCalls[1]["regular"] != "output" {
+		t.Errorf("Got %v, want {regular: output}", mock.stepDoneCalls[1])
 	}
 }

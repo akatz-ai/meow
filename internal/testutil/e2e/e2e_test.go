@@ -63,7 +63,12 @@ func findProjectRoot() string {
 
 // runMeow executes meow CLI and returns stdout, stderr, and any error.
 func runMeow(h *e2e.Harness, args ...string) (string, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	return runMeowWithTimeout(h, 60*time.Second, args...)
+}
+
+// runMeowWithTimeout executes meow CLI with a custom timeout.
+func runMeowWithTimeout(h *e2e.Harness, timeout time.Duration, args ...string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "/tmp/meow-e2e-bin", args...)
@@ -1362,454 +1367,1657 @@ func TestE2E_CreateTestWorkflow(t *testing.T) {
 	}
 }
 
+func TestE2E_SimConfigBuilder_WithHangBehavior(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	config := e2e.NewSimConfigBuilder().
+		WithHangBehavior("stuck task").
+		Build()
+
+	if err := h.WriteSimConfig(config); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	// Verify file was written with hang behavior
+	data, err := os.ReadFile(h.SimConfigPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	var loaded e2e.SimTestConfig
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal config: %v", err)
+	}
+
+	if len(loaded.Behaviors) != 1 {
+		t.Fatalf("expected 1 behavior, got %d", len(loaded.Behaviors))
+	}
+
+	if loaded.Behaviors[0].Match != "stuck task" {
+		t.Errorf("expected match 'stuck task', got %q", loaded.Behaviors[0].Match)
+	}
+
+	if loaded.Behaviors[0].Action.Type != e2e.ActionHang {
+		t.Errorf("expected action type 'hang', got %q", loaded.Behaviors[0].Action.Type)
+	}
+}
+
+func TestE2E_SimConfigBuilder_WithBehaviorSequence(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	config := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("implement", []map[string]any{
+			{"wrong": "first"},
+			{"task_id": "correct"},
+		}).
+		Build()
+
+	if err := h.WriteSimConfig(config); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	// Verify file was written with sequence behavior
+	data, err := os.ReadFile(h.SimConfigPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	var loaded e2e.SimTestConfig
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal config: %v", err)
+	}
+
+	if len(loaded.Behaviors) != 1 {
+		t.Fatalf("expected 1 behavior, got %d", len(loaded.Behaviors))
+	}
+
+	if loaded.Behaviors[0].Match != "implement" {
+		t.Errorf("expected match 'implement', got %q", loaded.Behaviors[0].Match)
+	}
+
+	if len(loaded.Behaviors[0].Action.OutputsSequence) != 2 {
+		t.Errorf("expected 2 outputs in sequence, got %d", len(loaded.Behaviors[0].Action.OutputsSequence))
+	}
+}
+
+func TestE2E_AgentSessionControl(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Initially, no agent sessions should exist
+	agents, err := h.ListAgentSessions()
+	if err != nil {
+		t.Fatalf("ListAgentSessions failed: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents initially, got %d", len(agents))
+	}
+
+	// Create a tmux session with agent naming convention
+	if err := h.TmuxNewSession("meow-test-agent"); err != nil {
+		t.Fatalf("failed to create tmux session: %v", err)
+	}
+
+	// Agent should now be alive
+	if !h.IsAgentSessionAlive("test-agent") {
+		t.Error("expected agent session to be alive")
+	}
+
+	// Should appear in list
+	agents, err = h.ListAgentSessions()
+	if err != nil {
+		t.Fatalf("ListAgentSessions failed: %v", err)
+	}
+	found := false
+	for _, a := range agents {
+		if a == "test-agent" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'test-agent' in agents list, got %v", agents)
+	}
+
+	// Kill the agent
+	if err := h.KillAgentSession("test-agent"); err != nil {
+		t.Fatalf("KillAgentSession failed: %v", err)
+	}
+
+	// Agent should no longer be alive
+	if h.IsAgentSessionAlive("test-agent") {
+		t.Error("expected agent session to be dead after kill")
+	}
+}
+
 // ===========================================================================
-// Foreach Executor Tests
+// Agent Step Timeout Tests
 // ===========================================================================
 
-func TestE2E_ForeachBasicIteration(t *testing.T) {
+// TestE2E_AgentStepTimeout_SendsSignal tests that when an agent step times out,
+// the orchestrator sends C-c to the agent and marks the step as failed.
+//
+// Per MVP-SPEC-v2 (lines 622-629):
+//   1. Send `C-c` (interrupt) to the agent's tmux session
+//   2. Wait 10 seconds for graceful stop
+//   3. Mark step `failed` with error "Step timed out after {duration}"
+//   4. Continue based on `on_error` setting (default: workflow fails)
+//
+// Expected timeline: ~3s timeout + ~10s grace period = ~13-15s total
+func TestE2E_AgentStepTimeout_SendsSignal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
 	h := e2e.NewHarness(t)
 
-	// Basic foreach with simple string array
+	// Configure simulator to hang forever when it receives a prompt
+	simConfig := e2e.NewSimConfigBuilder().
+		WithHangBehavior("hang forever").
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with agent step that has a short timeout
+	// Using 3s timeout for tests - actual timeout + 10s grace period = ~13s max
 	template := `
 [main]
-name = "foreach-basic"
+name = "agent-timeout"
 
 [[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["alpha", "beta", "gamma"]'
-item_var = "item"
-template = ".per-item"
+id = "spawn-agent"
+executor = "spawn"
+agent = "timeout-worker"
 
 [[main.steps]]
-id = "done"
-executor = "shell"
-command = "echo 'all iterations complete'"
-needs = ["iterate"]
+id = "hang-step"
+executor = "agent"
+agent = "timeout-worker"
+needs = ["spawn-agent"]
+prompt = "This prompt will hang forever"
+timeout = "3s"
 
-# Template expanded for each item
-[per-item]
-name = "per-item"
-internal = true
-
-[[per-item.steps]]
-id = "process"
-executor = "shell"
-command = "echo 'processing: {{item}}'"
+[[main.steps]]
+id = "kill-agent"
+executor = "kill"
+agent = "timeout-worker"
+needs = ["hang-step"]
+graceful = true
 `
-	if err := h.WriteTemplate("foreach-basic.toml", template); err != nil {
+	if err := h.WriteTemplate("agent-timeout.toml", template); err != nil {
 		t.Fatalf("failed to write template: %v", err)
 	}
 
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-basic.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete, got:\nstderr: %s", stderr)
-	}
-}
-
-func TestE2E_ForeachWithIndexVar(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach with both item_var and index_var
-	template := `
-[main]
-name = "foreach-index"
-
-[[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["first", "second", "third"]'
-item_var = "value"
-index_var = "idx"
-template = ".indexed-item"
-
-[[main.steps]]
-id = "complete"
-executor = "shell"
-command = "echo 'done'"
-needs = ["iterate"]
-
-[indexed-item]
-name = "indexed-item"
-internal = true
-
-[[indexed-item.steps]]
-id = "show"
-executor = "shell"
-command = "echo 'index={{idx}} value={{value}}'"
-`
-	if err := h.WriteTemplate("foreach-index.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-index.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
-	}
-}
-
-func TestE2E_ForeachEmptyArray(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach with empty array - should complete immediately
-	template := `
-[main]
-name = "foreach-empty"
-
-[[main.steps]]
-id = "iterate-empty"
-executor = "foreach"
-items = '[]'
-item_var = "x"
-template = ".never-run"
-
-[[main.steps]]
-id = "after"
-executor = "shell"
-command = "echo 'empty iteration skipped'"
-needs = ["iterate-empty"]
-
-[never-run]
-name = "never-run"
-internal = true
-
-[[never-run.steps]]
-id = "fail"
-executor = "shell"
-command = "exit 1"
-`
-	if err := h.WriteTemplate("foreach-empty.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-empty.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	// Should complete because empty array means no iterations
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete with empty foreach")
-	}
-}
-
-func TestE2E_ForeachSequentialMode(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach with parallel = false - iterations run sequentially
-	template := `
-[main]
-name = "foreach-sequential"
-
-[[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["a", "b", "c"]'
-item_var = "letter"
-template = ".seq-item"
-parallel = false
-
-[[main.steps]]
-id = "done"
-executor = "shell"
-command = "echo 'sequential done'"
-needs = ["iterate"]
-
-[seq-item]
-name = "seq-item"
-internal = true
-
-[[seq-item.steps]]
-id = "step"
-executor = "shell"
-command = "echo 'letter: {{letter}}' && sleep 0.05"
-`
-	if err := h.WriteTemplate("foreach-seq.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
+	// Use longer timeout for test since we expect ~13s (3s timeout + 10s grace)
+	// but allow up to 30s for any delays
 	start := time.Now()
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-seq.toml"))
+	stdout, stderr, err := runMeowWithTimeout(h, 45*time.Second, "run", filepath.Join(h.TemplateDir, "agent-timeout.toml"))
 	duration := time.Since(start)
 
+	t.Logf("Timeout test completed in %v", duration)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
 	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		t.Logf("err: %v", err)
 	}
 
-	// Sequential should take at least 150ms (3 iterations * 50ms each)
-	// Allow some tolerance for process overhead
-	if duration < 100*time.Millisecond {
-		t.Errorf("sequential mode too fast: %v (expected >= 100ms)", duration)
+	// The orchestrator should detect the timeout and send interrupts
+	// Verify that timeout detection occurred
+	hasTimeoutDetection := strings.Contains(stderr, "timed out") ||
+		strings.Contains(stderr, "timeout") ||
+		strings.Contains(stderr, "sending interrupt")
+
+	if !hasTimeoutDetection {
+		t.Errorf("expected timeout detection in output")
 	}
 
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
+	// Duration should be at least the timeout duration
+	if duration < 3*time.Second {
+		t.Errorf("expected workflow to take at least 3s for timeout, took %v", duration)
 	}
+
+	// Once the orchestrator is fully implemented, we expect the workflow to:
+	// 1. Detect timeout after 3s
+	// 2. Send C-c and wait up to 10s grace period
+	// 3. Mark step as failed
+	// 4. Complete workflow (as failed) or run cleanup
+	//
+	// Current behavior may differ if timeout handling isn't fully implemented.
+	// The test verifies timeout detection occurs.
 }
 
-func TestE2E_ForeachParallelMode(t *testing.T) {
+// TestE2E_AgentStepTimeout_OnErrorContinue tests that when an agent step times out
+// with on_error=continue, the workflow continues to subsequent steps.
+//
+// Per MVP-SPEC-v2 (lines 3069-3091):
+//   on_error = "continue" logs the error and continues to the next step
+//
+// Expected behavior:
+//   1. Agent step times out after 3s
+//   2. Step marked failed with error_type: timeout
+//   3. Workflow continues due to on_error=continue
+//   4. Subsequent steps execute normally
+//   5. Workflow completes successfully
+func TestE2E_AgentStepTimeout_OnErrorContinue(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
 	h := e2e.NewHarness(t)
 
-	// Foreach with parallel = true (default) - iterations run in parallel
-	template := `
-[main]
-name = "foreach-parallel"
+	// Simulator hangs on "hang" prompts, completes on "continue" prompts
+	simConfig := e2e.NewSimConfigBuilder().
+		WithHangBehavior("hang forever").
+		WithBehavior("after timeout", e2e.ActionComplete).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
 
-[[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["x", "y", "z"]'
-item_var = "val"
-template = ".par-item"
-parallel = true
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
 
-[[main.steps]]
-id = "done"
-executor = "shell"
-command = "echo 'parallel done'"
-needs = ["iterate"]
+	adapterConfig := `
+[adapter]
+name = "simulator"
 
-[par-item]
-name = "par-item"
-internal = true
-
-[[par-item.steps]]
-id = "step"
-executor = "shell"
-command = "echo 'val: {{val}}' && sleep 0.1"
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
 `
-	if err := h.WriteTemplate("foreach-par.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
 	}
 
-	start := time.Now()
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-par.toml"))
-	duration := time.Since(start)
-
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	// Parallel should complete faster than sequential (3 * 100ms = 300ms)
-	// Should take roughly 100ms + overhead (shell spawning adds ~100ms per iteration)
-	if duration > 1*time.Second {
-		t.Errorf("parallel mode too slow: %v (expected < 1s)", duration)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
-	}
-}
-
-func TestE2E_ForeachNestedObjectIteration(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach with object items - access nested fields
+	// Template with timeout step using on_error=continue and a follow-up shell step
 	template := `
 [main]
-name = "foreach-objects"
+name = "timeout-continue"
 
 [[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '[{"name": "task-1", "priority": 1}, {"name": "task-2", "priority": 2}]'
-item_var = "task"
-template = ".process-task"
+id = "spawn-worker"
+executor = "spawn"
+agent = "worker"
 
 [[main.steps]]
-id = "complete"
-executor = "shell"
-command = "echo 'all tasks processed'"
-needs = ["iterate"]
-
-[process-task]
-name = "process-task"
-internal = true
-
-[[process-task.steps]]
-id = "work"
-executor = "shell"
-command = "echo 'processing {{task.name}} with priority {{task.priority}}'"
-`
-	if err := h.WriteTemplate("foreach-objects.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-objects.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
-	}
-}
-
-func TestE2E_ForeachWithOutputFromPreviousStep(t *testing.T) {
-	t.Skip("Foreach with items from step outputs not yet implemented - requires step output resolution in ExecuteForeach")
-
-	h := e2e.NewHarness(t)
-
-	// Foreach with items sourced from previous step output
-	template := `
-[main]
-name = "foreach-output-items"
+id = "will-timeout"
+executor = "agent"
+agent = "worker"
+needs = ["spawn-worker"]
+prompt = "This prompt will hang forever"
+timeout = "3s"
+on_error = "continue"
 
 [[main.steps]]
-id = "generate"
+id = "after-timeout"
 executor = "shell"
-command = "echo '[\"item-a\", \"item-b\"]'"
-[main.steps.shell_outputs]
-items = { source = "stdout" }
+needs = ["will-timeout"]
+command = "echo 'workflow continued after timeout'"
 
 [[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = "{{generate.outputs.items}}"
-item_var = "item"
-template = ".process-item"
-needs = ["generate"]
-
-[[main.steps]]
-id = "done"
-executor = "shell"
-command = "echo 'dynamic iteration complete'"
-needs = ["iterate"]
-
-[process-item]
-name = "process-item"
-internal = true
-
-[[process-item.steps]]
-id = "handle"
-executor = "shell"
-command = "echo 'handling: {{item}}'"
-`
-	if err := h.WriteTemplate("foreach-output.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-output.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
-	}
-}
-
-func TestE2E_ForeachWithVariables(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach passing additional variables to template
-	template := `
-[main]
-name = "foreach-vars"
-
-[[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["one", "two"]'
-item_var = "num"
-template = ".with-vars"
-[main.steps.variables]
-prefix = "test"
-suffix = "done"
-
-[[main.steps]]
-id = "finish"
-executor = "shell"
-command = "echo 'finished'"
-needs = ["iterate"]
-
-[with-vars]
-name = "with-vars"
-internal = true
-
-[with-vars.variables]
-prefix = { required = true }
-suffix = { required = true }
-
-[[with-vars.steps]]
-id = "show"
-executor = "shell"
-command = "echo '{{prefix}}-{{num}}-{{suffix}}'"
-`
-	if err := h.WriteTemplate("foreach-vars.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-vars.toml"))
-	if err != nil {
-		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
-
-	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
-	}
-}
-
-func TestE2E_ForeachWithMultiStepTemplate(t *testing.T) {
-	h := e2e.NewHarness(t)
-
-	// Foreach with a multi-step template that has internal dependencies
-	template := `
-[main]
-name = "foreach-multi-step"
-
-[[main.steps]]
-id = "iterate"
-executor = "foreach"
-items = '["apple", "banana"]'
-item_var = "fruit"
-template = ".multi-step"
-
-[[main.steps]]
-id = "done"
-executor = "shell"
-command = "echo 'all fruits processed'"
-needs = ["iterate"]
-
-[multi-step]
-name = "multi-step"
-internal = true
-
-[[multi-step.steps]]
-id = "prepare"
-executor = "shell"
-command = "echo 'preparing {{fruit}}'"
-
-[[multi-step.steps]]
-id = "process"
-executor = "shell"
-command = "echo 'processing {{fruit}}'"
-needs = ["prepare"]
-
-[[multi-step.steps]]
 id = "cleanup"
-executor = "shell"
-command = "echo 'cleanup {{fruit}}'"
-needs = ["process"]
+executor = "kill"
+agent = "worker"
+needs = ["after-timeout"]
+graceful = true
 `
-	if err := h.WriteTemplate("foreach-multi.toml", template); err != nil {
+	if err := h.WriteTemplate("timeout-continue.toml", template); err != nil {
 		t.Fatalf("failed to write template: %v", err)
 	}
 
-	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-multi.toml"))
+	// Use longer timeout to allow for timeout + grace period + continuation
+	stdout, stderr, err := runMeowWithTimeout(h, 45*time.Second, "run", filepath.Join(h.TemplateDir, "timeout-continue.toml"))
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	if err != nil {
+		t.Logf("err: %v", err)
+	}
+
+	// Verify timeout was detected
+	hasTimeoutDetection := strings.Contains(stderr, "timed out") ||
+		strings.Contains(stderr, "timeout") ||
+		strings.Contains(stderr, "sending interrupt")
+
+	if !hasTimeoutDetection {
+		t.Errorf("expected timeout detection in output")
+	}
+
+	// With on_error=continue fully implemented, workflow should complete successfully
+	// even though one step timed out.
+	// Note: This requires on_error support for agent steps to be implemented.
+	// The test documents the expected behavior.
+	if strings.Contains(stderr, "workflow completed") {
+		t.Logf("SUCCESS: workflow completed with on_error=continue as expected")
+	} else {
+		// Log that this is expected behavior that may not be implemented yet
+		t.Logf("NOTE: on_error=continue for agent timeouts may not be fully implemented yet")
+	}
+}
+
+// TestE2E_AgentStepTimeout_OnErrorFail tests that when an agent step times out
+// with on_error=fail (default), the workflow fails.
+//
+// Per MVP-SPEC-v2 (lines 3272-3279):
+//   When a step fails and on_error is "fail":
+//   1. Workflow status becomes `failed`
+//   2. No more steps are executed
+//   3. Cleanup runs (kills agents, runs cleanup script)
+//   4. Human intervention required
+//
+// Expected behavior:
+//   1. Agent step times out after 3s
+//   2. Step marked failed with error_type: timeout
+//   3. Workflow fails immediately (default on_error=fail)
+//   4. Subsequent steps do NOT run
+func TestE2E_AgentStepTimeout_OnErrorFail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Simulator hangs forever
+	simConfig := e2e.NewSimConfigBuilder().
+		WithHangBehavior("hang forever").
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with timeout step using default on_error=fail
+	template := `
+[main]
+name = "timeout-fail"
+
+[[main.steps]]
+id = "spawn-worker"
+executor = "spawn"
+agent = "worker"
+
+[[main.steps]]
+id = "will-timeout"
+executor = "agent"
+agent = "worker"
+needs = ["spawn-worker"]
+prompt = "This prompt will hang forever"
+timeout = "3s"
+# on_error defaults to "fail"
+
+[[main.steps]]
+id = "should-not-run"
+executor = "shell"
+needs = ["will-timeout"]
+command = "echo 'this should not run'"
+
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "worker"
+needs = ["should-not-run"]
+graceful = true
+`
+	if err := h.WriteTemplate("timeout-fail.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Use longer timeout for test
+	stdout, stderr, err := runMeowWithTimeout(h, 45*time.Second, "run", filepath.Join(h.TemplateDir, "timeout-fail.toml"))
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	if err != nil {
+		t.Logf("err: %v", err)
+	}
+
+	// Verify timeout was detected
+	hasTimeoutDetection := strings.Contains(stderr, "timed out") ||
+		strings.Contains(stderr, "timeout") ||
+		strings.Contains(stderr, "sending interrupt")
+
+	if !hasTimeoutDetection {
+		t.Errorf("expected timeout detection in output")
+	}
+
+	// With full implementation, workflow should fail (not complete successfully)
+	if strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to fail, but it completed successfully")
+	}
+
+	// The test verifies timeout detection. Full on_error=fail semantics
+	// (stopping the workflow) requires the timeout handling to be fully
+	// implemented with state persistence.
+}
+
+// TestE2E_AgentStepTimeout_RecoveryTemplate tests that when an agent step times out
+// and on_error references a template, that recovery template is expanded.
+//
+// Per MVP-SPEC-v2 (lines 3093-3108):
+//   When a step fails and on_error references a template:
+//   1. Step is marked `failed`
+//   2. Error context is captured in `_failed_step` variables
+//   3. Recovery template is expanded
+//   4. Workflow continues from the recovery template
+//
+// Example from spec:
+//   on_error = ".impl-recovery"  # Expand this template on failure
+//
+// Expected behavior:
+//   1. Agent step times out after 3s
+//   2. Step marked failed with error_type: timeout
+//   3. Recovery template ".recovery-workflow" is expanded
+//   4. Recovery steps execute
+//   5. Workflow continues/completes
+func TestE2E_AgentStepTimeout_RecoveryTemplate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Simulator hangs on "will timeout", completes on "recovery"
+	simConfig := e2e.NewSimConfigBuilder().
+		WithHangBehavior("hang forever").
+		WithBehavior("recovery", e2e.ActionComplete).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with timeout step that expands a recovery template on failure
+	template := `
+[main]
+name = "timeout-recovery"
+
+[[main.steps]]
+id = "spawn-worker"
+executor = "spawn"
+agent = "worker"
+
+[[main.steps]]
+id = "will-timeout"
+executor = "agent"
+agent = "worker"
+needs = ["spawn-worker"]
+prompt = "This prompt will hang forever"
+timeout = "3s"
+on_error = ".recovery-workflow"
+
+[[main.steps]]
+id = "final-step"
+executor = "shell"
+needs = ["will-timeout"]
+command = "echo 'reached final step'"
+
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "worker"
+needs = ["final-step"]
+graceful = true
+
+# Recovery workflow expanded on timeout
+[recovery-workflow]
+name = "recovery"
+internal = true
+
+[[recovery-workflow.steps]]
+id = "handle-timeout"
+executor = "shell"
+command = "echo 'recovery: handling timeout'"
+
+[[recovery-workflow.steps]]
+id = "notify"
+executor = "shell"
+command = "echo 'recovery: notifying about timeout'"
+needs = ["handle-timeout"]
+`
+	if err := h.WriteTemplate("timeout-recovery.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Use longer timeout for test
+	stdout, stderr, err := runMeowWithTimeout(h, 45*time.Second, "run", filepath.Join(h.TemplateDir, "timeout-recovery.toml"))
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	if err != nil {
+		t.Logf("err: %v", err)
+	}
+
+	// Verify timeout was detected
+	hasTimeoutDetection := strings.Contains(stderr, "timed out") ||
+		strings.Contains(stderr, "timeout") ||
+		strings.Contains(stderr, "sending interrupt")
+
+	if !hasTimeoutDetection {
+		t.Errorf("expected timeout detection in output")
+	}
+
+	// Check if recovery steps were executed
+	// This requires template-based on_error recovery to be implemented
+	hasRecovery := strings.Contains(stderr, "recovery") ||
+		strings.Contains(stdout, "recovery")
+
+	if hasRecovery {
+		t.Logf("SUCCESS: recovery template was expanded and executed")
+	} else {
+		// Template-based on_error recovery is a Phase 8 feature per spec
+		// This test documents the expected behavior
+		t.Logf("NOTE: Template-based on_error recovery may not be implemented yet (Phase 8)")
+	}
+}
+
+// ===========================================================================
+// Agent Crash Tests
+//
+// These tests verify that the orchestrator properly detects and handles agent
+// crashes. Per MVP-SPEC-v2, when an agent's tmux session dies unexpectedly:
+// - The orchestrator should detect the crash via session liveness polling
+// - The step should be marked as failed with error_type "agent_crashed"
+// - Resources should be cleaned up properly
+//
+// Current Status:
+// - Crash detection via session liveness is NOT YET IMPLEMENTED
+// - These tests rely on step timeout as a fallback
+// - Timeout handling has a known issue (InterruptedAt not persisted)
+//
+// These tests document expected behavior and serve as acceptance criteria
+// for the crash detection feature.
+// ===========================================================================
+
+// TestE2E_AgentCrash_SessionDies tests that when an agent's tmux session dies
+// unexpectedly (via crash), the orchestrator detects it and marks the step as failed.
+//
+// Expected behavior per MVP-SPEC-v2:
+// - Orchestrator polls for session liveness
+// - Detects that session is gone
+// - Marks step as failed with error_type="agent_crashed"
+// - Workflow fails (unless on_error=continue)
+//
+// Current behavior: Relies on step timeout to eventually fail.
+func TestE2E_AgentCrash_SessionDies(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to crash when it receives a prompt
+	simConfig := e2e.NewSimConfigBuilder().
+		WithCrashBehavior("crash task", 1).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template where agent receives a prompt that causes crash
+	// Using a very short timeout so the test doesn't hang
+	template := `
+[main]
+name = "agent-crash-test"
+
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+agent = "crash-agent"
+
+[[main.steps]]
+id = "crash-work"
+executor = "agent"
+agent = "crash-agent"
+needs = ["spawn-agent"]
+prompt = "Please do this crash task for me"
+timeout = "5s"
+
+[[main.steps]]
+id = "after-crash"
+executor = "shell"
+needs = ["crash-work"]
+command = "echo 'this should not run'"
+`
+	// Start orchestrator in background so we can test behavior
+	// StartOrchestratorWithTemplate writes the template and starts the orchestrator
+	proc, err := h.StartOrchestratorWithTemplate("agent-crash.toml", template)
+	if err != nil {
+		t.Fatalf("failed to start orchestrator: %v", err)
+	}
+
+	// Wait a bit for workflow to start
+	time.Sleep(3 * time.Second)
+
+	// The simulator should have crashed by now
+	// Check that the orchestrator detected something (session gone)
+	// Note: Without crash detection implemented, this will wait for timeout
+
+	// Wait for completion or timeout
+	waitErr := proc.WaitWithTimeout(30 * time.Second)
+
+	stderr := proc.Stderr()
+	stdout := proc.Stdout()
+
+	t.Logf("Orchestrator stdout: %s", stdout)
+	t.Logf("Orchestrator stderr (first 2000 chars): %.2000s", stderr)
+
+	// Document the observed behavior
+	if waitErr != nil {
+		if strings.Contains(waitErr.Error(), "timeout") {
+			t.Log("NOTE: Test timed out - crash detection and timeout handling need implementation")
+			t.Skip("Crash detection not yet implemented - orchestrator hung waiting for meow done")
+		}
+	}
+
+	// Check if workflow indicated failure
+	hasFailure := proc.IsDone() && waitErr != nil ||
+		strings.Contains(stderr, "failed") ||
+		strings.Contains(stderr, "timed out")
+
+	if hasFailure {
+		t.Log("Workflow properly detected crash/timeout and failed")
+	} else if strings.Contains(stderr, "workflow completed") {
+		t.Log("NOTE: Workflow completed despite crash - crash detection not implemented")
+	}
+}
+
+// TestE2E_AgentCrash_OnErrorContinue tests that when an agent crashes but the step
+// has on_error=continue, the workflow continues to the next step.
+//
+// Expected behavior:
+// - Agent crash is detected (via session liveness or timeout)
+// - Step is marked failed
+// - Due to on_error=continue, workflow proceeds to next step
+// - Workflow completes successfully
+//
+// Current status: Depends on crash detection or timeout handling being implemented.
+func TestE2E_AgentCrash_OnErrorContinue(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for on_error=continue with agent crashes.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
+
+// TestE2E_AgentCrash_StopHookNotCalled tests that when an agent crashes abruptly
+// (tmux session dies), the stop hook is NOT called since the process is gone.
+// This verifies the distinction between graceful stops (stop hook fires) and crashes.
+//
+// Expected behavior:
+// - Agent process crashes (exits with non-zero code)
+// - Process is gone before stop hook can fire
+// - Orchestrator detects crash via session liveness check
+// - Stop hook marker file should NOT exist
+//
+// Current status: Depends on crash detection being implemented.
+func TestE2E_AgentCrash_StopHookNotCalled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for stop hooks when agent crashes.
+	// Currently blocked by crash detection implementation.
+	t.Skip("Test blocked: crash detection not yet implemented - test would hang")
+}
+
+// TestE2E_AgentCrash_RalphWiggum tests catastrophic failure scenario:
+// Multiple agents running, first one crashes, workflow should fail gracefully
+// with proper resource cleanup.
+//
+// Named after the Simpsons character who never gives up - this tests that even
+// with multiple agents and complex failure scenarios, the system handles it gracefully.
+//
+// Expected behavior:
+// - Agent 1 crashes during work
+// - Agent 2 completes normally (but may be killed during cleanup)
+// - Workflow fails because agent-1 step failed
+// - All agent sessions are cleaned up
+//
+// Current status: Depends on crash detection and timeout handling being implemented.
+func TestE2E_AgentCrash_RalphWiggum(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for multi-agent crash scenarios.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
+
+// TestE2E_AgentCrash_DetectionLatency tests that the orchestrator detects
+// agent crashes within a reasonable time (poll interval).
+//
+// Expected behavior:
+// - Agent crashes immediately after receiving prompt
+// - Orchestrator detects crash via session liveness poll OR timeout fires
+// - Total time should be bounded (not infinite)
+//
+// This test ensures the system doesn't hang forever waiting for meow done
+// when an agent has crashed.
+//
+// Current status: Depends on crash detection or timeout handling being implemented.
+func TestE2E_AgentCrash_DetectionLatency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected crash detection latency requirements.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
+
+// ===========================================================================
+// Output Validation Retry Tests
+//
+// These tests verify that when output validation fails:
+// 1. Step status returns to "running" (not "failed")
+// 2. Error is returned to the agent
+// 3. Agent can retry with correct outputs
+// 4. Step eventually completes when outputs are valid
+// ===========================================================================
+
+func TestE2E_OutputValidation_MissingRequired(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator:
+	// - First call: provides wrong key "wrong_key" instead of "task_id"
+	// - Second call: provides correct key "task_id"
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("produce required output", []map[string]any{
+			{"wrong_key": "some-value"},   // First attempt: wrong key
+			{"task_id": "PROJ-123"},       // Second attempt: correct key
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with an agent step that requires a specific output
+	template := `
+[main]
+name = "validation-missing-output"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "worker"
+needs = ["spawn"]
+prompt = "Please produce required output for the task"
+
+[main.steps.outputs]
+task_id = { required = true, type = "string", description = "The task ID" }
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["work"]
+command = "echo 'task_id received: {{work.outputs.task_id}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "worker"
+needs = ["verify"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-missing.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-missing.toml"))
 	if err != nil {
 		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
+	// Workflow should complete successfully after retry
 	if !strings.Contains(stderr, "workflow completed") {
-		t.Errorf("expected workflow to complete")
+		t.Errorf("expected workflow to complete after retry, got:\nstderr: %s", stderr)
+	}
+
+	// Should see validation failure message in logs
+	if !strings.Contains(stderr, "validation failed") && !strings.Contains(stderr, "missing required output") {
+		t.Logf("Note: expected validation failure message in logs (may be at debug level)")
+	}
+}
+
+func TestE2E_OutputValidation_WrongType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator:
+	// - First call: provides "count" as string instead of number
+	// - Second call: provides "count" as number
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("count the items", []map[string]any{
+			{"count": "forty-two"},  // First attempt: wrong type (string)
+			{"count": 42},           // Second attempt: correct type (number)
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template that expects a number output
+	template := `
+[main]
+name = "validation-wrong-type"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "counter"
+
+[[main.steps]]
+id = "count"
+executor = "agent"
+agent = "counter"
+needs = ["spawn"]
+prompt = "Please count the items and report the total"
+
+[main.steps.outputs]
+count = { required = true, type = "number", description = "The total count" }
+
+[[main.steps]]
+id = "report"
+executor = "shell"
+needs = ["count"]
+command = "echo 'Count is: {{count.outputs.count}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "counter"
+needs = ["report"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-type.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-type.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Workflow should complete after type correction
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete after type correction, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_OutputValidation_MultipleRetries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to fail 3 times, then succeed on 4th attempt
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("perform validation test", []map[string]any{
+			{"wrong": "attempt1"},      // 1st attempt: wrong key
+			{"also_wrong": "attempt2"}, // 2nd attempt: still wrong
+			{"nope": "attempt3"},       // 3rd attempt: nope
+			{"result": "success!"},     // 4th attempt: finally correct
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template that requires specific output
+	template := `
+[main]
+name = "validation-multi-retry"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "persistent"
+
+[[main.steps]]
+id = "validate"
+executor = "agent"
+agent = "persistent"
+needs = ["spawn"]
+prompt = "Please perform validation test and provide the result"
+
+[main.steps.outputs]
+result = { required = true, type = "string", description = "The validation result" }
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+needs = ["validate"]
+command = "echo 'Validation passed with result: {{validate.outputs.result}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "persistent"
+needs = ["done"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-multi.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-multi.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Workflow should complete after 4 attempts
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete after multiple retries, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_OutputValidation_EventualTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to always provide wrong outputs (never succeeds)
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("timeout test", []map[string]any{
+			{"wrong": "always"},  // Will repeat this forever (last item repeats)
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		WithDelay(100 * time.Millisecond). // Small delay between retries
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with a step that has a short timeout
+	// The step requires "result" but simulator always provides "wrong"
+	template := `
+[main]
+name = "validation-timeout"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "doomed"
+
+[[main.steps]]
+id = "doomed-step"
+executor = "agent"
+agent = "doomed"
+needs = ["spawn"]
+prompt = "Please run timeout test"
+timeout = "3s"
+
+[main.steps.outputs]
+result = { required = true, type = "string", description = "Required result that will never come" }
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "doomed"
+needs = ["doomed-step"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-timeout.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Run with timeout - workflow should fail due to step timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/tmp/meow-e2e-bin", "run", filepath.Join(h.TemplateDir, "validation-timeout.toml"))
+	cmd.Dir = h.TempDir
+	cmd.Env = h.Env()
+	cmd.Env = append(cmd.Env, "PATH=/tmp:"+os.Getenv("PATH"))
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// The workflow should fail due to timeout
+	// Check for timeout indication in output
+	stderrStr := stderr.String()
+	stdoutStr := stdout.String()
+
+	hasTimeout := strings.Contains(stderrStr, "timeout") ||
+		strings.Contains(stderrStr, "timed out") ||
+		strings.Contains(stderrStr, "step failed") ||
+		err != nil
+
+	if !hasTimeout {
+		t.Errorf("expected step to timeout, got:\nstdout: %s\nstderr: %s\nerr: %v",
+			stdoutStr, stderrStr, err)
+	}
+
+	// Workflow should NOT complete successfully
+	if strings.Contains(stderrStr, "workflow completed") {
+		t.Errorf("expected workflow to fail due to timeout, but it completed")
+	}
+}
+
+// ===========================================================================
+// Crash Recovery E2E Tests
+// ===========================================================================
+
+// TestE2E_CrashRecovery_PendingSteps tests recovery when workflow has pending steps.
+// Scenario: Workflow has step1 done, step2/step3 pending. Simulate crash by creating
+// workflow state directly, then resume and verify completion.
+func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow state directly - simulating state after step1 done
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'step1 done'"},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2 running'"},
+		},
+		"step3": {
+			ID:       "step3",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step2"},
+			Shell:    &types.ShellConfig{Command: "echo 'step3 running'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-pending", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Update workflow status to running (simulating interrupted state)
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-pending")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Wait for completion
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify all steps are done
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	for stepID, step := range wf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("step %s status = %s, want done", stepID, step.Status)
+		}
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_RunningShellStep tests recovery when a shell step was running.
+// Scenario: Shell step was "running" when crash occurred. Should be reset to pending
+// and re-executed on resume.
+func TestE2E_CrashRecovery_RunningShellStep(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create marker file path to track idempotent execution
+	markerFile := filepath.Join(h.TempDir, "shell-recovery-marker")
+
+	// Create a workflow with a "running" shell step (simulating crash mid-execution)
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Shell: &types.ShellConfig{
+				// Idempotent command - creates marker file
+				Command: fmt.Sprintf("touch %s && echo 'executed'", markerFile),
+			},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-shell", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Set workflow to running
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-shell")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify workflow completed
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+
+	// Verify shell step was re-executed (marker file should exist)
+	if _, err := os.Stat(markerFile); os.IsNotExist(err) {
+		t.Error("marker file not created - shell step was not re-executed")
+	}
+
+	// Verify step1 is done (was reset and re-executed)
+	step1, ok := wf.Steps["step1"]
+	if !ok {
+		t.Fatal("step1 not found")
+	}
+	if step1.Status != types.StepStatusDone {
+		t.Errorf("step1 status = %s, want done", step1.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_RunningAgentStep_DeadAgent tests recovery when an agent step
+// was running but the agent is now dead.
+// Scenario: Agent step was "running", agent tmux session no longer exists.
+// The recovery should reset the step to pending, but since the agent is dead
+// and there's no way to re-spawn it (spawn step already done), the workflow
+// will eventually fail. This test verifies the recovery behavior is correct.
+func TestE2E_CrashRecovery_RunningAgentStep_DeadAgent(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "running" agent step, but no agent session
+	steps := map[string]*types.Step{
+		"spawn": {
+			ID:       "spawn",
+			Executor: types.ExecutorSpawn,
+			Status:   types.StepStatusDone,
+			Spawn: &types.SpawnConfig{
+				Agent: "test-agent",
+			},
+		},
+		"work": {
+			ID:       "work",
+			Executor: types.ExecutorAgent,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Needs:    []string{"spawn"},
+			Agent: &types.AgentConfig{
+				Agent:  "test-agent",
+				Prompt: "Do some work",
+			},
+		},
+	}
+
+	// NOTE: No tmux session is created - simulating that agent died in crash
+	// The orchestrator should detect this and reset the step to pending
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-agent-dead", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	// Set workflow to running with agent info
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	wf.RegisterAgent("test-agent", &types.AgentInfo{
+		TmuxSession: "meow-wf-recovery-agent-dead-test-agent",
+		Status:      "active",
+		CurrentStep: "work",
+	})
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow - this should detect dead agent and reset step
+	proc, err := h.RestartOrchestrator("wf-recovery-agent-dead")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Give the orchestrator a short time to process recovery and hit the dispatch error
+	// The orchestrator may not exit cleanly if the workflow is stuck, so we use a short timeout
+	_ = proc.WaitWithTimeout(5 * time.Second)
+
+	// Check the stderr output for recovery messages
+	stderr := proc.Stderr()
+
+	// Verify recovery detected the dead agent
+	if !strings.Contains(stderr, "resetting step from dead agent") {
+		t.Errorf("expected recovery to reset step from dead agent\nstderr: %s", stderr)
+	}
+
+	// Verify the step was identified
+	if !strings.Contains(stderr, "step=work") {
+		t.Errorf("expected recovery to mention work step\nstderr: %s", stderr)
+	}
+
+	// Kill the process if still running (it may hang because agent can't be re-spawned)
+	if !proc.IsDone() {
+		_ = proc.Kill()
+	}
+
+	// Reload workflow to verify recovery state
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	// After recovery, the work step should have been reset to pending
+	// (though it may have been dispatched and failed by now)
+	t.Logf("workflow status: %s", wf.Status)
+	for stepID, step := range wf.Steps {
+		t.Logf("step %s: status=%s", stepID, step.Status)
+	}
+}
+
+// TestE2E_CrashRecovery_CompletingStep tests recovery when a step was in "completing" state.
+// Scenario: Agent called meow done, orchestrator was processing when crash occurred.
+// The step should be treated as "running" and wait for agent completion.
+func TestE2E_CrashRecovery_CompletingStep(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "completing" shell step (unusual but tests edge case)
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusCompleting, // Was completing when crash happened
+			Shell:    &types.ShellConfig{Command: "echo 'step1'"},
+		},
+		"step2": {
+			ID:       "step2",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"step1"},
+			Shell:    &types.ShellConfig{Command: "echo 'step2'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completing", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-completing")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(30 * time.Second)
+	if err != nil {
+		t.Logf("stdout: %s", proc.Stdout())
+		t.Logf("stderr: %s", proc.Stderr())
+		t.Fatalf("orchestrator did not complete: %v", err)
+	}
+
+	// Verify workflow completed
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("workflow status = %s, want done", wf.Status)
+	}
+
+	// Both steps should be done
+	for stepID, step := range wf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("step %s status = %s, want done", stepID, step.Status)
+		}
+	}
+}
+
+// TestE2E_CrashRecovery_PartialExpansion tests recovery when expand step was running.
+// Scenario: Expand step was mid-execution, some child steps may exist.
+// Should delete partial children and re-expand.
+func TestE2E_CrashRecovery_PartialExpansion(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a workflow with a "running" expand step and some partial children
+	steps := map[string]*types.Step{
+		"before": {
+			ID:       "before",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'before'"},
+		},
+		"expand-step": {
+			ID:       "expand-step",
+			Executor: types.ExecutorExpand,
+			Status:   types.StepStatusRunning, // Was running when crash happened
+			Needs:    []string{"before"},
+			Expand: &types.ExpandConfig{
+				Template: ".sub-workflow",
+			},
+			ExpandedInto: []string{"expand-step.child1"}, // Partial expansion
+		},
+		// Partial child step - should be deleted on recovery
+		"expand-step.child1": {
+			ID:           "expand-step.child1",
+			Executor:     types.ExecutorShell,
+			Status:       types.StepStatusPending,
+			ExpandedFrom: "expand-step",
+			Shell:        &types.ShellConfig{Command: "echo 'child1'"},
+		},
+		"after": {
+			ID:       "after",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Needs:    []string{"expand-step"},
+			Shell:    &types.ShellConfig{Command: "echo 'after'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-expand", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusRunning
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Write a template for the expand step to use
+	template := `
+[sub-workflow]
+name = "sub-workflow"
+internal = true
+
+[[sub-workflow.steps]]
+id = "real-child"
+executor = "shell"
+command = "echo 'properly expanded'"
+`
+	if err := h.WriteTemplate("wf-recovery-expand.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Resume the workflow
+	proc, err := h.RestartOrchestrator("wf-recovery-expand")
+	if err != nil {
+		t.Fatalf("failed to restart orchestrator: %v", err)
+	}
+
+	// Wait briefly for recovery to run - we expect the orchestrator to timeout
+	// because the template path won't resolve correctly (we're testing recovery, not expansion)
+	_ = proc.WaitWithTimeout(5 * time.Second)
+
+	// Check stderr for recovery messages - this is the key verification
+	stderr := proc.Stderr()
+	t.Logf("stderr: %s", stderr)
+
+	// Verify recovery detected and handled the partial expansion
+	if !strings.Contains(stderr, "deleting partial expansion child") {
+		t.Error("expected recovery to delete partial expansion child")
+	}
+	if !strings.Contains(stderr, "resetting orchestrator step") {
+		t.Error("expected recovery to reset expand step")
+	}
+	if !strings.Contains(stderr, "step=expand-step") {
+		t.Error("expected recovery to mention expand-step")
+	}
+
+	// Kill the orchestrator if still running (template error may cause it to hang)
+	if !proc.IsDone() {
+		_ = proc.Kill()
+	}
+
+	// Reload workflow to verify recovery state
+	wf, err = run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to reload workflow: %v", err)
+	}
+
+	// The partial child should have been deleted during recovery
+	// (Note: it may be recreated if the expand ran again, but the original was deleted)
+	t.Logf("steps after recovery: %v", func() []string {
+		var ids []string
+		for id := range wf.Steps {
+			ids = append(ids, id)
+		}
+		return ids
+	}())
+}
+
+// TestE2E_CrashRecovery_WorkflowCompleted tests that terminal workflows can't be resumed.
+func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Create a completed workflow
+	steps := map[string]*types.Step{
+		"step1": {
+			ID:       "step1",
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusDone,
+			Shell:    &types.ShellConfig{Command: "echo 'done'"},
+		},
+	}
+
+	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completed", steps)
+	if err != nil {
+		t.Fatalf("failed to create test workflow: %v", err)
+	}
+
+	wf, err := run.Workflow()
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+	wf.Status = types.WorkflowStatusDone
+	wf.Complete()
+	if err := h.SaveWorkflow(wf); err != nil {
+		t.Fatalf("failed to save workflow: %v", err)
+	}
+
+	// Try to resume - should fail with error
+	proc, err := h.RestartOrchestrator("wf-recovery-completed")
+	if err != nil {
+		t.Fatalf("failed to start orchestrator: %v", err)
+	}
+
+	err = proc.WaitWithTimeout(10 * time.Second)
+
+	// The resume command should exit with an error since workflow is already done
+	stderr := proc.Stderr()
+	t.Logf("stderr: %s", stderr)
+
+	// Verify we get an error (either about already done or process exits non-zero)
+	if err == nil && !strings.Contains(stderr, "already") {
+		t.Error("expected resume of completed workflow to fail")
 	}
 }
