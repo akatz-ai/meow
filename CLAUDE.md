@@ -11,7 +11,7 @@ Before working on any task, read the authoritative specification:
 ```
 
 This is the **only** architecture document. It defines:
-- The 6 executors (shell, spawn, kill, expand, branch, agent)
+- The 7 executors (shell, spawn, kill, expand, branch, foreach, agent)
 - Step and Workflow data structures
 - IPC protocol (Unix sockets, single-line JSON)
 - Template system (TOML modules)
@@ -19,7 +19,7 @@ This is the **only** architecture document. It defines:
 
 ## Overview
 
-MEOW (Molecular Expression Of Work) is a coordination language for AI agent orchestration. It is NOT a task tracker - it orchestrates agents through programmable workflows.
+MEOW (Meow Executors Orchestrate Work) is a coordination language for AI agent orchestration. It is NOT a task tracker - it orchestrates agents through programmable workflows.
 
 ## Project Status: Pre-Customer MVP
 
@@ -39,7 +39,7 @@ We are implementing the workflow-centric model from MVP-SPEC-v2. Key changes fro
 
 | Old (Bead-Centric) | New (Workflow-Centric) |
 |--------------------|------------------------|
-| 8 bead types | 6 executors |
+| 8 bead types | 7 executors |
 | BeadStore interface | WorkflowStore interface |
 | Bead struct | Step struct |
 | `meow close` | `meow done` |
@@ -48,7 +48,7 @@ We are implementing the workflow-centric model from MVP-SPEC-v2. Key changes fro
 
 **If you see old patterns in the code, you may be looking at code that needs to be refactored as part of this pivot.**
 
-## The 6 Executors
+## The 7 Executors
 
 | Executor | Who Runs | Completes When |
 |----------|----------|----------------|
@@ -57,6 +57,7 @@ We are implementing the workflow-centric model from MVP-SPEC-v2. Key changes fro
 | `kill` | Orchestrator | Agent session terminated |
 | `expand` | Orchestrator | Template steps inserted |
 | `branch` | Orchestrator | Condition evaluated, branch expanded |
+| `foreach` | Orchestrator | All iterations complete (implicit join) |
 | `agent` | Agent (Claude) | Agent calls `meow done` |
 
 **Gate is NOT an executor.** Human approval is implemented as: `branch` with `condition = "meow await-approval <gate-id>"`.
@@ -225,9 +226,9 @@ MVP-SPEC-v2 is comprehensive. If you're unsure about something, it's probably in
 
 If you're tempted to add a gate executor or GateConfig, stop. Gates are implemented via branch + await-approval.
 
-### 3. 6 Executors Only
+### 3. 7 Executors Only
 
-The executors are: shell, spawn, kill, expand, branch, agent. No more, no less.
+The executors are: shell, spawn, kill, expand, branch, foreach, agent. No more, no less.
 
 ### 4. Step IDs Cannot Contain Dots
 
