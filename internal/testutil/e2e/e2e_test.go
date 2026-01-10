@@ -1886,45 +1886,45 @@ command = "echo 'properly expanded'"
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
 
-	err = proc.WaitWithTimeout(30 * time.Second)
-	// We expect this to potentially fail because the expand step needs a valid template
-	// In this test, we're mainly checking that partial children are cleaned up
+	// Wait briefly for recovery to run - we expect the orchestrator to timeout
+	// because the template path won't resolve correctly (we're testing recovery, not expansion)
+	_ = proc.WaitWithTimeout(5 * time.Second)
 
-	t.Logf("stdout: %s", proc.Stdout())
-	t.Logf("stderr: %s", proc.Stderr())
+	// Check stderr for recovery messages - this is the key verification
+	stderr := proc.Stderr()
+	t.Logf("stderr: %s", stderr)
 
-	// Reload workflow to check state
+	// Verify recovery detected and handled the partial expansion
+	if !strings.Contains(stderr, "deleting partial expansion child") {
+		t.Error("expected recovery to delete partial expansion child")
+	}
+	if !strings.Contains(stderr, "resetting orchestrator step") {
+		t.Error("expected recovery to reset expand step")
+	}
+	if !strings.Contains(stderr, "step=expand-step") {
+		t.Error("expected recovery to mention expand-step")
+	}
+
+	// Kill the orchestrator if still running (template error may cause it to hang)
+	if !proc.IsDone() {
+		_ = proc.Kill()
+	}
+
+	// Reload workflow to verify recovery state
 	wf, err = run.Workflow()
 	if err != nil {
 		t.Fatalf("failed to reload workflow: %v", err)
 	}
 
-	// Verify partial child was deleted
-	if _, exists := wf.Steps["expand-step.child1"]; exists {
-		// Check if it was recreated properly or if it's the old partial one
-		expandStep := wf.Steps["expand-step"]
-		if expandStep.Status == types.StepStatusPending {
-			// Recovery correctly reset the expand step
-			t.Log("Expand step correctly reset to pending")
+	// The partial child should have been deleted during recovery
+	// (Note: it may be recreated if the expand ran again, but the original was deleted)
+	t.Logf("steps after recovery: %v", func() []string {
+		var ids []string
+		for id := range wf.Steps {
+			ids = append(ids, id)
 		}
-	}
-
-	// The expand step should have been reset to pending
-	expandStep, ok := wf.Steps["expand-step"]
-	if !ok {
-		t.Fatal("expand-step not found")
-	}
-
-	// After recovery, the expand step should either be:
-	// 1. Reset to pending (ExpandedInto cleared)
-	// 2. Done (if it successfully re-expanded during resume)
-	if expandStep.Status != types.StepStatusPending && expandStep.Status != types.StepStatusDone {
-		// Check if ExpandedInto was cleared
-		if len(expandStep.ExpandedInto) > 0 && expandStep.Status == types.StepStatusRunning {
-			t.Errorf("expand step not properly recovered: status=%s, expandedInto=%v",
-				expandStep.Status, expandStep.ExpandedInto)
-		}
-	}
+		return ids
+	}())
 }
 
 // TestE2E_CrashRecovery_WorkflowCompleted tests that terminal workflows can't be resumed.
@@ -1956,7 +1956,7 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
 
-	// Try to resume - should fail
+	// Try to resume - should fail with error
 	proc, err := h.RestartOrchestrator("wf-recovery-completed")
 	if err != nil {
 		t.Fatalf("failed to start orchestrator: %v", err)
@@ -1964,10 +1964,12 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 
 	err = proc.WaitWithTimeout(10 * time.Second)
 
-	// Should exit with error since workflow is already done
+	// The resume command should exit with an error since workflow is already done
 	stderr := proc.Stderr()
-	if !strings.Contains(stderr, "already") && !strings.Contains(stderr, "cannot resume") {
-		t.Logf("stderr: %s", stderr)
-		t.Log("Expected error about workflow already being done")
+	t.Logf("stderr: %s", stderr)
+
+	// Verify we get an error (either about already done or process exits non-zero)
+	if err == nil && !strings.Contains(stderr, "already") {
+		t.Error("expected resume of completed workflow to fail")
 	}
 }
