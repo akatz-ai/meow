@@ -281,6 +281,57 @@ func (m *TmuxAgentManager) GetWorkdir(agentID string) string {
 	return ""
 }
 
+// Interrupt sends C-c to an agent's tmux session for graceful cancellation.
+// This is used by the timeout enforcement to interrupt running agents.
+func (m *TmuxAgentManager) Interrupt(ctx context.Context, agentID string) error {
+	m.mu.RLock()
+	state, ok := m.agents[agentID]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("agent %s not found", agentID)
+	}
+
+	sessionName := state.tmuxSession
+	m.logger.Info("sending interrupt to agent", "agent", agentID, "session", sessionName)
+
+	return m.sendKeys(ctx, sessionName, "C-c")
+}
+
+// KillAll kills all agent sessions for a workflow.
+// This is used during cleanup to ensure all agents are stopped.
+func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Workflow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var lastErr error
+	for agentID, state := range m.agents {
+		if state.workflowID != wf.ID {
+			continue
+		}
+
+		m.logger.Info("killing agent during cleanup", "agent", agentID, "session", state.tmuxSession)
+
+		// Send C-c first for graceful shutdown
+		if err := m.sendKeys(ctx, state.tmuxSession, "C-c"); err != nil {
+			m.logger.Warn("failed to send C-c", "agent", agentID, "error", err)
+		}
+
+		// Give a brief moment for graceful shutdown
+		time.Sleep(500 * time.Millisecond)
+
+		// Kill the session
+		if err := m.killSession(ctx, state.tmuxSession); err != nil {
+			m.logger.Warn("failed to kill session", "agent", agentID, "error", err)
+			lastErr = err
+		}
+
+		delete(m.agents, agentID)
+	}
+
+	return lastErr
+}
+
 // --- tmux helpers ---
 
 // tmuxArgs builds a tmux command with optional socket argument.

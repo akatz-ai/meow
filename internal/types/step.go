@@ -179,9 +179,10 @@ type Step struct {
 	Executor ExecutorType `yaml:"executor"`
 
 	// Lifecycle
-	Status    StepStatus `yaml:"status"`
-	StartedAt *time.Time `yaml:"started_at,omitempty"`
-	DoneAt    *time.Time `yaml:"done_at,omitempty"`
+	Status        StepStatus `yaml:"status"`
+	StartedAt     *time.Time `yaml:"started_at,omitempty"`
+	DoneAt        *time.Time `yaml:"done_at,omitempty"`
+	InterruptedAt *time.Time `yaml:"interrupted_at,omitempty"` // For timeout tracking: when C-c was sent
 
 	// Dependencies
 	Needs []string `yaml:"needs,omitempty"`

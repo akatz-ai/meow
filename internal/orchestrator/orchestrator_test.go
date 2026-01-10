@@ -95,6 +95,7 @@ type mockAgentManager struct {
 	running         map[string]bool
 	started         []string
 	stopped         []string
+	interrupted     []string
 	injectedPrompts []string
 }
 
@@ -132,6 +133,23 @@ func (m *mockAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.injectedPrompts = append(m.injectedPrompts, agentID+":"+prompt)
+	return nil
+}
+
+func (m *mockAgentManager) Interrupt(ctx context.Context, agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.interrupted = append(m.interrupted, agentID)
+	return nil
+}
+
+func (m *mockAgentManager) KillAll(ctx context.Context, wf *types.Workflow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for agentID := range m.running {
+		m.stopped = append(m.stopped, agentID)
+		m.running[agentID] = false
+	}
 	return nil
 }
 
@@ -822,6 +840,627 @@ func TestOrchestrator_ConcurrentStepCompletion(t *testing.T) {
 		for stepID, step := range finalWf.Steps {
 			t.Logf("  %s: status=%s", stepID, step.Status)
 		}
+	}
+}
+
+// TestOrchestrator_StepTimeout tests that agent steps are interrupted and failed after timeout.
+func TestOrchestrator_StepTimeout(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a running agent step that has a very short timeout
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Set started time in the past to simulate elapsed time
+	startedAt := time.Now().Add(-2 * time.Second) // Started 2 seconds ago
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent: &types.AgentConfig{
+			Agent:   "test-agent",
+			Prompt:  "Do work",
+			Timeout: "1s", // 1 second timeout (already exceeded)
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// First call - should send interrupt
+	ctx := context.Background()
+	orch.checkStepTimeouts(ctx, wf)
+
+	// Agent should have been interrupted
+	if len(agents.interrupted) != 1 || agents.interrupted[0] != "test-agent" {
+		t.Errorf("Expected agent to be interrupted, got %v", agents.interrupted)
+	}
+
+	// Step should still be running (grace period not elapsed)
+	if wf.Steps["agent-step"].Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want running (grace period not elapsed)", wf.Steps["agent-step"].Status)
+	}
+
+	// Step should have InterruptedAt set
+	if wf.Steps["agent-step"].InterruptedAt == nil {
+		t.Error("Step InterruptedAt should be set")
+	}
+
+	// Simulate grace period elapsed by setting InterruptedAt in the past
+	interruptedAt := time.Now().Add(-11 * time.Second) // 11 seconds ago
+	wf.Steps["agent-step"].InterruptedAt = &interruptedAt
+
+	// Second call - should fail the step
+	orch.checkStepTimeouts(ctx, wf)
+
+	// Step should now be failed
+	if wf.Steps["agent-step"].Status != types.StepStatusFailed {
+		t.Errorf("Step status = %v, want failed", wf.Steps["agent-step"].Status)
+	}
+
+	// Check error message
+	if wf.Steps["agent-step"].Error == nil {
+		t.Error("Step error should be set")
+	} else if wf.Steps["agent-step"].Error.Message == "" {
+		t.Error("Step error message should not be empty")
+	}
+}
+
+// TestOrchestrator_StepNoTimeoutIfCompleted tests that steps that complete before timeout are not affected.
+func TestOrchestrator_StepNoTimeoutIfCompleted(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a completed agent step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	startedAt := time.Now().Add(-2 * time.Second)
+	doneAt := time.Now().Add(-1 * time.Second)
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusDone,
+		StartedAt: &startedAt,
+		DoneAt:    &doneAt,
+		Agent: &types.AgentConfig{
+			Agent:   "test-agent",
+			Prompt:  "Do work",
+			Timeout: "1s",
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	orch.checkStepTimeouts(ctx, wf)
+
+	// Agent should NOT have been interrupted (step already done)
+	if len(agents.interrupted) != 0 {
+		t.Errorf("Expected no interrupts, got %v", agents.interrupted)
+	}
+
+	// Step should still be done
+	if wf.Steps["agent-step"].Status != types.StepStatusDone {
+		t.Errorf("Step status = %v, want done", wf.Steps["agent-step"].Status)
+	}
+}
+
+// TestOrchestrator_CleanupOnCompletion tests that cleanup runs when workflow completes.
+func TestOrchestrator_CleanupOnCompletion(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with cleanup script
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Cleanup = "echo cleanup executed"
+	wf.Steps["step-1"] = &types.Step{
+		ID:       "step-1",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell:    &types.ShellConfig{Command: "echo hello"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Errorf("Run() error = %v, want nil", err)
+	}
+
+	// Workflow should be done (cleanup was successful)
+	finalWf, _ := store.Get(ctx, wf.ID)
+	if finalWf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", finalWf.Status)
+	}
+}
+
+// TestOrchestrator_RunCleanup tests the RunCleanup method directly.
+func TestOrchestrator_RunCleanup(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with cleanup script
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Cleanup = "echo cleanup"
+	store.workflows[wf.ID] = wf
+
+	// Register some agents
+	agents.running["agent-1"] = true
+	agents.running["agent-2"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusDone)
+	if err != nil {
+		t.Fatalf("RunCleanup error = %v", err)
+	}
+
+	// Workflow should be in done state
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", wf.Status)
+	}
+
+	// DoneAt should be set
+	if wf.DoneAt == nil {
+		t.Error("Workflow DoneAt should be set")
+	}
+
+	// All agents should have been killed
+	for agentID, running := range agents.running {
+		if running {
+			t.Errorf("Agent %s should have been killed", agentID)
+		}
+	}
+}
+
+// TestOrchestrator_RunCleanup_FailedWorkflow tests cleanup for failed workflows.
+func TestOrchestrator_RunCleanup_FailedWorkflow(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Cleanup = "echo cleanup"
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusFailed)
+	if err != nil {
+		t.Fatalf("RunCleanup error = %v", err)
+	}
+
+	// Workflow should be in failed state (final status matches reason)
+	if wf.Status != types.WorkflowStatusFailed {
+		t.Errorf("Workflow status = %v, want failed", wf.Status)
+	}
+}
+
+// TestOrchestrator_RunCleanup_Stopped tests cleanup for stopped workflows.
+func TestOrchestrator_RunCleanup_Stopped(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Cleanup = "echo cleanup"
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusStopped)
+	if err != nil {
+		t.Fatalf("RunCleanup error = %v", err)
+	}
+
+	// Workflow should be in stopped state
+	if wf.Status != types.WorkflowStatusStopped {
+		t.Errorf("Workflow status = %v, want stopped", wf.Status)
+	}
+}
+
+// --- Crash Recovery Tests ---
+
+// TestOrchestrator_Recover_ResetOrchestratorSteps tests that running orchestrator steps are reset to pending.
+func TestOrchestrator_Recover_ResetOrchestratorSteps(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with running orchestrator steps
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+	wf.Steps["shell-step"] = &types.Step{
+		ID:        "shell-step",
+		Executor:  types.ExecutorShell,
+		Status:    types.StepStatusRunning,
+		StartedAt: &now,
+		Shell:     &types.ShellConfig{Command: "echo hello"},
+	}
+	wf.Steps["branch-step"] = &types.Step{
+		ID:        "branch-step",
+		Executor:  types.ExecutorBranch,
+		Status:    types.StepStatusCompleting, // Completing should also be reset
+		StartedAt: &now,
+		Branch:    &types.BranchConfig{Condition: "true"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Both steps should be reset to pending
+	if wf.Steps["shell-step"].Status != types.StepStatusPending {
+		t.Errorf("Shell step status = %v, want pending", wf.Steps["shell-step"].Status)
+	}
+	if wf.Steps["branch-step"].Status != types.StepStatusPending {
+		t.Errorf("Branch step status = %v, want pending", wf.Steps["branch-step"].Status)
+	}
+
+	// StartedAt should be cleared
+	if wf.Steps["shell-step"].StartedAt != nil {
+		t.Error("Shell step StartedAt should be cleared")
+	}
+}
+
+// TestOrchestrator_Recover_PartialExpansion tests cleanup of partial expansions.
+func TestOrchestrator_Recover_PartialExpansion(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with partial expansion
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+	// Expand step that was running when crash occurred
+	wf.Steps["expand-step"] = &types.Step{
+		ID:           "expand-step",
+		Executor:     types.ExecutorExpand,
+		Status:       types.StepStatusRunning,
+		StartedAt:    &now,
+		Expand:       &types.ExpandConfig{Template: "some-template"},
+		ExpandedInto: []string{"expand-step.child-1", "expand-step.child-2"},
+	}
+	// Partially expanded children
+	wf.Steps["expand-step.child-1"] = &types.Step{
+		ID:           "expand-step.child-1",
+		Executor:     types.ExecutorShell,
+		Status:       types.StepStatusPending,
+		ExpandedFrom: "expand-step",
+		Shell:        &types.ShellConfig{Command: "echo 1"},
+	}
+	wf.Steps["expand-step.child-2"] = &types.Step{
+		ID:           "expand-step.child-2",
+		Executor:     types.ExecutorShell,
+		Status:       types.StepStatusPending,
+		ExpandedFrom: "expand-step",
+		Shell:        &types.ShellConfig{Command: "echo 2"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Expand step should be reset to pending
+	if wf.Steps["expand-step"].Status != types.StepStatusPending {
+		t.Errorf("Expand step status = %v, want pending", wf.Steps["expand-step"].Status)
+	}
+
+	// ExpandedInto should be cleared
+	if len(wf.Steps["expand-step"].ExpandedInto) != 0 {
+		t.Errorf("Expand step ExpandedInto should be cleared, got %v", wf.Steps["expand-step"].ExpandedInto)
+	}
+
+	// Child steps should be deleted
+	if _, ok := wf.Steps["expand-step.child-1"]; ok {
+		t.Error("Child step 1 should be deleted")
+	}
+	if _, ok := wf.Steps["expand-step.child-2"]; ok {
+		t.Error("Child step 2 should be deleted")
+	}
+}
+
+// TestOrchestrator_Recover_AgentStepDeadAgent tests resetting agent steps when agent is dead.
+func TestOrchestrator_Recover_AgentStepDeadAgent(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with running agent step, but agent is dead
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &now,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent is NOT running (dead)
+	agents.running["test-agent"] = false
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Step should be reset to pending
+	if wf.Steps["agent-step"].Status != types.StepStatusPending {
+		t.Errorf("Agent step status = %v, want pending", wf.Steps["agent-step"].Status)
+	}
+}
+
+// TestOrchestrator_Recover_AgentStepAliveAgent tests keeping agent steps running when agent is alive.
+func TestOrchestrator_Recover_AgentStepAliveAgent(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with running agent step, agent is alive
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &now,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent IS running (alive)
+	agents.running["test-agent"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Step should remain running
+	if wf.Steps["agent-step"].Status != types.StepStatusRunning {
+		t.Errorf("Agent step status = %v, want running", wf.Steps["agent-step"].Status)
+	}
+
+	// StartedAt should NOT be cleared
+	if wf.Steps["agent-step"].StartedAt == nil {
+		t.Error("Agent step StartedAt should NOT be cleared")
+	}
+}
+
+// TestOrchestrator_Recover_AgentStepCompletingToRunning tests that completing agent steps revert to running.
+func TestOrchestrator_Recover_AgentStepCompletingToRunning(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with completing agent step, agent is alive
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusCompleting,
+		StartedAt: &now,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent IS running (alive)
+	agents.running["test-agent"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Step should be reverted to running (from completing)
+	if wf.Steps["agent-step"].Status != types.StepStatusRunning {
+		t.Errorf("Agent step status = %v, want running", wf.Steps["agent-step"].Status)
+	}
+}
+
+// TestOrchestrator_Recover_CleaningUpWorkflow tests resuming cleanup for workflows in cleaning_up state.
+func TestOrchestrator_Recover_CleaningUpWorkflow(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow that was in cleaning_up state
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusCleaningUp
+	wf.PriorStatus = types.WorkflowStatusDone
+	wf.Cleanup = "echo cleanup"
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Workflow should now be in final state (done)
+	finalWf, _ := store.Get(ctx, wf.ID)
+	if finalWf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", finalWf.Status)
+	}
+
+	// DoneAt should be set
+	if finalWf.DoneAt == nil {
+		t.Error("Workflow DoneAt should be set")
+	}
+}
+
+// TestOrchestrator_Recover_NoWorkflows tests recovery with no workflows.
+func TestOrchestrator_Recover_NoWorkflows(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.Recover(ctx)
+	if err != nil {
+		t.Fatalf("Recover error = %v", err)
+	}
+
+	// Should complete without error
+}
+
+// TestOrchestrator_RunCleanup_NoCleanupScript tests cleanup without a script.
+func TestOrchestrator_RunCleanup_NoCleanupScript(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	// No cleanup script
+	store.workflows[wf.ID] = wf
+
+	agents.running["agent-1"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusDone)
+	if err != nil {
+		t.Fatalf("RunCleanup error = %v", err)
+	}
+
+	// Workflow should be done
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", wf.Status)
+	}
+
+	// Agent should still have been killed (KillAll called regardless of script)
+	for agentID, running := range agents.running {
+		if running {
+			t.Errorf("Agent %s should have been killed", agentID)
+		}
+	}
+}
+
+// TestOrchestrator_StepNoTimeoutIfNoTimeoutConfigured tests that steps without timeout are not affected.
+func TestOrchestrator_StepNoTimeoutIfNoTimeoutConfigured(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a running agent step WITHOUT timeout
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	startedAt := time.Now().Add(-1 * time.Hour) // Running for an hour
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent: &types.AgentConfig{
+			Agent:  "test-agent",
+			Prompt: "Do work",
+			// No Timeout set
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	orch.checkStepTimeouts(ctx, wf)
+
+	// Agent should NOT have been interrupted (no timeout configured)
+	if len(agents.interrupted) != 0 {
+		t.Errorf("Expected no interrupts, got %v", agents.interrupted)
+	}
+
+	// Step should still be running
+	if wf.Steps["agent-step"].Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want running", wf.Steps["agent-step"].Status)
 	}
 }
 
