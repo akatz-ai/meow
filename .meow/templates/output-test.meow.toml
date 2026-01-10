@@ -3,22 +3,19 @@
 [main]
 name = "output-test"
 description = "Test task output validation"
-ephemeral = true
 
 [[main.steps]]
 id = "select-item"
-type = "task"
-title = "Select an item"
-assignee = "test-agent"
-instructions = """
+executor = "agent"
+description = "Select an item"
+agent = "test-agent"
+prompt = """
 Pick any item and provide its ID.
 
-Close with required outputs:
-  meow close <bead-id> --output item_id=<value> --output reason=<why>
+Signal completion with required outputs:
+  meow done --output item_id=<value> --output reason=<why>
 """
 
 [main.steps.outputs]
-required = [
-    { name = "item_id", type = "string", description = "The selected item ID" },
-    { name = "reason", type = "string", description = "Why you selected this item" }
-]
+item_id = { type = "string", required = true, description = "The selected item ID" }
+reason = { type = "string", required = true, description = "Why you selected this item" }

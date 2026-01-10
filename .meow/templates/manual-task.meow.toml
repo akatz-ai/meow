@@ -1,21 +1,20 @@
-# Simple manual task for testing meow close
+# Simple manual task for testing meow done
 
 [main]
 name = "manual-task"
-description = "Simple task to test meow close"
-ephemeral = true
+description = "Simple task to test meow done"
 
 [main.variables]
 message = { default = "hello world", description = "Message to display" }
 
 [[main.steps]]
 id = "do-task"
-type = "task"
-title = "Manual task: {{message}}"
-assignee = "test-agent"
-instructions = """
+executor = "agent"
+description = "Manual task: {{message}}"
+agent = "test-agent"
+prompt = """
 This is a test task with message: {{message}}
 
-When done, close with:
-  meow close <bead-id>
+When done, signal completion:
+  meow done
 """
