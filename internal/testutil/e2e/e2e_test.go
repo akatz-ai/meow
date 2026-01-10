@@ -638,6 +638,644 @@ command = "echo 'D'"
 }
 
 // ===========================================================================
+// Expand Executor Tests
+// ===========================================================================
+
+func TestE2E_SimpleExpand(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template with a sub-workflow that gets expanded
+	template := `
+[main]
+name = "simple-expand"
+
+[[main.steps]]
+id = "before"
+executor = "shell"
+command = "echo 'before expand'"
+
+[[main.steps]]
+id = "do-work"
+executor = "expand"
+template = ".sub-workflow"
+needs = ["before"]
+
+[[main.steps]]
+id = "after"
+executor = "shell"
+command = "echo 'after expand'"
+needs = ["do-work"]
+
+# Sub-workflow to be expanded
+[sub-workflow]
+name = "sub-workflow"
+internal = true
+
+[[sub-workflow.steps]]
+id = "step-a"
+executor = "shell"
+command = "echo 'expanded step A'"
+
+[[sub-workflow.steps]]
+id = "step-b"
+executor = "shell"
+command = "echo 'expanded step B'"
+needs = ["step-a"]
+`
+	if err := h.WriteTemplate("simple-expand.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "simple-expand.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_ExpandWithVariables(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template that passes variables to expanded sub-workflow
+	template := `
+[main]
+name = "expand-with-vars"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = "echo 'my-value'"
+[main.steps.shell_outputs]
+value = { source = "stdout" }
+
+[[main.steps]]
+id = "expand-it"
+executor = "expand"
+template = ".parameterized"
+needs = ["setup"]
+[main.steps.variables]
+param = "{{setup.outputs.value}}"
+name = "test-run"
+
+# Parameterized sub-workflow
+[parameterized]
+name = "parameterized"
+internal = true
+
+[parameterized.variables]
+param = { required = true }
+name = { required = true }
+
+[[parameterized.steps]]
+id = "use-param"
+executor = "shell"
+command = "echo 'param={{param}} name={{name}}'"
+`
+	if err := h.WriteTemplate("expand-vars.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "expand-vars.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_NestedExpand(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template with nested expansions: main -> level1 -> level2
+	template := `
+[main]
+name = "nested-expand"
+
+[[main.steps]]
+id = "start"
+executor = "shell"
+command = "echo 'starting nested expand'"
+
+[[main.steps]]
+id = "level1"
+executor = "expand"
+template = ".first-level"
+needs = ["start"]
+
+[[main.steps]]
+id = "finish"
+executor = "shell"
+command = "echo 'finished nested expand'"
+needs = ["level1"]
+
+# First level expansion
+[first-level]
+name = "first-level"
+internal = true
+
+[[first-level.steps]]
+id = "before-nested"
+executor = "shell"
+command = "echo 'first level'"
+
+[[first-level.steps]]
+id = "level2"
+executor = "expand"
+template = ".second-level"
+needs = ["before-nested"]
+
+# Second level expansion
+[second-level]
+name = "second-level"
+internal = true
+
+[[second-level.steps]]
+id = "deepest"
+executor = "shell"
+command = "echo 'second level - deepest'"
+`
+	if err := h.WriteTemplate("nested-expand.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "nested-expand.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+// ===========================================================================
+// Branch Executor Tests
+// ===========================================================================
+
+func TestE2E_BranchTrueCondition(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch where condition is true (exit 0)
+	template := `
+[main]
+name = "branch-true"
+
+[[main.steps]]
+id = "check"
+executor = "branch"
+condition = "true"  # Always succeeds
+
+[main.steps.on_true]
+template = ".success-path"
+
+[main.steps.on_false]
+template = ".failure-path"
+
+[[main.steps]]
+id = "after"
+executor = "shell"
+command = "echo 'after branch'"
+needs = ["check"]
+
+# Success path
+[success-path]
+name = "success-path"
+internal = true
+
+[[success-path.steps]]
+id = "success"
+executor = "shell"
+command = "echo 'took success path'"
+
+# Failure path
+[failure-path]
+name = "failure-path"
+internal = true
+
+[[failure-path.steps]]
+id = "failure"
+executor = "shell"
+command = "echo 'took failure path'"
+`
+	if err := h.WriteTemplate("branch-true.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-true.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_BranchFalseCondition(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch where condition is false (exit non-zero)
+	template := `
+[main]
+name = "branch-false"
+
+[[main.steps]]
+id = "check"
+executor = "branch"
+condition = "false"  # Always fails
+
+[main.steps.on_true]
+template = ".success-path"
+
+[main.steps.on_false]
+template = ".failure-path"
+
+[[main.steps]]
+id = "after"
+executor = "shell"
+command = "echo 'after branch'"
+needs = ["check"]
+
+# Success path
+[success-path]
+name = "success-path"
+internal = true
+
+[[success-path.steps]]
+id = "success"
+executor = "shell"
+command = "echo 'took success path'"
+
+# Failure path
+[failure-path]
+name = "failure-path"
+internal = true
+
+[[failure-path.steps]]
+id = "failure"
+executor = "shell"
+command = "echo 'took failure path'"
+`
+	if err := h.WriteTemplate("branch-false.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-false.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_BranchWithInlineSteps(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch using inline steps instead of template reference
+	template := `
+[main]
+name = "branch-inline"
+
+[[main.steps]]
+id = "check"
+executor = "branch"
+condition = "test 1 -eq 1"  # True condition
+
+[main.steps.on_true]
+inline = [
+  { id = "inline-1", executor = "shell", command = "echo 'inline step 1'" },
+  { id = "inline-2", executor = "shell", command = "echo 'inline step 2'", needs = ["inline-1"] }
+]
+
+[main.steps.on_false]
+inline = []
+
+[[main.steps]]
+id = "after"
+executor = "shell"
+command = "echo 'after inline branch'"
+needs = ["check"]
+`
+	if err := h.WriteTemplate("branch-inline.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-inline.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_BranchEmptyOnTrue(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch with empty on_true (just continue without expanding anything)
+	template := `
+[main]
+name = "branch-empty"
+
+[[main.steps]]
+id = "check"
+executor = "branch"
+condition = "true"
+
+[main.steps.on_true]
+inline = []  # Empty - just continue
+
+[main.steps.on_false]
+template = ".error-handler"
+
+[[main.steps]]
+id = "continue"
+executor = "shell"
+command = "echo 'continued after empty branch'"
+needs = ["check"]
+
+[error-handler]
+name = "error-handler"
+internal = true
+
+[[error-handler.steps]]
+id = "handle"
+executor = "shell"
+command = "echo 'handling error'"
+`
+	if err := h.WriteTemplate("branch-empty.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-empty.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_BranchWithShellCondition(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch using a real shell condition that checks something
+	template := `
+[main]
+name = "branch-shell-condition"
+
+[[main.steps]]
+id = "create-file"
+executor = "shell"
+command = "touch /tmp/meow-test-file-$$"
+[main.steps.shell_outputs]
+filepath = { source = "stdout" }
+
+[[main.steps]]
+id = "check-exists"
+executor = "branch"
+condition = "test -d /tmp"  # Check if /tmp exists (always true)
+needs = ["create-file"]
+
+[main.steps.on_true]
+inline = [
+  { id = "exists", executor = "shell", command = "echo 'directory exists'" }
+]
+
+[main.steps.on_false]
+inline = [
+  { id = "missing", executor = "shell", command = "echo 'directory missing'" }
+]
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'check complete'"
+needs = ["check-exists"]
+`
+	if err := h.WriteTemplate("branch-shell.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-shell.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_BranchWithVariableCondition(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Branch condition that uses output from previous step
+	template := `
+[main]
+name = "branch-var-condition"
+
+[[main.steps]]
+id = "get-value"
+executor = "shell"
+command = "echo 'yes'"
+[main.steps.shell_outputs]
+answer = { source = "stdout" }
+
+[[main.steps]]
+id = "check-value"
+executor = "branch"
+condition = "test '{{get-value.outputs.answer}}' = 'yes'"
+needs = ["get-value"]
+
+[main.steps.on_true]
+inline = [
+  { id = "confirmed", executor = "shell", command = "echo 'answer was yes'" }
+]
+
+[main.steps.on_false]
+inline = [
+  { id = "denied", executor = "shell", command = "echo 'answer was not yes'" }
+]
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'branch complete'"
+needs = ["check-value"]
+`
+	if err := h.WriteTemplate("branch-var.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "branch-var.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ConditionalRetryLoop(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Simulates a retry pattern: try something, branch on result
+	// This uses a file counter to track iterations
+	template := `
+[main]
+name = "conditional-retry"
+
+[[main.steps]]
+id = "init-counter"
+executor = "shell"
+command = "echo 0 > /tmp/meow-counter-$$ && echo /tmp/meow-counter-$$"
+[main.steps.shell_outputs]
+counter_file = { source = "stdout" }
+
+[[main.steps]]
+id = "attempt"
+executor = "expand"
+template = ".try-once"
+needs = ["init-counter"]
+[main.steps.variables]
+counter_file = "{{init-counter.outputs.counter_file}}"
+
+# Single attempt workflow
+[try-once]
+name = "try-once"
+internal = true
+
+[try-once.variables]
+counter_file = { required = true }
+
+[[try-once.steps]]
+id = "increment"
+executor = "shell"
+command = "count=$(cat {{counter_file}}); echo $((count + 1)) > {{counter_file}}; cat {{counter_file}}"
+[try-once.steps.shell_outputs]
+count = { source = "stdout" }
+
+[[try-once.steps]]
+id = "check-done"
+executor = "branch"
+condition = "test $(cat {{counter_file}}) -ge 1"
+needs = ["increment"]
+
+[try-once.steps.on_true]
+inline = [
+  { id = "success", executor = "shell", command = "echo 'reached target count'" }
+]
+
+[try-once.steps.on_false]
+inline = [
+  { id = "retry", executor = "shell", command = "echo 'would retry here'" }
+]
+`
+	if err := h.WriteTemplate("retry-loop.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "retry-loop.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ExpandAndBranchCombined(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Complex workflow combining expand and branch
+	template := `
+[main]
+name = "expand-branch-combined"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = "echo 'production'"
+[main.steps.shell_outputs]
+env = { source = "stdout" }
+
+[[main.steps]]
+id = "check-env"
+executor = "branch"
+condition = "test '{{setup.outputs.env}}' = 'production'"
+needs = ["setup"]
+
+[main.steps.on_true]
+template = ".prod-deploy"
+
+[main.steps.on_false]
+template = ".dev-deploy"
+
+[[main.steps]]
+id = "finalize"
+executor = "shell"
+command = "echo 'deployment complete'"
+needs = ["check-env"]
+
+# Production deployment
+[prod-deploy]
+name = "prod-deploy"
+internal = true
+
+[[prod-deploy.steps]]
+id = "backup"
+executor = "shell"
+command = "echo 'backing up production'"
+
+[[prod-deploy.steps]]
+id = "deploy"
+executor = "shell"
+command = "echo 'deploying to production'"
+needs = ["backup"]
+
+[[prod-deploy.steps]]
+id = "verify"
+executor = "shell"
+command = "echo 'verifying production'"
+needs = ["deploy"]
+
+# Dev deployment (simpler)
+[dev-deploy]
+name = "dev-deploy"
+internal = true
+
+[[dev-deploy.steps]]
+id = "deploy"
+executor = "shell"
+command = "echo 'deploying to dev'"
+`
+	if err := h.WriteTemplate("expand-branch.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "expand-branch.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+// ===========================================================================
 // Harness Utility Tests
 // ===========================================================================
 

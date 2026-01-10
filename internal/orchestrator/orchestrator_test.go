@@ -383,15 +383,9 @@ func TestOrchestrator_Dispatch_SixExecutors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			err := orch.dispatch(context.Background(), wf, tc.step)
-			// Branch executor is not implemented yet, but all others should work
-			if tc.executor == types.ExecutorBranch {
-				if err == nil {
-					t.Error("Expected branch executor to return not implemented error")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("dispatch(%s) error = %v", tc.executor, err)
-				}
+			// All executors should work now
+			if err != nil {
+				t.Errorf("dispatch(%s) error = %v", tc.executor, err)
 			}
 		})
 	}

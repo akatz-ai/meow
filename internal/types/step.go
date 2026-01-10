@@ -133,8 +133,9 @@ type BranchTarget struct {
 type InlineStep struct {
 	ID       string       `yaml:"id" toml:"id"`
 	Executor ExecutorType `yaml:"executor" toml:"executor"`
-	Prompt   string       `yaml:"prompt,omitempty" toml:"prompt,omitempty"`
-	Agent    string       `yaml:"agent,omitempty" toml:"agent,omitempty"`
+	Command  string       `yaml:"command,omitempty" toml:"command,omitempty"` // For shell executor
+	Prompt   string       `yaml:"prompt,omitempty" toml:"prompt,omitempty"`   // For agent executor
+	Agent    string       `yaml:"agent,omitempty" toml:"agent,omitempty"`     // For agent executor
 	Needs    []string     `yaml:"needs,omitempty" toml:"needs,omitempty"`
 }
 

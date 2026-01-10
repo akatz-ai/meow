@@ -801,9 +801,171 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 		return fmt.Errorf("starting step: %w", err)
 	}
 
-	// Branch executor evaluates condition and expands appropriate target
-	// This is a stub - will be implemented in pivot-406
-	return fmt.Errorf("branch executor not implemented: %w", ErrNotImplemented)
+	cfg := step.Branch
+
+	// Resolve variable references in the condition
+	condition := o.resolveOutputRefs(wf, cfg.Condition)
+
+	// Execute condition
+	condExec := &SimpleConditionExecutor{}
+	exitCode, _, _, execErr := condExec.Execute(ctx, condition)
+
+	// Determine which branch to take
+	var target *types.BranchTarget
+	var outcome BranchOutcome
+
+	if execErr != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			outcome = BranchOutcomeTimeout
+			target = cfg.OnTimeout
+			if target == nil {
+				target = cfg.OnFalse // fallback per spec
+			}
+		} else {
+			outcome = BranchOutcomeFalse
+			target = cfg.OnFalse
+		}
+	} else if exitCode == 0 {
+		outcome = BranchOutcomeTrue
+		target = cfg.OnTrue
+	} else {
+		outcome = BranchOutcomeFalse
+		target = cfg.OnFalse
+	}
+
+	o.logger.Info("branch condition evaluated",
+		"step", step.ID,
+		"outcome", outcome,
+		"exitCode", exitCode,
+		"hasTarget", target != nil)
+
+	// Expand the target if present
+	if target != nil {
+		if err := o.expandBranchTarget(ctx, wf, step, target); err != nil {
+			return fmt.Errorf("expanding branch target: %w", err)
+		}
+	}
+
+	// Mark step as done
+	if err := step.Complete(map[string]any{"outcome": string(outcome)}); err != nil {
+		return fmt.Errorf("completing step: %w", err)
+	}
+
+	return nil
+}
+
+// expandBranchTarget expands a branch target (template or inline steps).
+func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Workflow, step *types.Step, target *types.BranchTarget) error {
+	if target.Template != "" {
+		// Create a temporary expand step to reuse the expander
+		expandStep := &types.Step{
+			ID:       step.ID,
+			Executor: types.ExecutorExpand,
+			Expand: &types.ExpandConfig{
+				Template:  target.Template,
+				Variables: target.Variables,
+			},
+		}
+
+		if o.expander == nil {
+			return fmt.Errorf("expander not configured")
+		}
+
+		if err := o.expander.Expand(ctx, wf, expandStep); err != nil {
+			return fmt.Errorf("expanding template %s: %w", target.Template, err)
+		}
+
+		// Copy expanded info to original step
+		step.ExpandedInto = expandStep.ExpandedInto
+		return nil
+	}
+
+	if len(target.Inline) > 0 {
+		// Expand inline steps
+		childIDs := make([]string, 0, len(target.Inline))
+		inlineStepIDs := make(map[string]bool)
+		for _, is := range target.Inline {
+			inlineStepIDs[is.ID] = true
+		}
+
+		for _, is := range target.Inline {
+			newID := step.ID + "." + is.ID
+			childIDs = append(childIDs, newID)
+
+			newStep := &types.Step{
+				ID:           newID,
+				Executor:     is.Executor,
+				Status:       types.StepStatusPending,
+				ExpandedFrom: step.ID,
+			}
+
+			// Set executor-specific config
+			switch is.Executor {
+			case types.ExecutorShell:
+				newStep.Shell = &types.ShellConfig{
+					Command: is.Command,
+				}
+			case types.ExecutorAgent:
+				newStep.Agent = &types.AgentConfig{
+					Agent:  is.Agent,
+					Prompt: is.Prompt,
+				}
+			}
+
+			// Prefix dependencies that are internal to this expansion
+			newStep.Needs = make([]string, 0, len(is.Needs))
+			for _, need := range is.Needs {
+				if inlineStepIDs[need] {
+					newStep.Needs = append(newStep.Needs, step.ID+"."+need)
+				} else {
+					newStep.Needs = append(newStep.Needs, need)
+				}
+			}
+
+			// Add to workflow
+			if wf.Steps == nil {
+				wf.Steps = make(map[string]*types.Step)
+			}
+			wf.Steps[newID] = newStep
+		}
+
+		step.ExpandedInto = childIDs
+	}
+
+	return nil
+}
+
+// resolveOutputRefs resolves {{step.outputs.field}} references in a string.
+func (o *Orchestrator) resolveOutputRefs(wf *types.Workflow, s string) string {
+	return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
+		parts := stepOutputRefPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		stepID := parts[1]
+		fieldName := parts[2]
+
+		depStep, ok := wf.Steps[stepID]
+		if !ok {
+			return match
+		}
+		if depStep.Outputs == nil {
+			return match
+		}
+		val, ok := depStep.Outputs[fieldName]
+		if !ok {
+			return match
+		}
+
+		switch v := val.(type) {
+		case string:
+			return v
+		case fmt.Stringer:
+			return v.String()
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	})
 }
 
 // handleAgent injects a prompt into an agent.
