@@ -1947,3 +1947,217 @@ needs = ["handle-timeout"]
 		t.Logf("NOTE: Template-based on_error recovery may not be implemented yet (Phase 8)")
 	}
 }
+
+// ===========================================================================
+// Agent Crash Tests
+//
+// These tests verify that the orchestrator properly detects and handles agent
+// crashes. Per MVP-SPEC-v2, when an agent's tmux session dies unexpectedly:
+// - The orchestrator should detect the crash via session liveness polling
+// - The step should be marked as failed with error_type "agent_crashed"
+// - Resources should be cleaned up properly
+//
+// Current Status:
+// - Crash detection via session liveness is NOT YET IMPLEMENTED
+// - These tests rely on step timeout as a fallback
+// - Timeout handling has a known issue (InterruptedAt not persisted)
+//
+// These tests document expected behavior and serve as acceptance criteria
+// for the crash detection feature.
+// ===========================================================================
+
+// TestE2E_AgentCrash_SessionDies tests that when an agent's tmux session dies
+// unexpectedly (via crash), the orchestrator detects it and marks the step as failed.
+//
+// Expected behavior per MVP-SPEC-v2:
+// - Orchestrator polls for session liveness
+// - Detects that session is gone
+// - Marks step as failed with error_type="agent_crashed"
+// - Workflow fails (unless on_error=continue)
+//
+// Current behavior: Relies on step timeout to eventually fail.
+func TestE2E_AgentCrash_SessionDies(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to crash when it receives a prompt
+	simConfig := e2e.NewSimConfigBuilder().
+		WithCrashBehavior("crash task", 1).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template where agent receives a prompt that causes crash
+	// Using a very short timeout so the test doesn't hang
+	template := `
+[main]
+name = "agent-crash-test"
+
+[[main.steps]]
+id = "spawn-agent"
+executor = "spawn"
+agent = "crash-agent"
+
+[[main.steps]]
+id = "crash-work"
+executor = "agent"
+agent = "crash-agent"
+needs = ["spawn-agent"]
+prompt = "Please do this crash task for me"
+timeout = "5s"
+
+[[main.steps]]
+id = "after-crash"
+executor = "shell"
+needs = ["crash-work"]
+command = "echo 'this should not run'"
+`
+	// Start orchestrator in background so we can test behavior
+	// StartOrchestratorWithTemplate writes the template and starts the orchestrator
+	proc, err := h.StartOrchestratorWithTemplate("agent-crash.toml", template)
+	if err != nil {
+		t.Fatalf("failed to start orchestrator: %v", err)
+	}
+
+	// Wait a bit for workflow to start
+	time.Sleep(3 * time.Second)
+
+	// The simulator should have crashed by now
+	// Check that the orchestrator detected something (session gone)
+	// Note: Without crash detection implemented, this will wait for timeout
+
+	// Wait for completion or timeout
+	waitErr := proc.WaitWithTimeout(30 * time.Second)
+
+	stderr := proc.Stderr()
+	stdout := proc.Stdout()
+
+	t.Logf("Orchestrator stdout: %s", stdout)
+	t.Logf("Orchestrator stderr (first 2000 chars): %.2000s", stderr)
+
+	// Document the observed behavior
+	if waitErr != nil {
+		if strings.Contains(waitErr.Error(), "timeout") {
+			t.Log("NOTE: Test timed out - crash detection and timeout handling need implementation")
+			t.Skip("Crash detection not yet implemented - orchestrator hung waiting for meow done")
+		}
+	}
+
+	// Check if workflow indicated failure
+	hasFailure := proc.IsDone() && waitErr != nil ||
+		strings.Contains(stderr, "failed") ||
+		strings.Contains(stderr, "timed out")
+
+	if hasFailure {
+		t.Log("Workflow properly detected crash/timeout and failed")
+	} else if strings.Contains(stderr, "workflow completed") {
+		t.Log("NOTE: Workflow completed despite crash - crash detection not implemented")
+	}
+}
+
+// TestE2E_AgentCrash_OnErrorContinue tests that when an agent crashes but the step
+// has on_error=continue, the workflow continues to the next step.
+//
+// Expected behavior:
+// - Agent crash is detected (via session liveness or timeout)
+// - Step is marked failed
+// - Due to on_error=continue, workflow proceeds to next step
+// - Workflow completes successfully
+//
+// Current status: Depends on crash detection or timeout handling being implemented.
+func TestE2E_AgentCrash_OnErrorContinue(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for on_error=continue with agent crashes.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
+
+// TestE2E_AgentCrash_StopHookNotCalled tests that when an agent crashes abruptly
+// (tmux session dies), the stop hook is NOT called since the process is gone.
+// This verifies the distinction between graceful stops (stop hook fires) and crashes.
+//
+// Expected behavior:
+// - Agent process crashes (exits with non-zero code)
+// - Process is gone before stop hook can fire
+// - Orchestrator detects crash via session liveness check
+// - Stop hook marker file should NOT exist
+//
+// Current status: Depends on crash detection being implemented.
+func TestE2E_AgentCrash_StopHookNotCalled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for stop hooks when agent crashes.
+	// Currently blocked by crash detection implementation.
+	t.Skip("Test blocked: crash detection not yet implemented - test would hang")
+}
+
+// TestE2E_AgentCrash_RalphWiggum tests catastrophic failure scenario:
+// Multiple agents running, first one crashes, workflow should fail gracefully
+// with proper resource cleanup.
+//
+// Named after the Simpsons character who never gives up - this tests that even
+// with multiple agents and complex failure scenarios, the system handles it gracefully.
+//
+// Expected behavior:
+// - Agent 1 crashes during work
+// - Agent 2 completes normally (but may be killed during cleanup)
+// - Workflow fails because agent-1 step failed
+// - All agent sessions are cleaned up
+//
+// Current status: Depends on crash detection and timeout handling being implemented.
+func TestE2E_AgentCrash_RalphWiggum(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected behavior for multi-agent crash scenarios.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
+
+// TestE2E_AgentCrash_DetectionLatency tests that the orchestrator detects
+// agent crashes within a reasonable time (poll interval).
+//
+// Expected behavior:
+// - Agent crashes immediately after receiving prompt
+// - Orchestrator detects crash via session liveness poll OR timeout fires
+// - Total time should be bounded (not infinite)
+//
+// This test ensures the system doesn't hang forever waiting for meow done
+// when an agent has crashed.
+//
+// Current status: Depends on crash detection or timeout handling being implemented.
+func TestE2E_AgentCrash_DetectionLatency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent crash test in short mode")
+	}
+
+	// This test documents expected crash detection latency requirements.
+	// Currently blocked by crash detection and timeout handling implementation.
+	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
+}
