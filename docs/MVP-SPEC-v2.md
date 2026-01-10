@@ -1,36 +1,71 @@
 # MEOW Stack MVP Specification v2
 
-**MEOW** (Meow Executors Orchestrate Work) is a durable, recursive, composable coordination language for AI agent orchestration.
+**MEOW** (Meow Executors Orchestrate Work) is terminal agent orchestration without the framework tax.
 
-> **Core Insight**: MEOW is not a task tracker. It's a programming language for agent coordination. Task tracking is the user's concern—MEOW orchestrates agents through workflows that users program to interact with whatever systems they choose.
+> **The Makefile of agent orchestration.** No Python. No cloud. No magic. Just tmux, YAML, and a binary. Works with Claude Code, Aider, or any terminal agent. Your workflows are just version-controlled TOML files.
+
+---
+
+## Positioning
+
+The AI agent orchestration space is crowded: LangChain, LangGraph, CrewAI, Claude-Flow, AutoGen, cloud-managed agents. These frameworks offer sophisticated features—memory systems, vector databases, MCP tools, visual builders, managed infrastructure.
+
+**MEOW takes the opposite approach.**
+
+| Framework Approach | MEOW Approach |
+|--------------------|---------------|
+| Python SDK with dependencies | Single Go binary |
+| Cloud services and databases | YAML files on disk |
+| Agents as API endpoints | Agents as terminal processes |
+| Framework-specific agent code | Any terminal agent, unchanged |
+| Visual builders, dashboards | `git diff`-able TOML templates |
+| Sophisticated memory/RAG | Bring your own (or don't) |
+
+**MEOW is for developers who:**
+- Use Claude Code or Aider in the terminal
+- Want to orchestrate multi-agent workflows
+- Don't want to learn a framework ecosystem
+- Value understanding exactly what their system does
+- Want workflows version-controlled alongside code
+
+**MEOW is NOT for you if you need:**
+- Turnkey agent capabilities and memory systems
+- Production observability dashboards
+- Managed cloud deployment and scaling
+- Visual workflow builders
+
+This is a deliberate tradeoff. MEOW coordinates; everything else is your choice.
 
 ---
 
 ## Table of Contents
 
-1. [Design Philosophy](#design-philosophy)
-2. [The Single Primitive: Step](#the-single-primitive-step)
-3. [Executors](#executors)
-4. [Data Flow Between Steps](#data-flow-between-steps)
-5. [Template System](#template-system)
-6. [Agent Adapters](#agent-adapters)
-7. [Events](#events)
-8. [Orchestrator Architecture](#orchestrator-architecture)
-9. [Agent Interaction Model](#agent-interaction-model)
-10. [IPC and Communication](#ipc-and-communication)
-11. [Persistence and Crash Recovery](#persistence-and-crash-recovery)
-12. [Workflow Cleanup](#workflow-cleanup)
-13. [Resource Limits](#resource-limits)
-14. [CLI Commands](#cli-commands)
-15. [Multi-Agent Coordination](#multi-agent-coordination)
-16. [Complete Examples](#complete-examples)
-17. [Error Handling](#error-handling)
-18. [Best Practices](#best-practices)
-19. [Implementation Phases](#implementation-phases)
+1. [Positioning](#positioning)
+2. [Design Philosophy](#design-philosophy)
+3. [The Single Primitive: Step](#the-single-primitive-step)
+4. [Executors](#executors)
+5. [Data Flow Between Steps](#data-flow-between-steps)
+6. [Template System](#template-system)
+7. [Agent Adapters](#agent-adapters)
+8. [Events](#events)
+9. [Orchestrator Architecture](#orchestrator-architecture)
+10. [Agent Interaction Model](#agent-interaction-model)
+11. [IPC and Communication](#ipc-and-communication)
+12. [Persistence and Best-Effort Resume](#persistence-and-best-effort-resume)
+13. [Workflow Cleanup](#workflow-cleanup)
+14. [Resource Limits](#resource-limits)
+15. [CLI Commands](#cli-commands)
+16. [Multi-Agent Coordination](#multi-agent-coordination)
+17. [Complete Examples](#complete-examples)
+18. [Error Handling](#error-handling)
+19. [Best Practices](#best-practices)
+20. [Implementation Phases](#implementation-phases)
 
 ---
 
 ## Design Philosophy
+
+> **Core Insight**: MEOW is not a task tracker. It's a programming language for agent coordination. Task tracking is the user's concern—MEOW orchestrates agents through workflows that users program to interact with whatever systems they choose.
 
 ### MEOW is a Coordination Language
 
@@ -121,17 +156,22 @@ Agents should only see:
 - Expected outputs (if any)
 - The command to signal completion
 
-#### Durable Execution
+#### Persistent State, Best-Effort Resume
 
-> **All workflow state survives crashes, restarts, and session boundaries.**
+> **Workflow orchestration state is persisted. On crash, MEOW can resume orchestration—but interrupted work may need manual recovery.**
 
 MEOW persists workflow state to simple YAML files. On crash:
 1. Reload workflow state
 2. Check which agents are still alive
-3. Reset orphaned running steps to pending
-4. Resume orchestration
+3. Attempt to resume from where orchestration left off
 
-No SQLite. No lock files. Just files.
+**What MEOW can recover:** The step dependency graph, which steps are done, captured outputs, agent session existence.
+
+**What MEOW cannot recover:** The effects of interrupted work. If an agent was mid-task when you crashed, MEOW doesn't know if it wrote half a file, made commits, or corrupted something. Re-running a step assumes the work is idempotent or safe to retry—that's on the user to design.
+
+MEOW is not a durable execution engine like Temporal or Step Functions. Those systems control the execution environment and can replay from event history. MEOW spawns agents that do arbitrary things in the real world. There's no sandbox, no event replay. Think of it like Airflow: it tracks task state, but if a task was mid-execution, recovery means "re-run and hope it's idempotent."
+
+No SQLite. No lock files. Just YAML files and good logging.
 
 #### Composition Over Complexity
 
@@ -2098,7 +2138,7 @@ The same protocol could run over HTTP/gRPC for distributed orchestration. The so
 
 ---
 
-## Persistence and Crash Recovery
+## Persistence and Best-Effort Resume
 
 ### Directory Structure
 
@@ -2244,7 +2284,11 @@ meow run code-review.meow.toml --var pr=456
 - Tmux sessions are already per-workflow (`meow-{workflow_id}-{agent}`)
 - Per-workflow locks complete the isolation model
 
-### Crash Recovery
+### Crash Recovery (Best-Effort Resume)
+
+MEOW provides best-effort resume after crashes. This is **not** guaranteed recovery—it's a convenience that works well when steps are designed to be re-runnable.
+
+#### What Recovery Does
 
 On orchestrator startup (fresh or resume):
 
@@ -2278,19 +2322,49 @@ On orchestrator startup (fresh or resume):
 6. Resume orchestrator loop
 ```
 
-**Partial Expansion Recovery:**
+#### What Recovery Cannot Do
+
+| Scenario | What Happens | User Must Handle |
+|----------|--------------|------------------|
+| Shell step was mid-execution | Re-runs the command | Make commands idempotent |
+| Agent wrote half a file | File may be corrupted | Agent must handle partial state |
+| Agent made commits | Commits exist in git | May have duplicate/partial commits |
+| Agent called external APIs | Effects already happened | Design for at-least-once delivery |
+| Worktree was partially created | May fail or succeed | Use `|| true` guards |
+
+**Key insight:** MEOW tracks *orchestration* state, not *world* state. The step graph is recoverable; the side effects of interrupted work are not.
+
+#### Partial Expansion Recovery
+
 If an `expand` step was `running` when the orchestrator crashed, the workflow file may contain partially-inserted child steps. On recovery:
 1. Find all steps with `expanded_from: <expand-step-id>`
 2. Delete these partial child steps from the workflow
 3. Reset the expand step to `pending`
 4. The expand will run cleanly on resume
 
-**Agent Re-injection:**
+#### Agent Re-injection
+
 For agent steps that remain `running` after recovery (agent still alive), the orchestrator doesn't immediately re-inject. Instead, it waits for:
 - The agent to call `meow done` (normal completion)
 - The stop hook to fire (which calls `meow prime` and gets the current prompt)
 
 This avoids injecting duplicate prompts into an agent that may still be working.
+
+#### When Recovery Works Well
+
+Recovery is most reliable when:
+- Shell commands are idempotent (`git worktree add ... || true`)
+- Agents can detect and handle partial prior work
+- External effects are designed for at-least-once delivery
+- Steps have clear success criteria that can be re-evaluated
+
+#### When Recovery May Fail
+
+Recovery may cause issues when:
+- Shell commands have side effects that can't be repeated
+- Agents don't handle being re-prompted gracefully
+- External systems don't tolerate duplicate requests
+- Prior partial work left corrupted state
 
 ---
 
@@ -3311,6 +3385,12 @@ Until then, retry logic can be implemented via recovery templates as shown above
 
 ## Best Practices
 
+### Design for Re-Execution
+
+Since MEOW provides best-effort resume (not guaranteed durability), steps should be designed to handle being re-run after a crash. This applies to both shell commands and agent prompts.
+
+**Why this matters:** If the orchestrator crashes while a step is running, that step will be reset to `pending` and re-executed on resume. Your workflow should handle this gracefully.
+
 ### Idempotent Shell Commands
 
 Shell commands should be **idempotent**—safe to run multiple times. This is critical for crash recovery, where orchestrator steps may be re-executed.
@@ -3345,6 +3425,37 @@ This works but swallows all errors. The explicit check is safer.
 | Create branch | `git branch branch_name 2>/dev/null \|\| true` |
 | Write file | Just write (overwrites) |
 | Remove directory | `rm -rf path` (already idempotent) |
+
+### Re-Runnable Agent Prompts
+
+Agent prompts may be re-injected after a crash. Design prompts so agents can handle being asked to do something they may have already partially completed.
+
+**Fragile: Assumes fresh start**
+```
+Create the user authentication module from scratch.
+```
+
+**Robust: Handles partial prior work**
+```
+Implement user authentication. Check if auth files already exist—if so,
+review and complete them rather than starting over. If starting fresh,
+create the module from scratch.
+```
+
+**Even better: Define success criteria**
+```
+Ensure user authentication is fully implemented and tested.
+
+Success criteria:
+- src/auth/login.ts exists with working login function
+- src/auth/logout.ts exists with working logout function
+- Tests in src/auth/*.test.ts pass
+
+If any of these are missing or broken, fix them. If all criteria are met,
+you're done.
+```
+
+The more clearly you define "what done looks like," the better agents can handle being re-prompted mid-task.
 
 ### Worktree Management
 
@@ -3471,7 +3582,7 @@ This pattern allows custom "stuck" definitions and intervention strategies witho
 
 ### Phase 3: Robustness
 
-- [ ] Crash recovery (resume workflows)
+- [ ] Best-effort resume (resume workflows after crash)
 - [ ] Output validation (all types)
 - [ ] Error handling (`on_error` modes: fail, continue)
 - [ ] `completing` state handling with guards
@@ -3619,10 +3730,11 @@ Worktrees are created via `shell` steps because:
 
 ### Why YAML for State?
 
-- Human-readable for debugging
+- Human-readable for debugging and forensics
 - No database dependency
-- Simple crash recovery
-- Atomic file writes
+- Easy to inspect when things go wrong
+- Atomic file writes prevent corruption
+- Enables best-effort resume (not full durability—see [Crash Recovery](#crash-recovery-best-effort-resume))
 
 ### Why Templates in TOML?
 
