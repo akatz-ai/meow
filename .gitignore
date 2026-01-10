@@ -1,6 +1,12 @@
 # bv (beads viewer) local config and caches
 .bv/
 
+# Build artifacts
+a.out
+
+# Python linter cache
+.ruff_cache/
+
 # Go build artifacts
 bin/
 dist/
@@ -31,3 +37,7 @@ vendor/
 .meow/state/
 .meow/workflows/
 .meow/worktrees/
+.meow/test-artifacts/
+
+# Local branch tracking
+.meow-branch
