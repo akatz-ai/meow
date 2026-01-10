@@ -1,24 +1,12 @@
-# MEOW Stack
+# MEOW
 
-**Terminal agent orchestration without the framework tax.**
+**Meow Executors Orchestrate Work** — The Makefile of agent orchestration.
 
 No Python. No cloud. No magic. Just tmux, YAML, and a binary.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                                                             │
-│   MEOW is the Makefile of agent orchestration.                              │
-│                                                                             │
-│   Simple. Universal. No magic.                                              │
-│   Works with Claude Code, Aider, or any terminal agent.                     │
-│   Your workflows are just version-controlled TOML files.                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
 ## Why MEOW?
 
-The AI agent orchestration space is exploding with frameworks: LangChain, CrewAI, Claude-Flow, cloud-managed agents. They offer sophisticated features—memory systems, vector databases, MCP tools, visual builders.
+The AI agent orchestration space is full of frameworks: LangChain, CrewAI, Claude-Flow, cloud-managed agents. They offer sophisticated features—memory systems, vector databases, MCP tools, visual builders.
 
 **MEOW takes the opposite approach.**
 
@@ -29,60 +17,39 @@ The AI agent orchestration space is exploding with frameworks: LangChain, CrewAI
 | Agents as API endpoints | Agents as terminal processes |
 | Framework-specific agent code | Any terminal agent, unchanged |
 | Visual builders, dashboards | `git diff`-able TOML templates |
-| Sophisticated memory/RAG | Bring your own (or don't) |
 
-MEOW is for developers who:
-- Use Claude Code or Aider in the terminal
-- Want to orchestrate multi-agent workflows
-- Don't want to learn a framework ecosystem
-- Value understanding exactly what their system does
-- Want workflows version-controlled alongside code
+MEOW is for developers who use Claude Code or Aider, want multi-agent workflows, and don't want to adopt a framework ecosystem. If you need enterprise features or turnkey agent capabilities, look at [Claude-Flow](https://github.com/ruvnet/claude-flow) or [LangGraph](https://langchain-ai.github.io/langgraph/).
 
-## The Model
+## How It Works
 
-MEOW templates are **programs**. The orchestrator runs them.
+MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
 
 ```
-Templates = Programs (static, version-controlled TOML)
+Templates = Programs (version-controlled TOML)
 Steps     = Instructions
 Executors = Who runs each instruction
-Workflows = Running program instances (runtime state in YAML)
+Workflows = Running instances (runtime state in YAML)
 ```
 
-The orchestrator **pushes** prompts directly into running terminal sessions via tmux. It doesn't call APIs or invoke functions—it literally types into the agent's terminal and waits for `meow done`.
+### 7 Executors
 
-This means MEOW works with *any* terminal-based agent without modification.
+| Executor | Purpose |
+|----------|---------|
+| `shell` | Run commands, capture outputs |
+| `spawn` | Start an agent in tmux |
+| `kill` | Stop an agent session |
+| `expand` | Inline another template |
+| `branch` | Conditional execution |
+| `foreach` | Iterate over lists |
+| `agent` | Prompt agent, wait for completion |
 
-## 7 Executors, Everything Else is Composition
+Loops, parallel execution, human gates, retries—all emerge from composing these primitives.
 
-| Executor | Who Runs | Purpose |
-|----------|----------|---------|
-| `shell` | Orchestrator | Run shell commands, capture outputs |
-| `spawn` | Orchestrator | Start an agent in tmux |
-| `kill` | Orchestrator | Stop an agent session |
-| `expand` | Orchestrator | Inline another template |
-| `branch` | Orchestrator | Conditional execution |
-| `foreach` | Orchestrator | Iterate over lists |
-| `agent` | Agent | Prompt agent, wait for completion |
-
-Loops, parallel execution, human gates, retries, dynamic iteration—all emerge from composing these primitives. No special syntax, no hidden complexity.
-
-## Quick Example
+## Example
 
 ```bash
-# Run a workflow
 meow run work-loop.meow.toml --var agent=claude-1
-
-# What happens:
-# 1. Template parsed into steps
-# 2. Agent spawned in tmux session
-# 3. Prompts injected as steps become ready
-# 4. Agent works, signals completion with `meow done`
-# 5. Orchestrator advances, injects next prompt
-# 6. Repeat until workflow completes
 ```
-
-A simple template:
 
 ```toml
 # work-loop.meow.toml
@@ -102,7 +69,7 @@ agent = "{{agent}}"
 id = "select-task"
 executor = "agent"
 agent = "{{agent}}"
-prompt = "Pick a task from the backlog to work on."
+prompt = "Pick a task from the backlog."
 needs = ["start"]
 [main.steps.outputs]
 task_id = { required = true, type = "string" }
@@ -111,7 +78,7 @@ task_id = { required = true, type = "string" }
 id = "implement"
 executor = "agent"
 agent = "{{agent}}"
-prompt = "Implement task {{select-task.outputs.task_id}} using TDD."
+prompt = "Implement {{select-task.outputs.task_id}} using TDD."
 needs = ["select-task"]
 
 [[main.steps]]
@@ -121,12 +88,9 @@ agent = "{{agent}}"
 needs = ["implement"]
 ```
 
-## Data Flow
-
-Steps communicate through outputs, like GitHub Actions:
+Steps communicate through outputs (like GitHub Actions):
 
 ```toml
-# Capture from shell
 [[main.steps]]
 id = "get-branch"
 executor = "shell"
@@ -134,73 +98,29 @@ command = "git branch --show-current"
 [main.steps.outputs]
 branch = { source = "stdout" }
 
-# Capture from agent
-[[main.steps]]
-id = "select"
-executor = "agent"
-prompt = "Pick a task"
-[main.steps.outputs]
-task_id = { required = true, type = "string" }
-
-# Reference in later steps
 [[main.steps]]
 id = "implement"
 executor = "agent"
-prompt = "Implement {{select.outputs.task_id}} on branch {{get-branch.outputs.branch}}"
-needs = ["select", "get-branch"]
+prompt = "Work on {{get-branch.outputs.branch}}"
+needs = ["get-branch"]
 ```
 
-## What MEOW Doesn't Do
+## Tradeoffs
 
-MEOW is intentionally minimal. It does not include:
+**MEOW gives you:** Simplicity, no vendor lock-in, version-controlled workflows, works with any terminal agent, easy debugging (just tmux + YAML).
 
-- **Memory/RAG systems** — Use your agent's built-in memory, or add a shell step
-- **Vector databases** — If you need them, call them from shell steps
-- **Visual workflow builders** — Templates are text files; use your editor
-- **Cloud orchestration** — Runs locally; you own your state
-- **Agent-specific features** — Adapters handle agent differences
+**MEOW does NOT give you:** Built-in memory/RAG, observability dashboards, managed deployment, guaranteed crash recovery (best-effort only).
 
 This isn't a limitation—it's the point. MEOW coordinates; you build the rest.
 
-## Honest Tradeoffs
-
-**MEOW gives you:**
-- Complete understanding of your system
-- No vendor lock-in or cloud dependency
-- Version-controlled workflows
-- Works with any terminal agent
-- Simple debugging (it's just tmux sessions and YAML)
-
-**MEOW does NOT give you:**
-- Sophisticated agent capabilities out of the box
-- Production observability dashboards
-- Managed scaling and deployment
-- Guaranteed crash recovery (best-effort resume only)
-
-If you need enterprise features, managed infrastructure, or turnkey agent capabilities, look at [Claude-Flow](https://github.com/ruvnet/claude-flow), [LangGraph](https://langchain-ai.github.io/langgraph/), or cloud platforms.
-
-If you want the Makefile of agent orchestration—simple, universal, no magic—MEOW is for you.
-
 ## Documentation
 
-**[MVP Specification v2](docs/MVP-SPEC-v2.md)** — The complete technical specification:
-
-- All 7 executors with detailed examples
-- Template system and composition patterns
-- Agent adapter architecture
-- IPC protocol (Unix sockets, JSON)
-- Best-effort crash resume
-- Multi-agent coordination patterns
-- Error handling strategies
+**[MVP Specification](docs/MVP-SPEC-v2.md)** — Complete technical spec covering all 7 executors, template composition, adapters, IPC, and multi-agent patterns.
 
 ## Status
 
-**Active Development** — Core orchestrator and executors functional. See the spec for implementation phases.
+**Active Development** — Core orchestrator functional. See spec for implementation phases.
 
 ## License
 
 MIT
-
----
-
-*"The Makefile of agent orchestration."*
