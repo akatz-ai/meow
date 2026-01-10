@@ -1,5 +1,5 @@
 # Simple Hello World Test Workflow
-# Tests basic MEOW functionality: start agent, execute task, close
+# Tests basic MEOW functionality: spawn agent, execute task, cleanup
 #
 # Usage:
 #   meow run .meow/templates/hello-test.meow.toml --var agent=test-agent
@@ -7,7 +7,6 @@
 [main]
 name = "hello-test"
 description = "Simple test workflow to verify MEOW functionality"
-ephemeral = true
 
 [main.variables]
 agent = { required = true, description = "Agent ID to spawn" }
@@ -15,33 +14,33 @@ agent = { required = true, description = "Agent ID to spawn" }
 # Step 1: Start the agent in tmux
 [[main.steps]]
 id = "start-agent"
-type = "start"
-title = "Start test agent"
-assignee = "{{agent}}"
+executor = "spawn"
+description = "Start test agent"
+agent = "{{agent}}"
 
 # Step 2: Simple task for the agent
 [[main.steps]]
 id = "hello-task"
-type = "task"
-title = "Say hello world"
-assignee = "{{agent}}"
+executor = "agent"
+description = "Say hello world"
+agent = "{{agent}}"
 needs = ["start-agent"]
-instructions = """
+prompt = """
 ## Hello World Test
 
 Your task is simple: confirm you're running by saying "Hello World!"
 
-When done, close this task:
-  meow close <this-bead-id>
+When done, signal completion:
+  meow done
 """
 
-# Step 3: A code bead to verify something worked
+# Step 3: Shell step to verify something worked
 [[main.steps]]
 id = "verify"
-type = "code"
-title = "Verify test completed"
+executor = "shell"
+description = "Verify test completed"
 needs = ["hello-task"]
-code = """
+command = """
 echo "Test workflow completed successfully!"
 echo "Timestamp: $(date)"
 """

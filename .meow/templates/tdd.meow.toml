@@ -13,16 +13,16 @@
 [main]
 name = "tdd-workflow"
 description = "Test-Driven Development workflow"
-ephemeral = true
 
 [main.variables]
 feature = { required = true, description = "Feature or functionality to implement" }
 
 [[main.steps]]
 id = "write-test"
-type = "task"
-title = "Write failing tests for: {{feature}}"
-instructions = """
+executor = "agent"
+description = "Write failing tests for: {{feature}}"
+agent = "tdd-agent"
+prompt = """
 ## RED Phase: Write Failing Tests
 
 Write tests that define the expected behavior for: {{feature}}
@@ -41,16 +41,17 @@ Write tests that define the expected behavior for: {{feature}}
 ### Verify:
 Run tests - they should FAIL (that's expected!)
 
-When tests are written, close this step:
-  meow close <bead-id>
+When tests are written, signal completion:
+  meow done
 """
 
 [[main.steps]]
 id = "make-pass"
-type = "task"
-title = "Implement: {{feature}}"
+executor = "agent"
+description = "Implement: {{feature}}"
+agent = "tdd-agent"
 needs = ["write-test"]
-instructions = """
+prompt = """
 ## GREEN Phase: Make Tests Pass
 
 Write the minimum code to make all tests pass.
@@ -67,18 +68,19 @@ Write the minimum code to make all tests pass.
 4. Repeat until all pass
 
 ### Verify:
-All tests should PASS before closing.
+All tests should PASS before completing.
 
-When all tests pass, close this step:
-  meow close <bead-id>
+When all tests pass, signal completion:
+  meow done
 """
 
 [[main.steps]]
 id = "refactor"
-type = "task"
-title = "Refactor: {{feature}}"
+executor = "agent"
+description = "Refactor: {{feature}}"
+agent = "tdd-agent"
 needs = ["make-pass"]
-instructions = """
+prompt = """
 ## REFACTOR Phase: Clean Up
 
 Improve the code without changing behavior.
@@ -94,16 +96,17 @@ Improve the code without changing behavior.
 - Small changes, run tests frequently
 - If unsure, skip refactoring
 
-When done (or nothing to refactor), close this step:
-  meow close <bead-id>
+When done (or nothing to refactor), signal completion:
+  meow done
 """
 
 [[main.steps]]
 id = "commit"
-type = "task"
-title = "Commit: {{feature}}"
+executor = "agent"
+description = "Commit: {{feature}}"
+agent = "tdd-agent"
 needs = ["refactor"]
-instructions = """
+prompt = """
 ## Commit Changes
 
 Create a commit for this feature.
@@ -119,6 +122,6 @@ feat(<scope>): <description>
 - What was added
 - Why it was needed
 
-When committed, close this step:
-  meow close <bead-id>
+When committed, signal completion:
+  meow done
 """

@@ -11,28 +11,29 @@
 [main]
 name = "simple-workflow"
 description = "A simple two-step workflow"
-ephemeral = true  # Beads are cleaned up after completion
 
 [main.variables]
 task_name = { default = "Example Task", description = "Name of the task to perform" }
 
 [[main.steps]]
 id = "do-work"
-type = "task"
-title = "{{task_name}}"
-instructions = """
+executor = "agent"
+description = "{{task_name}}"
+agent = "default-agent"
+prompt = """
 Complete the task: {{task_name}}
 
-When done, close this step:
-  meow close <bead-id>
+When done, signal completion:
+  meow done
 """
 
 [[main.steps]]
 id = "verify"
-type = "task"
-title = "Verify {{task_name}}"
+executor = "agent"
+description = "Verify {{task_name}}"
+agent = "default-agent"
 needs = ["do-work"]
-instructions = """
+prompt = """
 Verify that {{task_name}} was completed correctly.
 
 Check:
@@ -40,6 +41,6 @@ Check:
 - [ ] No errors or issues
 - [ ] Ready for next steps
 
-When verified, close this step:
-  meow close <bead-id>
+When verified, signal completion:
+  meow done
 """
