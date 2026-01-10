@@ -7,6 +7,10 @@ import (
 
 // AdapterConfig represents the complete configuration for an agent adapter.
 // This is loaded from adapter.toml files.
+//
+// Adapters define runtime behavior only: how to spawn, inject prompts into, and stop
+// agent processes. Event hook configuration (like Claude's Stop/PreToolUse/PostToolUse)
+// is handled by library templates, not adapters. See lib/claude-events.meow.toml.
 type AdapterConfig struct {
 	// Adapter contains metadata about the adapter
 	Adapter AdapterMeta `toml:"adapter"`
@@ -22,9 +26,6 @@ type AdapterConfig struct {
 
 	// GracefulStop defines how to gracefully stop the agent
 	GracefulStop GracefulStopConfig `toml:"graceful_stop"`
-
-	// Events defines event handling configuration
-	Events EventConfig `toml:"events"`
 }
 
 // AdapterMeta contains metadata about the adapter.
@@ -74,16 +75,6 @@ type GracefulStopConfig struct {
 
 	// Wait is how long to wait for graceful shutdown before killing
 	Wait Duration `toml:"wait"`
-}
-
-// EventConfig defines event translation configuration.
-type EventConfig struct {
-	// Translator is the path to the event translator script (relative to adapter dir)
-	Translator string `toml:"translator"`
-
-	// AgentConfig contains agent-specific hook configuration
-	// Maps hook names to commands (uses {{adapter_dir}} placeholder)
-	AgentConfig map[string]string `toml:"agent_config"`
 }
 
 // Duration is a time.Duration that can be unmarshaled from TOML strings like "3s", "100ms".

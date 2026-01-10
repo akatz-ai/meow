@@ -57,10 +57,8 @@ func TestGetClaudeAdapter(t *testing.T) {
 		t.Errorf("expected graceful_stop.wait = 2s, got %v", config.GracefulStop.Wait)
 	}
 
-	// Verify events
-	if config.Events.Translator != "./event-translator.sh" {
-		t.Errorf("expected translator = ./event-translator.sh, got %q", config.Events.Translator)
-	}
+	// Note: Event hook configuration is handled by library templates (lib/claude-events.meow.toml),
+	// not adapters. No events config to verify here.
 
 	// Validate the config
 	if err := config.Validate(); err != nil {
@@ -81,18 +79,8 @@ func TestGetClaudeAdapterTOML(t *testing.T) {
 	}
 }
 
-func TestGetClaudeEventTranslator(t *testing.T) {
-	script := GetClaudeEventTranslator()
-	if len(script) == 0 {
-		t.Error("expected non-empty script content")
-	}
-	if !strings.HasPrefix(string(script), "#!/bin/bash") {
-		t.Error("script should start with shebang")
-	}
-	if !strings.Contains(string(script), "meow event") {
-		t.Error("script should call 'meow event'")
-	}
-}
+// Note: TestGetClaudeEventTranslator was removed - event hook configuration is now
+// handled by library templates (lib/claude-events.meow.toml), not adapters.
 
 func TestExtractAdapter(t *testing.T) {
 	tempDir := t.TempDir()
@@ -118,15 +106,7 @@ func TestExtractAdapter(t *testing.T) {
 		t.Error("extracted adapter.toml should contain claude name")
 	}
 
-	// Verify event-translator.sh was written with executable permission
-	scriptPath := filepath.Join(adapterDir, "event-translator.sh")
-	scriptInfo, err := os.Stat(scriptPath)
-	if err != nil {
-		t.Fatalf("failed to stat event-translator.sh: %v", err)
-	}
-	if scriptInfo.Mode()&0111 == 0 {
-		t.Error("event-translator.sh should be executable")
-	}
+	// Note: No event-translator.sh - event hooks are configured via library templates
 
 	// Unknown adapter should fail
 	_, err = ExtractAdapter("unknown", tempDir)
@@ -178,49 +158,6 @@ func TestEnsureExtracted(t *testing.T) {
 	content, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(content), "name = \"claude\"") {
 		t.Error("config should be restored after re-extraction")
-	}
-
-	// Test missing event-translator.sh triggers re-extraction
-	scriptPath := filepath.Join(dir1, "event-translator.sh")
-	if err := os.Remove(scriptPath); err != nil {
-		t.Fatalf("failed to remove script: %v", err)
-	}
-
-	// Should re-extract because script is missing
-	dir4, err := EnsureExtracted("claude", cacheDir)
-	if err != nil {
-		t.Fatalf("re-extraction after script removal failed: %v", err)
-	}
-	if dir4 != dir1 {
-		t.Errorf("expected same directory after script re-extract: %q vs %q", dir1, dir4)
-	}
-
-	// Verify script was restored
-	scriptInfo, err := os.Stat(scriptPath)
-	if err != nil {
-		t.Fatalf("script should be restored: %v", err)
-	}
-	if scriptInfo.Mode()&0111 == 0 {
-		t.Error("restored script should be executable")
-	}
-
-	// Test corrupted event-translator.sh triggers re-extraction
-	if err := os.WriteFile(scriptPath, []byte("corrupted"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	dir5, err := EnsureExtracted("claude", cacheDir)
-	if err != nil {
-		t.Fatalf("re-extraction after script corruption failed: %v", err)
-	}
-	if dir5 != dir1 {
-		t.Errorf("expected same directory after corrupt script re-extract: %q vs %q", dir1, dir5)
-	}
-
-	// Verify script was restored with correct content
-	scriptContent, _ := os.ReadFile(scriptPath)
-	if !strings.Contains(string(scriptContent), "#!/bin/bash") {
-		t.Error("script should be restored with correct content")
 	}
 }
 

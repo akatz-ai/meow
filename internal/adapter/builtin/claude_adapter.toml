@@ -40,13 +40,6 @@ keys = ["C-c"]
 # Time to wait for graceful shutdown before force killing
 wait = "2s"
 
-[events]
-# Path to event translator script (relative to adapter directory)
-translator = "./event-translator.sh"
-
-# Agent-specific hook configuration for .claude/settings.json
-# Uses {{adapter_dir}} placeholder for the adapter directory path
-[events.agent_config]
-Stop = "{{adapter_dir}}/event-translator.sh Stop"
-PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
-PostToolUse = "{{adapter_dir}}/event-translator.sh PostToolUse $TOOL_NAME"
+# Note: Event hook configuration (Stop, PreToolUse, PostToolUse) is handled by
+# library templates (lib/claude-events.meow.toml), not adapters. This keeps
+# adapters focused on runtime behavior and gives workflows control over hooks.

@@ -1,6 +1,10 @@
 // Package builtin provides embedded adapter configurations.
 // These adapters are compiled into the MEOW binary and available without
 // external files.
+//
+// Note: Event hook configuration (like Claude's Stop/PreToolUse/PostToolUse hooks)
+// is handled by library templates (lib/claude-events.meow.toml), not adapters.
+// Adapters only define runtime behavior: spawn, inject, stop.
 package builtin
 
 import (
@@ -16,9 +20,6 @@ import (
 //go:embed claude_adapter.toml
 var claudeAdapterTOML []byte
 
-//go:embed event_translator.sh
-var claudeEventTranslator []byte
-
 // GetClaudeAdapter returns the built-in Claude adapter configuration.
 func GetClaudeAdapter() (*types.AdapterConfig, error) {
 	var config types.AdapterConfig
@@ -33,13 +34,7 @@ func GetClaudeAdapterTOML() []byte {
 	return claudeAdapterTOML
 }
 
-// GetClaudeEventTranslator returns the raw event translator script.
-func GetClaudeEventTranslator() []byte {
-	return claudeEventTranslator
-}
-
 // ExtractAdapter extracts the built-in Claude adapter files to a directory.
-// This is useful when the adapter scripts need to be executed.
 // Returns the path to the extracted adapter directory.
 func ExtractAdapter(name, destDir string) (string, error) {
 	switch name {
@@ -65,12 +60,6 @@ func extractClaudeAdapter(destDir string) (string, error) {
 		return "", fmt.Errorf("writing adapter.toml: %w", err)
 	}
 
-	// Write event-translator.sh
-	scriptPath := filepath.Join(adapterDir, "event-translator.sh")
-	if err := os.WriteFile(scriptPath, claudeEventTranslator, 0755); err != nil {
-		return "", fmt.Errorf("writing event-translator.sh: %w", err)
-	}
-
 	return adapterDir, nil
 }
 
@@ -80,22 +69,17 @@ func extractClaudeAdapter(destDir string) (string, error) {
 func EnsureExtracted(name, cacheDir string) (string, error) {
 	adapterDir := filepath.Join(cacheDir, name)
 	configPath := filepath.Join(adapterDir, "adapter.toml")
-	scriptPath := filepath.Join(adapterDir, "event-translator.sh")
 
 	// Check if already extracted and up-to-date
-	// Must verify both adapter.toml and event-translator.sh to catch partial corruption
 	if _, err := os.Stat(configPath); err == nil {
 		configContent, configErr := os.ReadFile(configPath)
-		scriptContent, scriptErr := os.ReadFile(scriptPath)
 
-		// Both files must exist and match embedded content
-		if configErr == nil && scriptErr == nil &&
-			string(configContent) == string(claudeAdapterTOML) &&
-			string(scriptContent) == string(claudeEventTranslator) {
+		// File must exist and match embedded content
+		if configErr == nil && string(configContent) == string(claudeAdapterTOML) {
 			// Up to date, reuse
 			return adapterDir, nil
 		}
-		// Stale, corrupted, or incomplete - re-extract
+		// Stale or corrupted - re-extract
 	}
 
 	return ExtractAdapter(name, cacheDir)

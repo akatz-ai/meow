@@ -140,11 +140,12 @@ func (r *Registry) loadFile(path string) (*types.AdapterConfig, error) {
 }
 
 // resolveRelativePaths converts relative paths in config to absolute paths.
+// Note: Event hook configuration is handled by library templates (lib/claude-events.meow.toml),
+// not adapters. This function is retained for future use if adapters need path resolution.
 func (r *Registry) resolveRelativePaths(config *types.AdapterConfig, adapterDir string) {
-	// Resolve event translator path
-	if config.Events.Translator != "" && !filepath.IsAbs(config.Events.Translator) {
-		config.Events.Translator = filepath.Join(adapterDir, config.Events.Translator)
-	}
+	// Currently no relative paths need resolution in adapters.
+	// Event hooks are configured via library templates, not adapter config.
+	_ = adapterDir // Silence unused warning
 }
 
 // Resolve determines the adapter name to use based on the resolution hierarchy.

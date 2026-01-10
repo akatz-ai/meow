@@ -412,38 +412,8 @@ command = "cmd"
 	}
 }
 
-func TestRegistry_ResolvesRelativePaths(t *testing.T) {
-	tempDir := t.TempDir()
-	adapterDir := filepath.Join(tempDir, "test-agent")
-	if err := os.MkdirAll(adapterDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	configContent := `
-[adapter]
-name = "test-agent"
-
-[spawn]
-command = "cmd"
-
-[events]
-translator = "./event-translator.sh"
-`
-	if err := os.WriteFile(filepath.Join(adapterDir, "adapter.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	registry := NewRegistry(tempDir, "")
-	config, err := registry.Load("test-agent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expectedPath := filepath.Join(adapterDir, "event-translator.sh")
-	if config.Events.Translator != expectedPath {
-		t.Errorf("expected translator path %q, got %q", expectedPath, config.Events.Translator)
-	}
-}
+// Note: TestRegistry_ResolvesRelativePaths was removed - event hook configuration
+// is now handled by library templates (lib/claude-events.meow.toml), not adapters.
 
 func TestRegistry_InvalidConfig(t *testing.T) {
 	tempDir := t.TempDir()

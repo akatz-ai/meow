@@ -8,6 +8,8 @@ import (
 )
 
 func TestAdapterConfig_ParseTOML(t *testing.T) {
+	// Note: Event hook configuration is handled by library templates (lib/claude-events.meow.toml),
+	// not adapters. Adapters only define runtime behavior.
 	configTOML := `
 [adapter]
 name = "claude"
@@ -32,13 +34,6 @@ post_delay = "500ms"
 [graceful_stop]
 keys = ["C-c"]
 wait = "2s"
-
-[events]
-translator = "./event-translator.sh"
-
-[events.agent_config]
-Stop = "{{adapter_dir}}/event-translator.sh Stop"
-PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
 `
 
 	var config AdapterConfig
@@ -91,14 +86,6 @@ PreToolUse = "{{adapter_dir}}/event-translator.sh PreToolUse $TOOL_NAME"
 	}
 	if config.GracefulStop.Wait.Duration() != 2*time.Second {
 		t.Errorf("expected graceful_stop.wait = 2s, got %v", config.GracefulStop.Wait)
-	}
-
-	// Check events
-	if config.Events.Translator != "./event-translator.sh" {
-		t.Errorf("expected translator = ./event-translator.sh, got %q", config.Events.Translator)
-	}
-	if config.Events.AgentConfig["Stop"] != "{{adapter_dir}}/event-translator.sh Stop" {
-		t.Errorf("expected Stop hook config, got %q", config.Events.AgentConfig["Stop"])
 	}
 }
 
