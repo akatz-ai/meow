@@ -1,13 +1,18 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"os/signal"
 	"regexp"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/config"
@@ -36,6 +41,12 @@ type AgentManager interface {
 
 	// InjectPrompt sends ESC + prompt to agent's tmux session.
 	InjectPrompt(ctx context.Context, agentID string, prompt string) error
+
+	// Interrupt sends C-c to an agent's tmux session for graceful cancellation.
+	Interrupt(ctx context.Context, agentID string) error
+
+	// KillAll kills all agent sessions for a workflow.
+	KillAll(ctx context.Context, wf *types.Workflow) error
 }
 
 // ShellRunner executes shell commands.
@@ -96,17 +107,33 @@ func (o *Orchestrator) SetWorkflowID(id string) {
 // It blocks until the context is cancelled or all work is done.
 // IPC messages are handled by IPCHandler which delegates to Orchestrator methods
 // (HandleStepDone, HandleApproval) for thread-safe state mutations.
+// Handles SIGINT/SIGTERM for graceful shutdown with cleanup.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	ctx, o.cancel = context.WithCancel(ctx)
 	defer o.cancel()
 
 	o.logger.Info("orchestrator starting")
 
+	// Set up signal handling
+	sigChan := o.setupSignalHandler()
+	defer signal.Stop(sigChan)
+
 	ticker := time.NewTicker(o.cfg.Orchestrator.PollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case sig := <-sigChan:
+			o.logger.Info("received signal, initiating cleanup", "signal", sig)
+			o.wg.Wait()
+			// Run cleanup for the active workflow
+			if o.workflowID != "" {
+				if err := o.cleanupOnSignal(ctx); err != nil {
+					o.logger.Error("cleanup failed", "error", err)
+				}
+			}
+			return nil
+
 		case <-ctx.Done():
 			o.logger.Info("orchestrator shutting down", "reason", ctx.Err())
 			o.wg.Wait()
@@ -117,6 +144,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				if errors.Is(err, ErrAllDone) {
 					o.logger.Info("all work complete")
 					o.wg.Wait()
+					// Cleanup already handled by processWorkflow
 					return nil
 				}
 				o.logger.Error("tick error", "error", err)
@@ -124,6 +152,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// cleanupOnSignal runs cleanup when orchestrator receives SIGINT/SIGTERM.
+func (o *Orchestrator) cleanupOnSignal(ctx context.Context) error {
+	if o.workflowID == "" {
+		return nil
+	}
+
+	wf, err := o.store.Get(ctx, o.workflowID)
+	if err != nil {
+		return fmt.Errorf("getting workflow: %w", err)
+	}
+	if wf == nil || wf.Status.IsTerminal() {
+		return nil
+	}
+
+	// Use a background context for cleanup since the original may be cancelled
+	cleanupCtx := context.Background()
+	return o.RunCleanup(cleanupCtx, wf, types.WorkflowStatusStopped)
 }
 
 // Shutdown gracefully stops the orchestrator.
@@ -207,8 +254,27 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	readySteps := wf.GetReadySteps()
 	if len(readySteps) == 0 {
 		if wf.AllDone() {
-			// Check for failures first - HasFailed() implies AllDone() but with failures
+			// Determine final status
+			finalStatus := types.WorkflowStatusDone
 			if wf.HasFailed() {
+				finalStatus = types.WorkflowStatusFailed
+			}
+
+			// If workflow has cleanup script, run full cleanup sequence
+			if wf.Cleanup != "" {
+				o.logger.Info("workflow complete, running cleanup", "id", wf.ID, "reason", finalStatus)
+				// Unlock before RunCleanup since it may do I/O
+				o.wfMu.Unlock()
+				err := o.RunCleanup(ctx, wf, finalStatus)
+				o.wfMu.Lock()
+				if err != nil {
+					o.logger.Error("cleanup failed", "error", err)
+				}
+				return nil
+			}
+
+			// No cleanup script - set terminal status directly
+			if finalStatus == types.WorkflowStatusFailed {
 				wf.Fail()
 				o.logger.Info("workflow failed", "id", wf.ID)
 			} else {
@@ -609,7 +675,14 @@ func (o *Orchestrator) validateOutputs(step *types.Step, outputs map[string]any)
 	return nil
 }
 
-// checkStepTimeouts checks for timed-out agent steps.
+// TimeoutGracePeriod is the duration to wait after sending C-c before marking a step as failed.
+const TimeoutGracePeriod = 10 * time.Second
+
+// CleanupTimeout is the maximum duration for cleanup script execution.
+const CleanupTimeout = 60 * time.Second
+
+// checkStepTimeouts checks for timed-out agent steps and handles timeout enforcement.
+// Per MVP-SPEC-v2: send C-c, wait 10 seconds, then mark as failed.
 func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow) {
 	for _, step := range wf.Steps {
 		if step.Status != types.StepStatusRunning {
@@ -624,6 +697,7 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 
 		timeout, err := time.ParseDuration(step.Agent.Timeout)
 		if err != nil {
+			o.logger.Warn("invalid timeout duration", "step", step.ID, "timeout", step.Agent.Timeout, "error", err)
 			continue
 		}
 
@@ -631,12 +705,310 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 			continue
 		}
 
-		if time.Since(*step.StartedAt) > timeout {
-			o.logger.Warn("step timed out", "step", step.ID)
-			// Send C-c to agent, mark as failed after grace period
-			// Stub - executor track will implement timeout handling
+		elapsed := time.Since(*step.StartedAt)
+
+		// If already interrupted, check if grace period has passed
+		if step.InterruptedAt != nil {
+			gracePeriodElapsed := time.Since(*step.InterruptedAt)
+			if gracePeriodElapsed >= TimeoutGracePeriod {
+				// Grace period expired - mark step as failed
+				o.logger.Warn("step timeout grace period expired",
+					"step", step.ID,
+					"timeout", timeout,
+					"elapsed", elapsed,
+					"gracePeriod", gracePeriodElapsed)
+
+				step.Fail(&types.StepError{
+					Message: fmt.Sprintf("Step timed out after %s", elapsed.Round(time.Second)),
+				})
+			}
+			continue
+		}
+
+		// Check if step has exceeded timeout
+		if elapsed > timeout {
+			o.logger.Warn("step timed out, sending interrupt",
+				"step", step.ID,
+				"timeout", timeout,
+				"elapsed", elapsed)
+
+			// Send C-c to agent
+			if o.agents != nil {
+				if err := o.agents.Interrupt(ctx, step.Agent.Agent); err != nil {
+					o.logger.Error("failed to send interrupt to agent",
+						"step", step.ID,
+						"agent", step.Agent.Agent,
+						"error", err)
+					// Continue anyway - mark as interrupted to start grace period
+				}
+			}
+
+			// Record when we sent the interrupt
+			now := time.Now()
+			step.InterruptedAt = &now
 		}
 	}
+}
+
+// --- Cleanup Methods ---
+
+// RunCleanup executes the cleanup sequence for a workflow.
+// Per MVP-SPEC-v2:
+// 1. Set status to cleaning_up
+// 2. Persist state
+// 3. Kill all agent tmux sessions
+// 4. Execute cleanup script (60 second timeout)
+// 5. Set final status
+// 6. Persist final state
+func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reason types.WorkflowStatus) error {
+	o.logger.Info("starting workflow cleanup",
+		"workflow", wf.ID,
+		"reason", reason,
+		"hasCleanupScript", wf.Cleanup != "")
+
+	// 1. Set status to cleaning_up
+	if err := wf.StartCleanup(reason); err != nil {
+		return fmt.Errorf("starting cleanup: %w", err)
+	}
+
+	// 2. Persist state (so cleanup survives crash)
+	if err := o.store.Save(ctx, wf); err != nil {
+		o.logger.Error("failed to save workflow cleanup state", "error", err)
+		// Continue with cleanup anyway
+	}
+
+	// 3. Kill all agent tmux sessions
+	if o.agents != nil {
+		if err := o.agents.KillAll(ctx, wf); err != nil {
+			o.logger.Error("failed to kill agents during cleanup", "error", err)
+			// Continue with cleanup anyway
+		}
+	}
+
+	// 4. Execute cleanup script (if defined)
+	if wf.Cleanup != "" {
+		if err := o.runCleanupScript(ctx, wf); err != nil {
+			o.logger.Error("cleanup script failed", "error", err)
+			// Cleanup script errors are logged but don't prevent workflow termination
+		}
+	}
+
+	// 5. Set final status
+	wf.FinishCleanup()
+
+	// 6. Persist final state
+	if err := o.store.Save(ctx, wf); err != nil {
+		return fmt.Errorf("saving final workflow state: %w", err)
+	}
+
+	o.logger.Info("workflow cleanup complete",
+		"workflow", wf.ID,
+		"finalStatus", wf.Status)
+
+	return nil
+}
+
+// runCleanupScript executes the cleanup script with timeout.
+func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Workflow) error {
+	if wf.Cleanup == "" {
+		return nil
+	}
+
+	// Create a timeout context for cleanup
+	cleanupCtx, cancel := context.WithTimeout(ctx, CleanupTimeout)
+	defer cancel()
+
+	o.logger.Info("running cleanup script", "workflow", wf.ID)
+
+	// Execute the cleanup script via bash
+	cmd := exec.CommandContext(cleanupCtx, "bash", "-c", wf.Cleanup)
+
+	// Set environment variables from workflow
+	cmd.Env = os.Environ()
+	for k, v := range wf.Variables {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+	// Add workflow ID as an environment variable
+	cmd.Env = append(cmd.Env, fmt.Sprintf("MEOW_WORKFLOW=%s", wf.ID))
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if cleanupCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("cleanup script timed out after %s", CleanupTimeout)
+		}
+		return fmt.Errorf("cleanup script failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	o.logger.Info("cleanup script completed successfully", "workflow", wf.ID)
+	return nil
+}
+
+// setupSignalHandler sets up SIGINT/SIGTERM handling.
+// Returns a channel that receives true when a signal is caught.
+func (o *Orchestrator) setupSignalHandler() chan os.Signal {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	return sigChan
+}
+
+// --- Crash Recovery ---
+
+// Recover handles crash recovery for workflows on orchestrator startup.
+// Per MVP-SPEC-v2:
+// 1. Load all running workflows
+// 2. Handle workflows in cleaning_up state (resume cleanup)
+// 3. For running/completing steps:
+//   - Orchestrator executors: reset to pending
+//   - Expand steps: delete partial child steps, reset to pending
+//   - Agent steps with dead agent: reset to pending
+//   - Agent steps with live agent: keep running (wait for stop hook)
+func (o *Orchestrator) Recover(ctx context.Context) error {
+	o.logger.Info("starting crash recovery")
+
+	// Load all running and cleaning_up workflows
+	runningWorkflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusRunning})
+	if err != nil {
+		return fmt.Errorf("listing running workflows: %w", err)
+	}
+
+	cleaningUpWorkflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusCleaningUp})
+	if err != nil {
+		return fmt.Errorf("listing cleaning_up workflows: %w", err)
+	}
+
+	// Handle workflows that were in cleaning_up state
+	for _, wf := range cleaningUpWorkflows {
+		o.logger.Info("resuming cleanup for workflow", "workflow", wf.ID, "priorStatus", wf.PriorStatus)
+		// Resume cleanup - this will re-run the cleanup script and set final status
+		if err := o.resumeCleanup(ctx, wf); err != nil {
+			o.logger.Error("failed to resume cleanup", "workflow", wf.ID, "error", err)
+		}
+	}
+
+	// Handle running workflows
+	for _, wf := range runningWorkflows {
+		modified := false
+
+		// First pass: identify partial expansions (expand steps that were running)
+		partialExpands := make(map[string]bool)
+		for _, step := range wf.Steps {
+			if step.Executor == types.ExecutorExpand &&
+				(step.Status == types.StepStatusRunning || step.Status == types.StepStatusCompleting) {
+				partialExpands[step.ID] = true
+			}
+		}
+
+		// Delete partially-expanded child steps
+		for stepID, step := range wf.Steps {
+			if step.ExpandedFrom != "" && partialExpands[step.ExpandedFrom] {
+				o.logger.Info("deleting partial expansion child",
+					"step", stepID,
+					"parent", step.ExpandedFrom,
+					"workflow", wf.ID)
+				delete(wf.Steps, stepID)
+				modified = true
+			}
+		}
+
+		// Second pass: handle running/completing steps
+		for _, step := range wf.Steps {
+			if step.Status != types.StepStatusRunning && step.Status != types.StepStatusCompleting {
+				continue
+			}
+
+			// Treat "completing" as "running" for recovery purposes
+			// (orchestrator crashed during transition)
+
+			if step.Executor.IsOrchestrator() {
+				// Orchestrator step was mid-execution - reset to pending
+				o.logger.Info("resetting orchestrator step",
+					"step", step.ID,
+					"executor", step.Executor,
+					"wasStatus", step.Status,
+					"workflow", wf.ID)
+				step.Status = types.StepStatusPending
+				step.StartedAt = nil
+				step.InterruptedAt = nil
+				// Clear ExpandedInto for expand steps (we deleted the children)
+				if step.Executor == types.ExecutorExpand {
+					step.ExpandedInto = nil
+				}
+				modified = true
+			} else if step.Executor == types.ExecutorAgent {
+				// Check if agent is still alive
+				var agentAlive bool
+				if o.agents != nil && step.Agent != nil {
+					agentAlive, _ = o.agents.IsRunning(ctx, step.Agent.Agent)
+				}
+
+				if !agentAlive {
+					// Agent dead - reset to pending (will need respawn)
+					o.logger.Info("resetting step from dead agent",
+						"step", step.ID,
+						"agent", step.Agent.Agent,
+						"workflow", wf.ID)
+					step.Status = types.StepStatusPending
+					step.StartedAt = nil
+					step.InterruptedAt = nil
+					modified = true
+				} else {
+					// Agent still alive - keep running
+					// Don't immediately re-inject prompt!
+					// Wait for either:
+					// - Agent to call meow done (normal completion)
+					// - Stop hook to fire (calls meow prime, gets current prompt)
+					// This avoids injecting duplicate prompts
+					o.logger.Info("keeping step running with live agent",
+						"step", step.ID,
+						"agent", step.Agent.Agent,
+						"workflow", wf.ID)
+					if step.Status == types.StepStatusCompleting {
+						step.Status = types.StepStatusRunning
+						modified = true
+					}
+				}
+			}
+		}
+
+		if modified {
+			if err := o.store.Save(ctx, wf); err != nil {
+				o.logger.Error("failed to save workflow after recovery",
+					"workflow", wf.ID,
+					"error", err)
+			}
+		}
+	}
+
+	o.logger.Info("crash recovery complete",
+		"runningWorkflows", len(runningWorkflows),
+		"cleaningUpWorkflows", len(cleaningUpWorkflows))
+
+	return nil
+}
+
+// resumeCleanup continues cleanup for a workflow that was in cleaning_up state when crash occurred.
+func (o *Orchestrator) resumeCleanup(ctx context.Context, wf *types.Workflow) error {
+	// Kill any remaining agents (some may have survived the crash)
+	if o.agents != nil {
+		if err := o.agents.KillAll(ctx, wf); err != nil {
+			o.logger.Warn("failed to kill agents during resumed cleanup", "error", err)
+		}
+	}
+
+	// Run cleanup script again (should be idempotent)
+	if wf.Cleanup != "" {
+		if err := o.runCleanupScript(ctx, wf); err != nil {
+			o.logger.Warn("cleanup script failed during resume", "error", err)
+		}
+	}
+
+	// Set final status
+	wf.FinishCleanup()
+
+	// Persist final state
+	return o.store.Save(ctx, wf)
 }
 
 // --- Executor Handlers (Stubs) ---

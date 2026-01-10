@@ -9,24 +9,27 @@ import (
 type WorkflowStatus string
 
 const (
-	WorkflowStatusPending WorkflowStatus = "pending" // Created but not started
-	WorkflowStatusRunning WorkflowStatus = "running" // Orchestrator is processing
-	WorkflowStatusDone    WorkflowStatus = "done"    // All steps completed
-	WorkflowStatusFailed  WorkflowStatus = "failed"  // A step failed
+	WorkflowStatusPending    WorkflowStatus = "pending"     // Created but not started
+	WorkflowStatusRunning    WorkflowStatus = "running"     // Orchestrator is processing
+	WorkflowStatusCleaningUp WorkflowStatus = "cleaning_up" // Running cleanup script
+	WorkflowStatusDone       WorkflowStatus = "done"        // All steps completed
+	WorkflowStatusFailed     WorkflowStatus = "failed"      // A step failed
+	WorkflowStatusStopped    WorkflowStatus = "stopped"     // Manually stopped via meow stop
 )
 
 // Valid returns true if this is a recognized workflow status.
 func (s WorkflowStatus) Valid() bool {
 	switch s {
-	case WorkflowStatusPending, WorkflowStatusRunning, WorkflowStatusDone, WorkflowStatusFailed:
+	case WorkflowStatusPending, WorkflowStatusRunning, WorkflowStatusCleaningUp,
+		WorkflowStatusDone, WorkflowStatusFailed, WorkflowStatusStopped:
 		return true
 	}
 	return false
 }
 
-// IsTerminal returns true if this status is final (done or failed).
+// IsTerminal returns true if this status is final (done, failed, or stopped).
 func (s WorkflowStatus) IsTerminal() bool {
-	return s == WorkflowStatusDone || s == WorkflowStatusFailed
+	return s == WorkflowStatusDone || s == WorkflowStatusFailed || s == WorkflowStatusStopped
 }
 
 // AgentInfo tracks persisted state for an agent.
@@ -52,6 +55,12 @@ type Workflow struct {
 	// Configuration
 	Variables      map[string]string `yaml:"variables,omitempty"`
 	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Workflow-level default adapter
+
+	// Cleanup script (from template) - runs on workflow end
+	Cleanup string `yaml:"cleanup,omitempty"`
+
+	// Prior status before cleanup - used to determine final status after cleanup
+	PriorStatus WorkflowStatus `yaml:"prior_status,omitempty"`
 
 	// Agent state - tracked for crash recovery and file_path validation
 	Agents map[string]*AgentInfo `yaml:"agents,omitempty"`
@@ -143,6 +152,56 @@ func (w *Workflow) Fail() {
 	now := time.Now()
 	w.Status = WorkflowStatusFailed
 	w.DoneAt = &now
+}
+
+// StartCleanup transitions the workflow to the cleaning_up state.
+// Records the prior status for determining final status after cleanup.
+func (w *Workflow) StartCleanup(reason WorkflowStatus) error {
+	if w.Status == WorkflowStatusCleaningUp {
+		return nil // Already cleaning up
+	}
+	if w.Status.IsTerminal() {
+		return fmt.Errorf("cannot start cleanup for workflow in terminal status %s", w.Status)
+	}
+	w.PriorStatus = reason
+	w.Status = WorkflowStatusCleaningUp
+	return nil
+}
+
+// FinishCleanup transitions from cleaning_up to the final status.
+// Uses PriorStatus to determine the appropriate final status.
+func (w *Workflow) FinishCleanup() {
+	if w.Status != WorkflowStatusCleaningUp {
+		return
+	}
+	now := time.Now()
+	w.DoneAt = &now
+
+	// Determine final status based on prior status
+	switch w.PriorStatus {
+	case WorkflowStatusStopped:
+		w.Status = WorkflowStatusStopped
+	case WorkflowStatusFailed:
+		w.Status = WorkflowStatusFailed
+	default:
+		w.Status = WorkflowStatusDone
+	}
+}
+
+// Stop marks the workflow as stopped (manual stop via meow stop).
+func (w *Workflow) Stop() {
+	now := time.Now()
+	w.Status = WorkflowStatusStopped
+	w.DoneAt = &now
+}
+
+// GetAgentIDs returns all agent IDs registered in this workflow.
+func (w *Workflow) GetAgentIDs() []string {
+	ids := make([]string, 0, len(w.Agents))
+	for id := range w.Agents {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // Start marks the workflow as running.
