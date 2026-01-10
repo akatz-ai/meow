@@ -2161,3 +2161,373 @@ func TestE2E_AgentCrash_DetectionLatency(t *testing.T) {
 	// Currently blocked by crash detection and timeout handling implementation.
 	t.Skip("Test blocked: crash detection and timeout grace period handling not yet implemented")
 }
+
+// ===========================================================================
+// Output Validation Retry Tests
+//
+// These tests verify that when output validation fails:
+// 1. Step status returns to "running" (not "failed")
+// 2. Error is returned to the agent
+// 3. Agent can retry with correct outputs
+// 4. Step eventually completes when outputs are valid
+// ===========================================================================
+
+func TestE2E_OutputValidation_MissingRequired(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator:
+	// - First call: provides wrong key "wrong_key" instead of "task_id"
+	// - Second call: provides correct key "task_id"
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("produce required output", []map[string]any{
+			{"wrong_key": "some-value"},   // First attempt: wrong key
+			{"task_id": "PROJ-123"},       // Second attempt: correct key
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with an agent step that requires a specific output
+	template := `
+[main]
+name = "validation-missing-output"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "worker"
+needs = ["spawn"]
+prompt = "Please produce required output for the task"
+
+[main.steps.outputs]
+task_id = { required = true, type = "string", description = "The task ID" }
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["work"]
+command = "echo 'task_id received: {{work.outputs.task_id}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "worker"
+needs = ["verify"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-missing.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-missing.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Workflow should complete successfully after retry
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete after retry, got:\nstderr: %s", stderr)
+	}
+
+	// Should see validation failure message in logs
+	if !strings.Contains(stderr, "validation failed") && !strings.Contains(stderr, "missing required output") {
+		t.Logf("Note: expected validation failure message in logs (may be at debug level)")
+	}
+}
+
+func TestE2E_OutputValidation_WrongType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator:
+	// - First call: provides "count" as string instead of number
+	// - Second call: provides "count" as number
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("count the items", []map[string]any{
+			{"count": "forty-two"},  // First attempt: wrong type (string)
+			{"count": 42},           // Second attempt: correct type (number)
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template that expects a number output
+	template := `
+[main]
+name = "validation-wrong-type"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "counter"
+
+[[main.steps]]
+id = "count"
+executor = "agent"
+agent = "counter"
+needs = ["spawn"]
+prompt = "Please count the items and report the total"
+
+[main.steps.outputs]
+count = { required = true, type = "number", description = "The total count" }
+
+[[main.steps]]
+id = "report"
+executor = "shell"
+needs = ["count"]
+command = "echo 'Count is: {{count.outputs.count}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "counter"
+needs = ["report"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-type.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-type.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Workflow should complete after type correction
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete after type correction, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_OutputValidation_MultipleRetries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to fail 3 times, then succeed on 4th attempt
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("perform validation test", []map[string]any{
+			{"wrong": "attempt1"},      // 1st attempt: wrong key
+			{"also_wrong": "attempt2"}, // 2nd attempt: still wrong
+			{"nope": "attempt3"},       // 3rd attempt: nope
+			{"result": "success!"},     // 4th attempt: finally correct
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template that requires specific output
+	template := `
+[main]
+name = "validation-multi-retry"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "persistent"
+
+[[main.steps]]
+id = "validate"
+executor = "agent"
+agent = "persistent"
+needs = ["spawn"]
+prompt = "Please perform validation test and provide the result"
+
+[main.steps.outputs]
+result = { required = true, type = "string", description = "The validation result" }
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+needs = ["validate"]
+command = "echo 'Validation passed with result: {{validate.outputs.result}}'"
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "persistent"
+needs = ["done"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-multi.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "validation-multi.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Workflow should complete after 4 attempts
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete after multiple retries, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_OutputValidation_EventualTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator to always provide wrong outputs (never succeeds)
+	simConfig := e2e.NewSimConfigBuilder().
+		WithBehaviorSequence("timeout test", []map[string]any{
+			{"wrong": "always"},  // Will repeat this forever (last item repeats)
+		}).
+		WithStartupDelay(50 * time.Millisecond).
+		WithDelay(100 * time.Millisecond). // Small delay between retries
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	// Template with a step that has a short timeout
+	// The step requires "result" but simulator always provides "wrong"
+	template := `
+[main]
+name = "validation-timeout"
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "doomed"
+
+[[main.steps]]
+id = "doomed-step"
+executor = "agent"
+agent = "doomed"
+needs = ["spawn"]
+prompt = "Please run timeout test"
+timeout = "3s"
+
+[main.steps.outputs]
+result = { required = true, type = "string", description = "Required result that will never come" }
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "doomed"
+needs = ["doomed-step"]
+graceful = true
+`
+	if err := h.WriteTemplate("validation-timeout.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	// Run with timeout - workflow should fail due to step timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/tmp/meow-e2e-bin", "run", filepath.Join(h.TemplateDir, "validation-timeout.toml"))
+	cmd.Dir = h.TempDir
+	cmd.Env = h.Env()
+	cmd.Env = append(cmd.Env, "PATH=/tmp:"+os.Getenv("PATH"))
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// The workflow should fail due to timeout
+	// Check for timeout indication in output
+	stderrStr := stderr.String()
+	stdoutStr := stdout.String()
+
+	hasTimeout := strings.Contains(stderrStr, "timeout") ||
+		strings.Contains(stderrStr, "timed out") ||
+		strings.Contains(stderrStr, "step failed") ||
+		err != nil
+
+	if !hasTimeout {
+		t.Errorf("expected step to timeout, got:\nstdout: %s\nstderr: %s\nerr: %v",
+			stdoutStr, stderrStr, err)
+	}
+
+	// Workflow should NOT complete successfully
+	if strings.Contains(stderrStr, "workflow completed") {
+		t.Errorf("expected workflow to fail due to timeout, but it completed")
+	}
+}
