@@ -1568,11 +1568,8 @@ executor = "shell"
 needs = ["crash-work"]
 command = "echo 'this should not run'"
 `
-	if err := h.WriteTemplate("agent-crash.toml", template); err != nil {
-		t.Fatalf("failed to write template: %v", err)
-	}
-
 	// Start orchestrator in background so we can test behavior
+	// StartOrchestratorWithTemplate writes the template and starts the orchestrator
 	proc, err := h.StartOrchestratorWithTemplate("agent-crash.toml", template)
 	if err != nil {
 		t.Fatalf("failed to start orchestrator: %v", err)
