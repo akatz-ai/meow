@@ -227,13 +227,13 @@ func (s *Simulator) actionCrash(action Action) error {
 }
 
 // emitToolEvents emits tool events according to their timing.
+// NOTE: Events should be listed in chronological order by "when" field.
+// Events are emitted sequentially without sorting.
 func (s *Simulator) emitToolEvents(events []EventDef) {
 	if !s.config.Hooks.FireToolEvents || len(events) == 0 {
 		return
 	}
 
-	// Sort events by "when" time and emit them
-	// For simplicity, we just emit them sequentially with delays
 	startTime := time.Now()
 
 	for _, event := range events {

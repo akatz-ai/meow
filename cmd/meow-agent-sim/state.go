@@ -125,10 +125,9 @@ func (s *Simulator) handleInput(prompt string) error {
 		// Response to a question we asked
 		s.logger.Debug("received answer to question", "answer", truncate(prompt, 50))
 		s.transitionTo(StateWorking)
-		// After getting an answer, we complete successfully
+		// After getting an answer, we complete successfully (no delay - respond promptly)
 		return s.actionComplete(Action{
 			Type:    ActionComplete,
-			Delay:   s.config.Timing.DefaultWorkDelay,
 			Outputs: map[string]any{"answer": prompt},
 		})
 
@@ -184,6 +183,16 @@ func (s *Simulator) fireStopHook() {
 
 // truncate shortens a string to max length, adding "..." if truncated.
 func truncate(s string, maxLen int) string {
+	if maxLen < 4 {
+		// Too short to add "...", just return what we can
+		if maxLen <= 0 {
+			return ""
+		}
+		if len(s) <= maxLen {
+			return s
+		}
+		return s[:maxLen]
+	}
 	if len(s) <= maxLen {
 		return s
 	}
@@ -208,22 +217,19 @@ func NewStubIPCClient(socketPath string) *StubIPCClient {
 
 // StepDone signals step completion to the orchestrator.
 func (c *StubIPCClient) StepDone(outputs map[string]any) error {
-	// STUB: Log the call for debugging
-	slog.Debug("IPC: meow done", "outputs", outputs)
+	// STUB: No-op, Track 3 will implement real IPC
 	return nil
 }
 
 // GetPrompt retrieves the current prompt from the orchestrator.
 func (c *StubIPCClient) GetPrompt() (string, error) {
 	// STUB: Return empty (no prompt available)
-	slog.Debug("IPC: meow prime")
 	return "", nil
 }
 
 // Event sends an event to the orchestrator.
 func (c *StubIPCClient) Event(eventType string, data map[string]any) error {
-	// STUB: Log the call for debugging
-	slog.Debug("IPC: meow event", "type", eventType, "data", data)
+	// STUB: No-op, Track 3 will implement real IPC
 	return nil
 }
 
