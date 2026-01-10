@@ -718,9 +718,13 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 					"elapsed", elapsed,
 					"gracePeriod", gracePeriodElapsed)
 
-				step.Fail(&types.StepError{
+				if err := step.Fail(&types.StepError{
 					Message: fmt.Sprintf("Step timed out after %s", elapsed.Round(time.Second)),
-				})
+				}); err != nil {
+					o.logger.Error("failed to mark timed-out step as failed",
+						"step", step.ID,
+						"error", err)
+				}
 			}
 			continue
 		}
