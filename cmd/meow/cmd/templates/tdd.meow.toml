@@ -2,7 +2,7 @@
 # Implements the red-green-refactor cycle.
 #
 # Usage:
-#   meow run .meow/templates/tdd.meow.toml --var feature="user authentication"
+#   meow run tdd --var feature="user authentication"
 #
 # Steps:
 #   1. write-test   - Write failing tests first (RED)
@@ -13,112 +13,134 @@
 [main]
 name = "tdd-workflow"
 description = "Test-Driven Development workflow"
-ephemeral = true
 
 [main.variables]
 feature = { required = true, description = "Feature or functionality to implement" }
+agent = { default = "worker", description = "Agent to assign work to" }
+
+[[main.steps]]
+id = "start-agent"
+executor = "spawn"
+agent = "{{agent}}"
 
 [[main.steps]]
 id = "write-test"
-type = "task"
-title = "Write failing tests for: {{feature}}"
-instructions = """
-## RED Phase: Write Failing Tests
+executor = "agent"
+agent = "{{agent}}"
+needs = ["start-agent"]
+prompt = """
+# RED Phase: Write Failing Tests
 
 Write tests that define the expected behavior for: {{feature}}
 
-### Guidelines:
+## Guidelines
 1. Start with the simplest test case
 2. Test one behavior per test
 3. Use descriptive test names
 4. Cover edge cases
 
-### Checklist:
+## Checklist
 - [ ] Happy path test
 - [ ] Edge case tests
 - [ ] Error handling tests
 
-### Verify:
+## Verify
 Run tests - they should FAIL (that's expected!)
 
-When tests are written, close this step:
-  meow close <bead-id>
+When tests are written, run:
+```
+meow done
+```
 """
 
 [[main.steps]]
 id = "make-pass"
-type = "task"
-title = "Implement: {{feature}}"
+executor = "agent"
+agent = "{{agent}}"
 needs = ["write-test"]
-instructions = """
-## GREEN Phase: Make Tests Pass
+prompt = """
+# GREEN Phase: Make Tests Pass
 
-Write the minimum code to make all tests pass.
+Write the minimum code to make all tests pass for: {{feature}}
 
-### Guidelines:
+## Guidelines
 1. Don't over-engineer - just make it work
 2. Follow existing code patterns
 3. Keep it simple
 
-### Process:
+## Process
 1. Run tests to see what's failing
 2. Fix one failing test at a time
 3. Run tests again
 4. Repeat until all pass
 
-### Verify:
-All tests should PASS before closing.
+## Verify
+All tests should PASS before completing.
 
-When all tests pass, close this step:
-  meow close <bead-id>
+When all tests pass, run:
+```
+meow done
+```
 """
 
 [[main.steps]]
 id = "refactor"
-type = "task"
-title = "Refactor: {{feature}}"
+executor = "agent"
+agent = "{{agent}}"
 needs = ["make-pass"]
-instructions = """
-## REFACTOR Phase: Clean Up
+prompt = """
+# REFACTOR Phase: Clean Up
 
-Improve the code without changing behavior.
+Improve the code without changing behavior for: {{feature}}
 
-### Consider:
+## Consider
 - [ ] Remove duplication
 - [ ] Improve naming
 - [ ] Simplify logic
 - [ ] Add comments where needed
 
-### Rules:
+## Rules
 - Tests must still pass after refactoring
 - Small changes, run tests frequently
 - If unsure, skip refactoring
 
-When done (or nothing to refactor), close this step:
-  meow close <bead-id>
+When done (or nothing to refactor), run:
+```
+meow done
+```
 """
 
 [[main.steps]]
 id = "commit"
-type = "task"
-title = "Commit: {{feature}}"
+executor = "agent"
+agent = "{{agent}}"
 needs = ["refactor"]
-instructions = """
-## Commit Changes
+prompt = """
+# Commit Changes
 
-Create a commit for this feature.
+Create a commit for: {{feature}}
 
-### Steps:
-1. Stage changes: git add -A
-2. Review: git diff --staged
+## Steps
+1. Stage changes: `git add -A`
+2. Review: `git diff --staged`
 3. Commit with descriptive message
 
-### Commit Message Format:
+## Commit Message Format
+```
 feat(<scope>): <description>
 
 - What was added
 - Why it was needed
+```
 
-When committed, close this step:
-  meow close <bead-id>
+When committed, run:
+```
+meow done
+```
 """
+
+[[main.steps]]
+id = "stop-agent"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["commit"]

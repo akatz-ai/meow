@@ -2,7 +2,7 @@
 # A minimal example showing the module format.
 #
 # Usage:
-#   meow run .meow/templates/simple.meow.toml --var task_name="My Task"
+#   meow run simple --var task_name="My Task"
 #
 # The workflow creates two steps:
 #   1. do-work - The main task
@@ -11,28 +11,40 @@
 [main]
 name = "simple-workflow"
 description = "A simple two-step workflow"
-ephemeral = true  # Beads are cleaned up after completion
 
 [main.variables]
 task_name = { default = "Example Task", description = "Name of the task to perform" }
+agent = { default = "worker", description = "Agent to assign work to" }
+
+[[main.steps]]
+id = "start-agent"
+executor = "spawn"
+agent = "{{agent}}"
 
 [[main.steps]]
 id = "do-work"
-type = "task"
-title = "{{task_name}}"
-instructions = """
+executor = "agent"
+agent = "{{agent}}"
+needs = ["start-agent"]
+prompt = """
+# Task: {{task_name}}
+
 Complete the task: {{task_name}}
 
-When done, close this step:
-  meow close <bead-id>
+When done, run:
+```
+meow done
+```
 """
 
 [[main.steps]]
 id = "verify"
-type = "task"
-title = "Verify {{task_name}}"
+executor = "agent"
+agent = "{{agent}}"
 needs = ["do-work"]
-instructions = """
+prompt = """
+# Verify: {{task_name}}
+
 Verify that {{task_name}} was completed correctly.
 
 Check:
@@ -40,6 +52,14 @@ Check:
 - [ ] No errors or issues
 - [ ] Ready for next steps
 
-When verified, close this step:
-  meow close <bead-id>
+When verified, run:
+```
+meow done
+```
 """
+
+[[main.steps]]
+id = "stop-agent"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["verify"]
