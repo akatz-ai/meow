@@ -52,6 +52,8 @@ type TemplateExpander interface {
 
 // Orchestrator is the main workflow engine.
 // It processes workflows by dispatching ready steps to appropriate executors.
+// The Orchestrator is the single owner of workflow state mutations - all state
+// changes go through its mutex-protected methods to prevent race conditions.
 type Orchestrator struct {
 	cfg      *config.Config
 	store    WorkflowStore
@@ -60,14 +62,12 @@ type Orchestrator struct {
 	expander TemplateExpander
 	logger   *slog.Logger
 
-	// IPC channel for receiving messages from agents
-	ipcChan chan ipc.Message
-
 	// Active workflow ID (for single-workflow mode)
 	workflowID string
 
-	// Mutex to protect workflow state during concurrent operations
-	// (e.g., async kill steps and IPC handlers modifying the same workflow)
+	// Mutex to protect workflow state during concurrent operations.
+	// All state-mutating operations (HandleStepDone, HandleApproval, processWorkflow)
+	// must acquire this mutex before reading/writing workflow state.
 	wfMu sync.Mutex
 
 	// Shutdown coordination
@@ -84,7 +84,6 @@ func New(cfg *config.Config, store WorkflowStore, agents AgentManager, shell She
 		shell:    shell,
 		expander: expander,
 		logger:   logger,
-		ipcChan:  make(chan ipc.Message, 100),
 	}
 }
 
@@ -93,14 +92,10 @@ func (o *Orchestrator) SetWorkflowID(id string) {
 	o.workflowID = id
 }
 
-// IPCChannel returns the channel for receiving IPC messages.
-// The IPC server should send messages to this channel.
-func (o *Orchestrator) IPCChannel() chan<- ipc.Message {
-	return o.ipcChan
-}
-
 // Run starts the orchestrator main loop.
 // It blocks until the context is cancelled or all work is done.
+// IPC messages are handled by IPCHandler which delegates to Orchestrator methods
+// (HandleStepDone, HandleApproval) for thread-safe state mutations.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	ctx, o.cancel = context.WithCancel(ctx)
 	defer o.cancel()
@@ -116,11 +111,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.logger.Info("orchestrator shutting down", "reason", ctx.Err())
 			o.wg.Wait()
 			return ctx.Err()
-
-		case msg := <-o.ipcChan:
-			if err := o.handleIPC(ctx, msg); err != nil {
-				o.logger.Error("IPC handling error", "error", err)
-			}
 
 		case <-ticker.C:
 			if err := o.tick(ctx); err != nil {
@@ -430,23 +420,26 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Ste
 }
 
 // handleIPC processes an IPC message from an agent.
+// Note: This method is currently unused since the IPC server routes messages
+// directly through IPCHandler. It's kept for potential future use with channel-based IPC.
 func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
 	switch m := msg.(type) {
 	case *ipc.StepDoneMessage:
-		return o.handleStepDone(ctx, m)
+		return o.HandleStepDone(ctx, m)
 	case *ipc.GetPromptMessage:
 		return o.handleGetPrompt(ctx, m)
 	case *ipc.ApprovalMessage:
-		return o.handleApproval(ctx, m)
+		return o.HandleApproval(ctx, m)
 	default:
 		o.logger.Warn("unknown IPC message type", "type", fmt.Sprintf("%T", msg))
 		return nil
 	}
 }
 
-// handleStepDone processes a meow done message from an agent.
-func (o *Orchestrator) handleStepDone(ctx context.Context, msg *ipc.StepDoneMessage) error {
-	// Lock to prevent race with async kill operations
+// HandleStepDone processes a meow done message from an agent.
+// Thread-safe: acquires wfMu before any state changes.
+// Called by IPCHandler - this is the ONLY code path for step completion.
+func (o *Orchestrator) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessage) error {
 	o.wfMu.Lock()
 	defer o.wfMu.Unlock()
 
@@ -455,14 +448,31 @@ func (o *Orchestrator) handleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
 	}
 
-	step, ok := wf.GetStep(msg.Step)
-	if !ok {
-		return fmt.Errorf("step %s not found in workflow %s", msg.Step, msg.Workflow)
+	var step *types.Step
+	var ok bool
+
+	// If step ID is provided, use it; otherwise find the running step for this agent
+	if msg.Step != "" {
+		step, ok = wf.GetStep(msg.Step)
+		if !ok {
+			return fmt.Errorf("step %s not found in workflow %s", msg.Step, msg.Workflow)
+		}
+	} else {
+		// Find the running agent step for this agent
+		step = wf.GetRunningStepForAgent(msg.Agent)
+		if step == nil {
+			return fmt.Errorf("no running step found for agent: %s", msg.Agent)
+		}
 	}
 
 	// Validate step is in running state
 	if step.Status != types.StepStatusRunning {
-		return fmt.Errorf("step %s is not running (status: %s)", msg.Step, step.Status)
+		return fmt.Errorf("step %s is not running (status: %s)", step.ID, step.Status)
+	}
+
+	// Validate agent matches
+	if step.Agent != nil && step.Agent.Agent != msg.Agent {
+		return fmt.Errorf("step %s is not assigned to agent %s", step.ID, msg.Agent)
 	}
 
 	// Transition to completing to prevent race with stop hook
@@ -472,11 +482,21 @@ func (o *Orchestrator) handleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 
 	// Validate outputs if defined
 	if step.Agent != nil && len(step.Agent.Outputs) > 0 {
-		if err := o.validateOutputs(step, msg.Outputs); err != nil {
+		agentWorkdir := ""
+		if o.agents != nil {
+			if mgr, ok := o.agents.(*TmuxAgentManager); ok {
+				agentWorkdir = mgr.GetWorkdir(msg.Agent)
+			}
+		}
+		errs := ValidateAgentOutputs(msg.Outputs, step.Agent.Outputs, agentWorkdir)
+		if len(errs) > 0 {
 			// Validation failed - keep step running so agent can retry
 			step.Status = types.StepStatusRunning
-			o.logger.Warn("output validation failed", "step", step.ID, "error", err)
-			return o.store.Save(ctx, wf)
+			o.logger.Warn("output validation failed", "step", step.ID, "errors", errs)
+			if saveErr := o.store.Save(ctx, wf); saveErr != nil {
+				o.logger.Error("failed to save workflow after validation failure", "error", saveErr)
+			}
+			return fmt.Errorf("output validation failed: %v", errs)
 		}
 	}
 
@@ -516,8 +536,13 @@ func (o *Orchestrator) handleGetPrompt(ctx context.Context, msg *ipc.GetPromptMe
 	return nil
 }
 
-// handleApproval processes a gate approval/rejection.
-func (o *Orchestrator) handleApproval(ctx context.Context, msg *ipc.ApprovalMessage) error {
+// HandleApproval processes a gate approval/rejection.
+// Thread-safe: acquires wfMu before any state changes.
+// Called by IPCHandler - this is the ONLY code path for approval handling.
+func (o *Orchestrator) HandleApproval(ctx context.Context, msg *ipc.ApprovalMessage) error {
+	o.wfMu.Lock()
+	defer o.wfMu.Unlock()
+
 	wf, err := o.store.Get(ctx, msg.Workflow)
 	if err != nil {
 		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)

@@ -196,8 +196,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Create IPC handler
-	ipcHandler := orchestrator.NewIPCHandler(store, agentManager, logger)
+	// Create IPC handler (with orchestrator reference for thread-safe state mutations)
+	ipcHandler := orchestrator.NewIPCHandler(orch, store, agentManager, logger)
 
 	// Start IPC server
 	ipcServer := ipc.NewServer(workflowID, ipcHandler, logger)

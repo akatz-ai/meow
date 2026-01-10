@@ -11,19 +11,25 @@ import (
 )
 
 // IPCHandler implements ipc.Handler for the orchestrator.
+// It delegates all state-mutating operations to the Orchestrator to ensure
+// proper mutex coordination and avoid race conditions.
 type IPCHandler struct {
-	store       WorkflowStore
-	agents      *TmuxAgentManager
+	orch        *Orchestrator     // Reference to orchestrator for state mutations
+	store       WorkflowStore     // Read-only access for queries
+	agents      *TmuxAgentManager // For agent workdir lookups
 	eventRouter *EventRouter
 	logger      *slog.Logger
 }
 
 // NewIPCHandler creates a new IPC handler.
-func NewIPCHandler(store WorkflowStore, agents *TmuxAgentManager, logger *slog.Logger) *IPCHandler {
+// The orchestrator reference is used for all state-mutating operations (HandleStepDone,
+// HandleApproval) to ensure proper mutex coordination.
+func NewIPCHandler(orch *Orchestrator, store WorkflowStore, agents *TmuxAgentManager, logger *slog.Logger) *IPCHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &IPCHandler{
+		orch:        orch,
 		store:       store,
 		agents:      agents,
 		eventRouter: NewEventRouter(logger),
@@ -37,107 +43,20 @@ func (h *IPCHandler) EventRouter() *EventRouter {
 }
 
 // HandleStepDone processes a step completion signal.
+// Delegates to Orchestrator.HandleStepDone for thread-safe state mutation.
 func (h *IPCHandler) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessage) any {
 	h.logger.Info("handling step_done", "workflow", msg.Workflow, "agent", msg.Agent, "step", msg.Step)
 
-	wf, err := h.store.Get(ctx, msg.Workflow)
+	// Delegate to orchestrator (which has the mutex)
+	err := h.orch.HandleStepDone(ctx, msg)
 	if err != nil {
-		h.logger.Error("workflow not found", "workflow", msg.Workflow, "error", err)
+		h.logger.Error("step_done failed", "error", err)
 		return &ipc.ErrorMessage{
 			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("workflow not found: %s", msg.Workflow),
+			Message: err.Error(),
 		}
 	}
 
-	var step *types.Step
-	var ok bool
-
-	// If step ID is provided, use it; otherwise find the running step for this agent
-	if msg.Step != "" {
-		step, ok = wf.GetStep(msg.Step)
-		if !ok {
-			h.logger.Error("step not found", "step", msg.Step)
-			return &ipc.ErrorMessage{
-				Type:    ipc.MsgError,
-				Message: fmt.Sprintf("step not found: %s", msg.Step),
-			}
-		}
-	} else {
-		// Find the running agent step for this agent
-		step = wf.GetRunningStepForAgent(msg.Agent)
-		if step == nil {
-			h.logger.Error("no running step found for agent", "agent", msg.Agent)
-			return &ipc.ErrorMessage{
-				Type:    ipc.MsgError,
-				Message: fmt.Sprintf("no running step found for agent: %s", msg.Agent),
-			}
-		}
-	}
-
-	// Validate step is in running state
-	if step.Status != types.StepStatusRunning {
-		h.logger.Warn("step not running", "step", step.ID, "status", step.Status)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("step %s is not running (status: %s)", step.ID, step.Status),
-		}
-	}
-
-	// Validate agent matches
-	if step.Agent != nil && step.Agent.Agent != msg.Agent {
-		h.logger.Warn("agent mismatch", "expected", step.Agent.Agent, "got", msg.Agent)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("step %s is not assigned to agent %s", step.ID, msg.Agent),
-		}
-	}
-
-	// Transition to completing
-	if err := step.SetCompleting(); err != nil {
-		h.logger.Error("failed to set completing", "error", err)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("failed to transition step: %v", err),
-		}
-	}
-
-	// Validate outputs if defined
-	if step.Agent != nil && len(step.Agent.Outputs) > 0 {
-		agentWorkdir := h.agents.GetWorkdir(msg.Agent)
-		errs := ValidateAgentOutputs(msg.Outputs, step.Agent.Outputs, agentWorkdir)
-		if len(errs) > 0 {
-			// Validation failed - keep step running so agent can retry
-			step.Status = types.StepStatusRunning
-			h.logger.Warn("output validation failed", "step", step.ID, "errors", errs)
-			if err := h.store.Save(ctx, wf); err != nil {
-				h.logger.Error("failed to save workflow", "error", err)
-			}
-			return &ipc.ErrorMessage{
-				Type:    ipc.MsgError,
-				Message: fmt.Sprintf("output validation failed: %v", errs),
-			}
-		}
-	}
-
-	// Mark step complete
-	if err := step.Complete(msg.Outputs); err != nil {
-		h.logger.Error("failed to complete step", "error", err)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("failed to complete step: %v", err),
-		}
-	}
-
-	// Save workflow
-	if err := h.store.Save(ctx, wf); err != nil {
-		h.logger.Error("failed to save workflow", "error", err)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("failed to save workflow: %v", err),
-		}
-	}
-
-	h.logger.Info("step completed", "step", step.ID)
 	return &ipc.AckMessage{
 		Type:    ipc.MsgAck,
 		Success: true,
@@ -236,43 +155,17 @@ func (h *IPCHandler) HandleGetSessionID(ctx context.Context, msg *ipc.GetSession
 }
 
 // HandleApproval processes a human approval/rejection signal.
+// Delegates to Orchestrator.HandleApproval for thread-safe state mutation.
 func (h *IPCHandler) HandleApproval(ctx context.Context, msg *ipc.ApprovalMessage) any {
 	h.logger.Info("handling approval", "workflow", msg.Workflow, "gate", msg.GateID, "approved", msg.Approved)
 
-	wf, err := h.store.Get(ctx, msg.Workflow)
+	// Delegate to orchestrator (which has the mutex)
+	err := h.orch.HandleApproval(ctx, msg)
 	if err != nil {
+		h.logger.Error("approval failed", "error", err)
 		return &ipc.ErrorMessage{
 			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("workflow not found: %s", msg.Workflow),
-		}
-	}
-
-	step, ok := wf.GetStep(msg.GateID)
-	if !ok {
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("gate step not found: %s", msg.GateID),
-		}
-	}
-
-	if step.Status != types.StepStatusRunning {
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("gate step is not running: %s", step.Status),
-		}
-	}
-
-	// Set output for branch condition to check
-	if step.Outputs == nil {
-		step.Outputs = make(map[string]any)
-	}
-	step.Outputs["approved"] = msg.Approved
-	step.Outputs["notes"] = msg.Notes
-
-	if err := h.store.Save(ctx, wf); err != nil {
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: fmt.Sprintf("failed to save workflow: %v", err),
+			Message: err.Error(),
 		}
 	}
 

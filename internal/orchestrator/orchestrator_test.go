@@ -533,9 +533,9 @@ func TestOrchestrator_HandleStepDone(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := orch.handleStepDone(ctx, msg)
+	err := orch.HandleStepDone(ctx, msg)
 	if err != nil {
-		t.Fatalf("handleStepDone error = %v", err)
+		t.Fatalf("HandleStepDone error = %v", err)
 	}
 
 	// Step should now be done
@@ -555,6 +555,14 @@ func TestOrchestrator_OutputValidation(t *testing.T) {
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
+
+	// Create a temp file for file_path validation
+	tmpFile, err := os.CreateTemp("", "test-output-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
 
 	// Create workflow with agent step requiring outputs
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
@@ -582,35 +590,39 @@ func TestOrchestrator_OutputValidation(t *testing.T) {
 	msg := &ipc.StepDoneMessage{
 		Type:     ipc.MsgStepDone,
 		Workflow: wf.ID,
+		Agent:    "test-agent",
 		Step:     "agent-step",
 		Outputs:  map[string]any{"count": 42}, // Missing required file_path
 	}
 
 	ctx := context.Background()
-	err := orch.handleStepDone(ctx, msg)
-	if err != nil {
-		t.Fatalf("handleStepDone error = %v", err)
+	err = orch.HandleStepDone(ctx, msg)
+	// Validation failure returns error now
+	if err == nil {
+		t.Fatal("Expected validation error for missing required output")
 	}
 
 	// Step should still be running (validation failed)
-	if wf.Steps["agent-step"].Status != types.StepStatusRunning {
-		t.Errorf("Step status = %v, want %v (validation should fail)", wf.Steps["agent-step"].Status, types.StepStatusRunning)
+	step, _ := store.workflows[wf.ID].GetStep("agent-step")
+	if step.Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want %v (validation should fail)", step.Status, types.StepStatusRunning)
 	}
 
-	// Now provide valid outputs
+	// Now provide valid outputs with actual existing file
 	msg.Outputs = map[string]any{
-		"file_path": "/path/to/file.txt",
+		"file_path": tmpFile.Name(),
 		"count":     42,
 	}
 
-	err = orch.handleStepDone(ctx, msg)
+	err = orch.HandleStepDone(ctx, msg)
 	if err != nil {
-		t.Fatalf("handleStepDone error = %v", err)
+		t.Fatalf("HandleStepDone error = %v", err)
 	}
 
 	// Step should now be done
-	if wf.Steps["agent-step"].Status != types.StepStatusDone {
-		t.Errorf("Step status = %v, want %v", wf.Steps["agent-step"].Status, types.StepStatusDone)
+	step, _ = store.workflows[wf.ID].GetStep("agent-step")
+	if step.Status != types.StepStatusDone {
+		t.Errorf("Step status = %v, want %v", step.Status, types.StepStatusDone)
 	}
 }
 
@@ -733,60 +745,185 @@ func TestOrchestrator_SpawnAndKill(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_IPCChannelReceivesMessages(t *testing.T) {
+// TestOrchestrator_ConcurrentStepCompletion tests that multiple concurrent
+// HandleStepDone calls do not result in lost updates. This is the critical test
+// for the race condition fix (meow-ilr).
+func TestOrchestrator_ConcurrentStepCompletion(t *testing.T) {
 	store := newMockWorkflowStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	orch := New(testConfig(), store, agents, shell, expander, logger)
-
-	// Get the IPC channel
-	ipcChan := orch.IPCChannel()
-	if ipcChan == nil {
-		t.Fatal("IPCChannel() returned nil")
-	}
-
-	// Create workflow with running agent step
+	// Create workflow with 3 running agent steps (each assigned to different agent)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
 	now := time.Now()
-	wf.Steps["agent-step"] = &types.Step{
-		ID:        "agent-step",
-		Executor:  types.ExecutorAgent,
-		Status:    types.StepStatusRunning,
-		StartedAt: &now,
-		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Work"},
+
+	for i := 1; i <= 3; i++ {
+		stepID := "agent-step-" + string(rune('0'+i))
+		agentID := "agent-" + string(rune('0'+i))
+		wf.Steps[stepID] = &types.Step{
+			ID:        stepID,
+			Executor:  types.ExecutorAgent,
+			Status:    types.StepStatusRunning,
+			StartedAt: &now,
+			Agent:     &types.AgentConfig{Agent: agentID, Prompt: "Work"},
+		}
 	}
 	store.workflows[wf.ID] = wf
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+
+	// Launch 3 goroutines calling HandleStepDone simultaneously
+	var wg sync.WaitGroup
+	errors := make(chan error, 3)
+
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			stepID := "agent-step-" + string(rune('0'+idx))
+			agentID := "agent-" + string(rune('0'+idx))
+			msg := &ipc.StepDoneMessage{
+				Type:     ipc.MsgStepDone,
+				Workflow: wf.ID,
+				Agent:    agentID,
+				Step:     stepID,
+				Outputs:  map[string]any{"result": idx},
+			}
+			if err := orch.HandleStepDone(ctx, msg); err != nil {
+				errors <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Errorf("HandleStepDone error: %v", err)
+	}
+
+	// Reload workflow to get final state
+	finalWf, _ := store.Get(ctx, wf.ID)
+
+	// Verify all 3 completions are recorded (no lost updates)
+	doneCount := 0
+	for stepID, step := range finalWf.Steps {
+		if step.Status == types.StepStatusDone {
+			doneCount++
+			// Verify outputs are captured correctly
+			if step.Outputs == nil {
+				t.Errorf("Step %s has no outputs", stepID)
+			}
+		}
+	}
+
+	if doneCount != 3 {
+		t.Errorf("Expected 3 completed steps, got %d (lost updates detected!)", doneCount)
+		for stepID, step := range finalWf.Steps {
+			t.Logf("  %s: status=%s", stepID, step.Status)
+		}
+	}
+}
+
+// TestOrchestrator_ConcurrentStepCompletionWithOrchTick tests that HandleStepDone
+// and the orchestrator tick don't race with each other.
+func TestOrchestrator_ConcurrentStepCompletionWithOrchTick(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a mix of pending and running steps
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	now := time.Now()
+
+	// 2 running agent steps
+	for i := 1; i <= 2; i++ {
+		stepID := "running-" + string(rune('0'+i))
+		agentID := "agent-" + string(rune('0'+i))
+		wf.Steps[stepID] = &types.Step{
+			ID:        stepID,
+			Executor:  types.ExecutorAgent,
+			Status:    types.StepStatusRunning,
+			StartedAt: &now,
+			Agent:     &types.AgentConfig{Agent: agentID, Prompt: "Work"},
+		}
+	}
+
+	// 2 pending shell steps
+	for i := 1; i <= 2; i++ {
+		stepID := "pending-" + string(rune('0'+i))
+		wf.Steps[stepID] = &types.Step{
+			ID:       stepID,
+			Executor: types.ExecutorShell,
+			Status:   types.StepStatusPending,
+			Shell:    &types.ShellConfig{Command: "echo " + stepID},
+		}
+	}
+
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Start orchestrator in goroutine
-	done := make(chan error)
+	// Start orchestrator in background
+	orchDone := make(chan error, 1)
 	go func() {
-		done <- orch.Run(ctx)
+		orchDone <- orch.Run(ctx)
 	}()
 
-	// Wait a bit then send IPC message
+	// Give orchestrator time to process pending steps
 	time.Sleep(50 * time.Millisecond)
-	ipcChan <- &ipc.StepDoneMessage{
-		Type:     ipc.MsgStepDone,
-		Workflow: wf.ID,
-		Step:     "agent-step",
-		Outputs:  map[string]any{"done": true},
+
+	// Concurrently complete the agent steps while orchestrator is running
+	var wg sync.WaitGroup
+	for i := 1; i <= 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			stepID := "running-" + string(rune('0'+idx))
+			agentID := "agent-" + string(rune('0'+idx))
+			msg := &ipc.StepDoneMessage{
+				Type:     ipc.MsgStepDone,
+				Workflow: wf.ID,
+				Agent:    agentID,
+				Step:     stepID,
+				Outputs:  map[string]any{"done": true},
+			}
+			if err := orch.HandleStepDone(ctx, msg); err != nil {
+				t.Errorf("HandleStepDone error for %s: %v", stepID, err)
+			}
+		}(i)
 	}
 
-	// Wait for completion
-	err := <-done
-	if err != nil {
-		t.Errorf("Run() error = %v", err)
+	wg.Wait()
+
+	// Wait for orchestrator to complete
+	select {
+	case err := <-orchDone:
+		if err != nil && err != context.Canceled {
+			t.Errorf("Orchestrator error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Orchestrator did not complete in time")
 	}
 
-	// Step should be done
-	if wf.Steps["agent-step"].Status != types.StepStatusDone {
-		t.Errorf("Step status = %v, want done", wf.Steps["agent-step"].Status)
+	// Verify final state - all steps should be done
+	finalWf, _ := store.Get(ctx, wf.ID)
+	for stepID, step := range finalWf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("Step %s status = %v, want done", stepID, step.Status)
+		}
 	}
 }
