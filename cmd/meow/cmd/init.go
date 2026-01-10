@@ -127,9 +127,9 @@ setup_hooks = true
 		fmt.Println("  .claude/settings.json - Claude Code hooks")
 	}
 	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Create a workflow: meow run .meow/templates/simple.meow.toml")
+	fmt.Println("  1. Run a workflow:    meow run simple")
 	fmt.Println("  2. Check your task:   meow prime")
-	fmt.Println("  3. Complete it:       meow close <bead-id>")
+	fmt.Println("  3. Complete it:       meow done")
 
 	return nil
 }
