@@ -155,6 +155,8 @@ func (b *Baker) setStepConfig(step *types.Step, ts *Step) error {
 		return b.setExpandConfig(step, ts)
 	case types.ExecutorBranch:
 		return b.setBranchConfig(step, ts)
+	case types.ExecutorForeach:
+		return b.setForeachConfig(step, ts)
 	case types.ExecutorAgent:
 		return b.setAgentConfig(step, ts)
 	default:
@@ -306,6 +308,47 @@ func (b *Baker) setExpandConfig(step *types.Step, ts *Step) error {
 	step.Expand = &types.ExpandConfig{
 		Template:  template,
 		Variables: variables,
+	}
+	return nil
+}
+
+// setForeachConfig sets ForeachConfig for foreach executor steps.
+func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
+	items := ts.Items
+	var err error
+	items, err = b.VarContext.Substitute(items)
+	if err != nil {
+		return fmt.Errorf("substitute items: %w", err)
+	}
+
+	itemVar := ts.ItemVar
+	indexVar := ts.IndexVar
+	template := ts.Template
+
+	template, err = b.VarContext.Substitute(template)
+	if err != nil {
+		return fmt.Errorf("substitute template: %w", err)
+	}
+
+	// Substitute variable values
+	variables := make(map[string]string)
+	for k, v := range ts.Variables {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute variable %s: %w", k, err)
+		}
+		variables[k] = subV
+	}
+
+	step.Foreach = &types.ForeachConfig{
+		Items:         items,
+		ItemVar:       itemVar,
+		IndexVar:      indexVar,
+		Template:      template,
+		Variables:     variables,
+		Parallel:      ts.Parallel,
+		MaxConcurrent: ts.MaxConcurrent,
+		Join:          ts.Join,
 	}
 	return nil
 }

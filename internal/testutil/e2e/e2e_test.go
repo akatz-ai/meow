@@ -1361,3 +1361,455 @@ func TestE2E_CreateTestWorkflow(t *testing.T) {
 		t.Errorf("expected step1 status done, got %s", status)
 	}
 }
+
+// ===========================================================================
+// Foreach Executor Tests
+// ===========================================================================
+
+func TestE2E_ForeachBasicIteration(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Basic foreach with simple string array
+	template := `
+[main]
+name = "foreach-basic"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["alpha", "beta", "gamma"]'
+item_var = "item"
+template = ".per-item"
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'all iterations complete'"
+needs = ["iterate"]
+
+# Template expanded for each item
+[per-item]
+name = "per-item"
+internal = true
+
+[[per-item.steps]]
+id = "process"
+executor = "shell"
+command = "echo 'processing: {{item}}'"
+`
+	if err := h.WriteTemplate("foreach-basic.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-basic.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete, got:\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_ForeachWithIndexVar(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with both item_var and index_var
+	template := `
+[main]
+name = "foreach-index"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["first", "second", "third"]'
+item_var = "value"
+index_var = "idx"
+template = ".indexed-item"
+
+[[main.steps]]
+id = "complete"
+executor = "shell"
+command = "echo 'done'"
+needs = ["iterate"]
+
+[indexed-item]
+name = "indexed-item"
+internal = true
+
+[[indexed-item.steps]]
+id = "show"
+executor = "shell"
+command = "echo 'index={{idx}} value={{value}}'"
+`
+	if err := h.WriteTemplate("foreach-index.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-index.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachEmptyArray(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with empty array - should complete immediately
+	template := `
+[main]
+name = "foreach-empty"
+
+[[main.steps]]
+id = "iterate-empty"
+executor = "foreach"
+items = '[]'
+item_var = "x"
+template = ".never-run"
+
+[[main.steps]]
+id = "after"
+executor = "shell"
+command = "echo 'empty iteration skipped'"
+needs = ["iterate-empty"]
+
+[never-run]
+name = "never-run"
+internal = true
+
+[[never-run.steps]]
+id = "fail"
+executor = "shell"
+command = "exit 1"
+`
+	if err := h.WriteTemplate("foreach-empty.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-empty.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Should complete because empty array means no iterations
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete with empty foreach")
+	}
+}
+
+func TestE2E_ForeachSequentialMode(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with parallel = false - iterations run sequentially
+	template := `
+[main]
+name = "foreach-sequential"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["a", "b", "c"]'
+item_var = "letter"
+template = ".seq-item"
+parallel = false
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'sequential done'"
+needs = ["iterate"]
+
+[seq-item]
+name = "seq-item"
+internal = true
+
+[[seq-item.steps]]
+id = "step"
+executor = "shell"
+command = "echo 'letter: {{letter}}' && sleep 0.05"
+`
+	if err := h.WriteTemplate("foreach-seq.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-seq.toml"))
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Sequential should take at least 150ms (3 iterations * 50ms each)
+	// Allow some tolerance for process overhead
+	if duration < 100*time.Millisecond {
+		t.Errorf("sequential mode too fast: %v (expected >= 100ms)", duration)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachParallelMode(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with parallel = true (default) - iterations run in parallel
+	template := `
+[main]
+name = "foreach-parallel"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["x", "y", "z"]'
+item_var = "val"
+template = ".par-item"
+parallel = true
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'parallel done'"
+needs = ["iterate"]
+
+[par-item]
+name = "par-item"
+internal = true
+
+[[par-item.steps]]
+id = "step"
+executor = "shell"
+command = "echo 'val: {{val}}' && sleep 0.1"
+`
+	if err := h.WriteTemplate("foreach-par.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-par.toml"))
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Parallel should complete faster than sequential (3 * 100ms = 300ms)
+	// Should take roughly 100ms + overhead (shell spawning adds ~100ms per iteration)
+	if duration > 1*time.Second {
+		t.Errorf("parallel mode too slow: %v (expected < 1s)", duration)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachNestedObjectIteration(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with object items - access nested fields
+	template := `
+[main]
+name = "foreach-objects"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '[{"name": "task-1", "priority": 1}, {"name": "task-2", "priority": 2}]'
+item_var = "task"
+template = ".process-task"
+
+[[main.steps]]
+id = "complete"
+executor = "shell"
+command = "echo 'all tasks processed'"
+needs = ["iterate"]
+
+[process-task]
+name = "process-task"
+internal = true
+
+[[process-task.steps]]
+id = "work"
+executor = "shell"
+command = "echo 'processing {{task.name}} with priority {{task.priority}}'"
+`
+	if err := h.WriteTemplate("foreach-objects.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-objects.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachWithOutputFromPreviousStep(t *testing.T) {
+	t.Skip("Foreach with items from step outputs not yet implemented - requires step output resolution in ExecuteForeach")
+
+	h := e2e.NewHarness(t)
+
+	// Foreach with items sourced from previous step output
+	template := `
+[main]
+name = "foreach-output-items"
+
+[[main.steps]]
+id = "generate"
+executor = "shell"
+command = "echo '[\"item-a\", \"item-b\"]'"
+[main.steps.shell_outputs]
+items = { source = "stdout" }
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = "{{generate.outputs.items}}"
+item_var = "item"
+template = ".process-item"
+needs = ["generate"]
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'dynamic iteration complete'"
+needs = ["iterate"]
+
+[process-item]
+name = "process-item"
+internal = true
+
+[[process-item.steps]]
+id = "handle"
+executor = "shell"
+command = "echo 'handling: {{item}}'"
+`
+	if err := h.WriteTemplate("foreach-output.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-output.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachWithVariables(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach passing additional variables to template
+	template := `
+[main]
+name = "foreach-vars"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["one", "two"]'
+item_var = "num"
+template = ".with-vars"
+[main.steps.variables]
+prefix = "test"
+suffix = "done"
+
+[[main.steps]]
+id = "finish"
+executor = "shell"
+command = "echo 'finished'"
+needs = ["iterate"]
+
+[with-vars]
+name = "with-vars"
+internal = true
+
+[with-vars.variables]
+prefix = { required = true }
+suffix = { required = true }
+
+[[with-vars.steps]]
+id = "show"
+executor = "shell"
+command = "echo '{{prefix}}-{{num}}-{{suffix}}'"
+`
+	if err := h.WriteTemplate("foreach-vars.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-vars.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}
+
+func TestE2E_ForeachWithMultiStepTemplate(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Foreach with a multi-step template that has internal dependencies
+	template := `
+[main]
+name = "foreach-multi-step"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["apple", "banana"]'
+item_var = "fruit"
+template = ".multi-step"
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'all fruits processed'"
+needs = ["iterate"]
+
+[multi-step]
+name = "multi-step"
+internal = true
+
+[[multi-step.steps]]
+id = "prepare"
+executor = "shell"
+command = "echo 'preparing {{fruit}}'"
+
+[[multi-step.steps]]
+id = "process"
+executor = "shell"
+command = "echo 'processing {{fruit}}'"
+needs = ["prepare"]
+
+[[multi-step.steps]]
+id = "cleanup"
+executor = "shell"
+command = "echo 'cleanup {{fruit}}'"
+needs = ["process"]
+`
+	if err := h.WriteTemplate("foreach-multi.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-multi.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+}

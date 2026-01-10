@@ -321,6 +321,26 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		s.OnTimeout = target
 	}
 
+	// Parse foreach executor fields
+	if v, ok := data["items"].(string); ok {
+		s.Items = v
+	}
+	if v, ok := data["item_var"].(string); ok {
+		s.ItemVar = v
+	}
+	if v, ok := data["index_var"].(string); ok {
+		s.IndexVar = v
+	}
+	if v, ok := data["parallel"].(bool); ok {
+		s.Parallel = &v
+	}
+	if v, ok := data["max_concurrent"].(int64); ok {
+		s.MaxConcurrent = int(v)
+	}
+	if v, ok := data["join"].(bool); ok {
+		s.Join = &v
+	}
+
 	// Parse agent output definitions (new format: map of field -> definition)
 	if outputs, ok := data["outputs"].(map[string]any); ok {
 		// Check if this is new format (map of definitions) or legacy format (required/optional arrays)
@@ -613,6 +633,26 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 			return nil, fmt.Errorf("on_timeout: %w", err)
 		}
 		step.OnTimeout = target
+	}
+
+	// Parse foreach executor fields
+	if v, ok := data["items"].(string); ok {
+		step.Items = v
+	}
+	if v, ok := data["item_var"].(string); ok {
+		step.ItemVar = v
+	}
+	if v, ok := data["index_var"].(string); ok {
+		step.IndexVar = v
+	}
+	if v, ok := data["parallel"].(bool); ok {
+		step.Parallel = &v
+	}
+	if v, ok := data["max_concurrent"].(int64); ok {
+		step.MaxConcurrent = int(v)
+	}
+	if v, ok := data["join"].(bool); ok {
+		step.Join = &v
 	}
 
 	// Parse agent output definitions

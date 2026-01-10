@@ -1343,13 +1343,13 @@ task_description = "{{task}}"
 	if step.Template != ".worker-task" {
 		t.Errorf("expected template '.worker-task', got %q", step.Template)
 	}
-	if !step.Parallel {
+	if step.Parallel == nil || !*step.Parallel {
 		t.Error("expected parallel to be true")
 	}
 	if step.MaxConcurrent != 5 {
 		t.Errorf("expected max_concurrent 5, got %d", step.MaxConcurrent)
 	}
-	if !step.Join {
+	if step.Join == nil || !*step.Join {
 		t.Error("expected join to be true")
 	}
 	if step.Variables["agent_id"] != "worker-{{i}}" {

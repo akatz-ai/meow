@@ -18,14 +18,22 @@ type fileTemplateLoader struct {
 }
 
 // Load implements TemplateLoader by using the FileTemplateExpander.
-func (l *fileTemplateLoader) Load(ctx context.Context, ref string) ([]*types.Step, error) {
-	// Create a temporary expand config
+// Templates are loaded with DeferUndefinedVariables=true so that foreach
+// can substitute item_var/index_var after cloning for each iteration.
+func (l *fileTemplateLoader) Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error) {
+	// Create expand config with variables to satisfy required template variables
 	cfg := &types.ExpandConfig{
-		Template: ref,
+		Template:  ref,
+		Variables: variables,
+	}
+
+	// Use ExpandWithOptions to defer undefined variables for later substitution
+	opts := &ExpandOptions{
+		DeferUndefinedVariables: true,
 	}
 
 	// Use a temporary parent step ID - we'll rename them later
-	result, err := l.expander.Expand(ctx, cfg, "_tmp", l.workflowID, l.sourceModule)
+	result, err := l.expander.ExpandWithOptions(ctx, cfg, "_tmp", l.workflowID, l.sourceModule, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +123,8 @@ func ExecuteForeach(
 		}, nil
 	}
 
-	// Load the template once
-	templateSteps, err := loader.Load(ctx, cfg.Template)
+	// Load the template once, passing the foreach config's variables
+	templateSteps, err := loader.Load(ctx, cfg.Template, cfg.Variables)
 	if err != nil {
 		return nil, &types.StepError{
 			Message: fmt.Sprintf("failed to load template %s: %v", cfg.Template, err),
@@ -287,17 +295,20 @@ func addFlattenedFields(vars map[string]string, prefix string, obj map[string]an
 
 // prefixForeachNeeds updates dependency references for foreach-expanded steps.
 // - Internal template dependencies get the iteration prefix
-// - Steps without internal deps depend on the foreach step itself
+// - External dependencies are kept as-is
 // - In sequential mode, first step of each iteration depends on last step of prev iteration
+// NOTE: Child steps do NOT depend on the foreach step itself - the foreach step stays
+// "running" until all children complete (implicit join), so adding it as a dependency
+// would create a circular wait.
 func prefixForeachNeeds(
 	needs []string,
 	iterationPrefix string, // e.g., "parallel-workers.0"
-	foreachStepID string, // e.g., "parallel-workers"
+	foreachStepID string, // e.g., "parallel-workers" (unused now but kept for compatibility)
 	templateStepIDs map[string]bool,
 	prevIterationLastStepID string,
 	addSequentialDep bool,
 ) []string {
-	result := make([]string, 0, len(needs)+2)
+	result := make([]string, 0, len(needs)+1)
 
 	hasInternalDep := false
 	for _, need := range needs {
@@ -311,12 +322,8 @@ func prefixForeachNeeds(
 		}
 	}
 
-	// Steps without internal dependencies implicitly depend on the foreach step
-	if !hasInternalDep {
-		result = append([]string{foreachStepID}, result...)
-	}
-
 	// In sequential mode, add dependency on previous iteration's last step
+	// This is the only case where we add dependencies - to chain iterations
 	if addSequentialDep && prevIterationLastStepID != "" {
 		// Only add if this step has no internal deps (i.e., it's a "first" step)
 		if !hasInternalDep {

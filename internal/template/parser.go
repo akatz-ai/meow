@@ -143,9 +143,9 @@ type Step struct {
 	Items         string `toml:"items,omitempty"`          // JSON array expression (may contain variable refs)
 	ItemVar       string `toml:"item_var,omitempty"`       // Variable name for current item
 	IndexVar      string `toml:"index_var,omitempty"`      // Variable name for index (optional)
-	Parallel      bool   `toml:"parallel,omitempty"`       // Run iterations in parallel (default true)
+	Parallel      *bool  `toml:"parallel,omitempty"`       // Run iterations in parallel (default true)
 	MaxConcurrent int    `toml:"max_concurrent,omitempty"` // Limit concurrent executions
-	Join          bool   `toml:"join,omitempty"`           // Wait for all iterations (default true)
+	Join          *bool  `toml:"join,omitempty"`           // Wait for all iterations (default true)
 	// Template and Variables fields already defined above for expand executor
 
 	// Agent output definitions (for agent executor)
@@ -342,9 +342,9 @@ type InlineStep struct {
 	Items         string `toml:"items,omitempty"`
 	ItemVar       string `toml:"item_var,omitempty"`
 	IndexVar      string `toml:"index_var,omitempty"`
-	Parallel      bool   `toml:"parallel,omitempty"`
+	Parallel      *bool  `toml:"parallel,omitempty"`
 	MaxConcurrent int    `toml:"max_concurrent,omitempty"`
-	Join          bool   `toml:"join,omitempty"`
+	Join          *bool  `toml:"join,omitempty"`
 	// Template and Variables fields already defined above for expand executor
 
 	// Agent outputs

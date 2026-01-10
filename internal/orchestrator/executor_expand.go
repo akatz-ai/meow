@@ -16,7 +16,8 @@ type TemplateLoader interface {
 	// - "main" - same file, workflow named "main"
 	// - "file#workflow" - external file, specific workflow
 	// - "file" - external file, workflow named "main"
-	Load(ctx context.Context, ref string) ([]*types.Step, error)
+	// The variables parameter allows passing values to satisfy required template variables.
+	Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error)
 }
 
 // ExpansionLimits defines resource limits for expansion.
@@ -80,8 +81,8 @@ func ExecuteExpand(
 		}
 	}
 
-	// Load the template
-	templateSteps, err := loader.Load(ctx, cfg.Template)
+	// Load the template, passing any variables from the expand config
+	templateSteps, err := loader.Load(ctx, cfg.Template, cfg.Variables)
 	if err != nil {
 		return nil, &types.StepError{
 			Message: fmt.Sprintf("failed to load template %s: %v", cfg.Template, err),

@@ -1006,3 +1006,60 @@ func TestBakeWorkflow_DependenciesPreserved(t *testing.T) {
 		t.Errorf("expected dependency to be preserved, got %v", result.Steps[0].Needs)
 	}
 }
+
+func TestBaker_ForeachConfig(t *testing.T) {
+	tomlStr := `
+[main]
+name = "test-foreach"
+
+[[main.steps]]
+id = "iterate"
+executor = "foreach"
+items = '["a", "b", "c"]'
+item_var = "item"
+template = ".worker"
+`
+	m, err := ParseModuleString(tomlStr, "test.toml")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	wf := m.GetWorkflow("main")
+	if wf == nil {
+		t.Fatal("main workflow not found")
+	}
+
+	t.Logf("Workflow has %d steps", len(wf.Steps))
+	for _, s := range wf.Steps {
+		t.Logf("Step id=%q executor=%q items=%q item_var=%q template=%q",
+			s.ID, s.Executor, s.Items, s.ItemVar, s.Template)
+	}
+
+	b := NewBaker("test-wf")
+	result, err := b.BakeWorkflow(wf, nil)
+	if err != nil {
+		t.Fatalf("bake error: %v", err)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(result.Steps))
+	}
+
+	step := result.Steps[0]
+	t.Logf("Baked step: id=%q executor=%q", step.ID, step.Executor)
+	if step.Foreach == nil {
+		t.Fatal("foreach config is nil")
+	}
+	t.Logf("Foreach: items=%q item_var=%q template=%q",
+		step.Foreach.Items, step.Foreach.ItemVar, step.Foreach.Template)
+
+	if step.Foreach.Items != `["a", "b", "c"]` {
+		t.Errorf("expected items '[\"a\", \"b\", \"c\"]', got %q", step.Foreach.Items)
+	}
+	if step.Foreach.ItemVar != "item" {
+		t.Errorf("expected item_var 'item', got %q", step.Foreach.ItemVar)
+	}
+	if step.Foreach.Template != ".worker" {
+		t.Errorf("expected template '.worker', got %q", step.Foreach.Template)
+	}
+}

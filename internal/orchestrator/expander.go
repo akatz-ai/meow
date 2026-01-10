@@ -17,6 +17,13 @@ type ExpandResult struct {
 	WorkflowID string
 }
 
+// ExpandOptions configures template expansion behavior.
+type ExpandOptions struct {
+	// DeferUndefinedVariables leaves undefined {{variable}} placeholders as-is
+	// instead of causing an error. Used by foreach to defer item_var substitution.
+	DeferUndefinedVariables bool
+}
+
 // FileTemplateExpander expands templates using the template package.
 // It loads templates from the filesystem and bakes them into steps.
 type FileTemplateExpander struct {
@@ -35,6 +42,11 @@ func NewFileTemplateExpander(baseDir string) *FileTemplateExpander {
 // The caller is responsible for inserting the steps into the workflow.
 // sourceModule is the path to the source module file, used to resolve local workflow references.
 func (e *FileTemplateExpander) Expand(ctx context.Context, config *types.ExpandConfig, parentStepID string, parentWorkflowID string, sourceModule string) (*ExpandResult, error) {
+	return e.ExpandWithOptions(ctx, config, parentStepID, parentWorkflowID, sourceModule, nil)
+}
+
+// ExpandWithOptions loads a template and bakes it into steps with configurable options.
+func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *types.ExpandConfig, parentStepID string, parentWorkflowID string, sourceModule string, opts *ExpandOptions) (*ExpandResult, error) {
 	if config == nil {
 		return nil, fmt.Errorf("expand config is nil")
 	}
@@ -134,6 +146,11 @@ func (e *FileTemplateExpander) Expand(ctx context.Context, config *types.ExpandC
 
 	// Create the baker
 	baker := template.NewBaker(workflowID)
+
+	// Apply options
+	if opts != nil && opts.DeferUndefinedVariables {
+		baker.VarContext.DeferUndefinedVariables = true
+	}
 
 	// Bake the workflow
 	result, err := baker.BakeWorkflow(workflow, config.Variables)

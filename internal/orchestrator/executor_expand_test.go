@@ -14,7 +14,7 @@ type mockTemplateLoader struct {
 	loadErr error
 }
 
-func (m *mockTemplateLoader) Load(ctx context.Context, ref string) ([]*types.Step, error) {
+func (m *mockTemplateLoader) Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error) {
 	if m.loadErr != nil {
 		return nil, m.loadErr
 	}

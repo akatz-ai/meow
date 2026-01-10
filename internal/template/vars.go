@@ -40,6 +40,13 @@ type VarContext struct {
 	// are left as-is for runtime resolution instead of causing an error.
 	// This is useful during template baking where step outputs aren't yet available.
 	DeferStepOutputs bool
+
+	// DeferUndefinedVariables controls behavior when variables are undefined.
+	// When true, undefined variable references ({{varname}}) are left as-is
+	// for later substitution instead of causing an error.
+	// This is useful for foreach templates where item_var/index_var are
+	// substituted at runtime rather than bake time.
+	DeferUndefinedVariables bool
 }
 
 // NewVarContext creates a new variable context with default builtins.
@@ -186,6 +193,10 @@ func (c *VarContext) resolve(path string) (any, error) {
 		return time.Now().Format("15:04:05"), nil
 	}
 
+	// If deferring undefined variables, return the sentinel error
+	if c.DeferUndefinedVariables {
+		return nil, errDeferred
+	}
 	return nil, fmt.Errorf("undefined variable: %s", root)
 }
 
