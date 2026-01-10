@@ -237,6 +237,29 @@ func (b *SimConfigBuilder) WithBehaviorSequence(pattern string, outputs []map[st
 	return b
 }
 
+// WithCrashBehavior adds a behavior that causes the simulator to crash (exit) with the specified exit code.
+// This is useful for testing crash detection and recovery scenarios.
+func (b *SimConfigBuilder) WithCrashBehavior(pattern string, exitCode int) *SimConfigBuilder {
+	behavior := Behavior{
+		Match: pattern,
+		Type:  "contains",
+		Action: Action{
+			Type:     ActionCrash,
+			ExitCode: exitCode,
+		},
+	}
+	b.config.Behaviors = append(b.config.Behaviors, behavior)
+	return b
+}
+
+// WithDefaultCrash sets the default action to crash with the specified exit code.
+// All prompts that don't match a specific behavior will cause a crash.
+func (b *SimConfigBuilder) WithDefaultCrash(exitCode int) *SimConfigBuilder {
+	b.config.Default.Behavior.Action.Type = ActionCrash
+	b.config.Default.Behavior.Action.ExitCode = exitCode
+	return b
+}
+
 // Build returns the constructed configuration.
 func (b *SimConfigBuilder) Build() SimTestConfig {
 	return b.config
