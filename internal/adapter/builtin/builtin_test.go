@@ -179,6 +179,49 @@ func TestEnsureExtracted(t *testing.T) {
 	if !strings.Contains(string(content), "name = \"claude\"") {
 		t.Error("config should be restored after re-extraction")
 	}
+
+	// Test missing event-translator.sh triggers re-extraction
+	scriptPath := filepath.Join(dir1, "event-translator.sh")
+	if err := os.Remove(scriptPath); err != nil {
+		t.Fatalf("failed to remove script: %v", err)
+	}
+
+	// Should re-extract because script is missing
+	dir4, err := EnsureExtracted("claude", cacheDir)
+	if err != nil {
+		t.Fatalf("re-extraction after script removal failed: %v", err)
+	}
+	if dir4 != dir1 {
+		t.Errorf("expected same directory after script re-extract: %q vs %q", dir1, dir4)
+	}
+
+	// Verify script was restored
+	scriptInfo, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("script should be restored: %v", err)
+	}
+	if scriptInfo.Mode()&0111 == 0 {
+		t.Error("restored script should be executable")
+	}
+
+	// Test corrupted event-translator.sh triggers re-extraction
+	if err := os.WriteFile(scriptPath, []byte("corrupted"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir5, err := EnsureExtracted("claude", cacheDir)
+	if err != nil {
+		t.Fatalf("re-extraction after script corruption failed: %v", err)
+	}
+	if dir5 != dir1 {
+		t.Errorf("expected same directory after corrupt script re-extract: %q vs %q", dir1, dir5)
+	}
+
+	// Verify script was restored with correct content
+	scriptContent, _ := os.ReadFile(scriptPath)
+	if !strings.Contains(string(scriptContent), "#!/bin/bash") {
+		t.Error("script should be restored with correct content")
+	}
 }
 
 func TestBuiltinAdapterNames(t *testing.T) {

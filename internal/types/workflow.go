@@ -171,13 +171,16 @@ func (w *Workflow) GetStepsForAgent(agentID string) []*Step {
 	return result
 }
 
-// GetRunningStepForAgent returns the running step for the given agent, if any.
+// GetRunningStepForAgent returns the active step for the given agent, if any.
+// This includes steps in both "running" and "completing" states, since a completing
+// step is still conceptually "active" (the orchestrator is processing its completion).
+// Callers should check the step.Status to determine which state it's in.
 func (w *Workflow) GetRunningStepForAgent(agentID string) *Step {
 	for _, step := range w.Steps {
 		if step.Executor == ExecutorAgent &&
 			step.Agent != nil &&
 			step.Agent.Agent == agentID &&
-			step.Status == StepStatusRunning {
+			(step.Status == StepStatusRunning || step.Status == StepStatusCompleting) {
 			return step
 		}
 	}
@@ -197,13 +200,15 @@ func (w *Workflow) GetNextReadyStepForAgent(agentID string) *Step {
 	return nil
 }
 
-// AgentIsIdle returns true if no step assigned to the agent is currently running.
+// AgentIsIdle returns true if no step assigned to the agent is currently running or completing.
+// The completing check prevents injecting a new prompt while the orchestrator is still
+// processing the previous step's completion (prevents race conditions).
 func (w *Workflow) AgentIsIdle(agentID string) bool {
 	for _, step := range w.Steps {
 		if step.Executor == ExecutorAgent &&
 			step.Agent != nil &&
 			step.Agent.Agent == agentID &&
-			step.Status == StepStatusRunning {
+			(step.Status == StepStatusRunning || step.Status == StepStatusCompleting) {
 			return false
 		}
 	}

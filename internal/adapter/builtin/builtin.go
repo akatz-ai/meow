@@ -75,21 +75,27 @@ func extractClaudeAdapter(destDir string) (string, error) {
 }
 
 // EnsureExtracted ensures the built-in adapter is extracted to the cache directory.
-// If already extracted, returns the existing path.
+// If already extracted and up-to-date, returns the existing path.
 // Cache directory is typically ~/.meow/cache/adapters/
 func EnsureExtracted(name, cacheDir string) (string, error) {
 	adapterDir := filepath.Join(cacheDir, name)
 	configPath := filepath.Join(adapterDir, "adapter.toml")
+	scriptPath := filepath.Join(adapterDir, "event-translator.sh")
 
-	// Check if already extracted
+	// Check if already extracted and up-to-date
+	// Must verify both adapter.toml and event-translator.sh to catch partial corruption
 	if _, err := os.Stat(configPath); err == nil {
-		// Already exists - verify it's not stale by checking embedded content matches
-		existingContent, err := os.ReadFile(configPath)
-		if err == nil && string(existingContent) == string(claudeAdapterTOML) {
+		configContent, configErr := os.ReadFile(configPath)
+		scriptContent, scriptErr := os.ReadFile(scriptPath)
+
+		// Both files must exist and match embedded content
+		if configErr == nil && scriptErr == nil &&
+			string(configContent) == string(claudeAdapterTOML) &&
+			string(scriptContent) == string(claudeEventTranslator) {
 			// Up to date, reuse
 			return adapterDir, nil
 		}
-		// Stale or unreadable - re-extract
+		// Stale, corrupted, or incomplete - re-extract
 	}
 
 	return ExtractAdapter(name, cacheDir)

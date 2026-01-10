@@ -226,6 +226,19 @@ func TestWorkflowAgentIsIdle(t *testing.T) {
 	if wf.AgentIsIdle("claude-1") {
 		t.Error("agent should not be idle (step running)")
 	}
+
+	// Critical: completing status should also make agent not idle
+	// This prevents injecting a new prompt while orchestrator is processing completion
+	wf.Steps["step1"].Status = StepStatusCompleting
+	if wf.AgentIsIdle("claude-1") {
+		t.Error("agent should not be idle (step completing)")
+	}
+
+	// Done status should make agent idle again
+	wf.Steps["step1"].Status = StepStatusDone
+	if !wf.AgentIsIdle("claude-1") {
+		t.Error("agent should be idle (step done)")
+	}
 }
 
 func TestWorkflowGetRunningStepForAgent(t *testing.T) {
@@ -249,5 +262,23 @@ func TestWorkflowGetRunningStepForAgent(t *testing.T) {
 	step = wf.GetRunningStepForAgent("claude-2")
 	if step != nil {
 		t.Error("should not find running step for claude-2")
+	}
+
+	// GetRunningStepForAgent should also return steps in completing status
+	// (the orchestrator is still processing the completion)
+	wf.Steps["step1"].Status = StepStatusCompleting
+	step = wf.GetRunningStepForAgent("claude-1")
+	if step == nil {
+		t.Error("should find completing step for claude-1")
+	}
+	if step.Status != StepStatusCompleting {
+		t.Errorf("expected completing status, got %s", step.Status)
+	}
+
+	// Done step should not be returned
+	wf.Steps["step1"].Status = StepStatusDone
+	step = wf.GetRunningStepForAgent("claude-1")
+	if step != nil {
+		t.Error("should not find done step")
 	}
 }
