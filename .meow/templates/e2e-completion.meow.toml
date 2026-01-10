@@ -1,0 +1,408 @@
+# ============================================================================
+# MEOW Workflow: E2E Simulator Completion
+# ============================================================================
+#
+# Completes the remaining E2E testing infrastructure work:
+#
+# Track 1: Simulator Completion (config.go, ipc.go)
+# Track 2: Test Framework (harness, helpers, adapter config)
+#
+# After merge: Unit tests
+#
+# ============================================================================
+
+[main]
+name = "e2e-completion"
+description = "Complete E2E testing infrastructure"
+
+cleanup = """
+echo "Cleaning up worktrees..."
+git worktree remove .meow/worktrees/sim-complete-track --force 2>/dev/null || true
+git worktree remove .meow/worktrees/test-framework-track --force 2>/dev/null || true
+echo "Cleanup complete"
+"""
+
+# ============================================================================
+# PHASE 1: Create Worktrees
+# ============================================================================
+
+[[main.steps]]
+id = "create-worktree-1"
+executor = "shell"
+description = "Create worktree for simulator completion"
+command = """
+set -e
+WORKTREE=".meow/worktrees/sim-complete-track"
+BRANCH="sim-complete-$(date +%s)"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+
+[[main.steps]]
+id = "create-worktree-2"
+executor = "shell"
+description = "Create worktree for test framework"
+needs = ["create-worktree-1"]
+command = """
+set -e
+WORKTREE=".meow/worktrees/test-framework-track"
+BRANCH="test-framework-$(date +%s)"
+git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
+echo "$BRANCH" > "$WORKTREE/.meow-branch"
+echo "$WORKTREE"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+
+# ============================================================================
+# PHASE 2: Parallel Tracks
+# ============================================================================
+
+# --- Track 1: Simulator Completion ---
+
+[[main.steps]]
+id = "spawn-agent-1"
+executor = "spawn"
+agent = "sim-complete"
+workdir = "{{create-worktree-1.outputs.path}}"
+needs = ["create-worktree-1"]
+
+[[main.steps]]
+id = "work-1"
+executor = "agent"
+agent = "sim-complete"
+needs = ["spawn-agent-1"]
+prompt = """
+# Track 1: Complete Simulator Core
+
+You are completing the meow-agent-sim simulator. The core is done but needs:
+
+## Task 1: Real YAML Config Loading (meow-v0bp)
+
+Replace the stub `LoadConfig` in `cmd/meow-agent-sim/main.go` with a real implementation.
+
+Create `cmd/meow-agent-sim/config.go` with:
+```go
+package main
+
+import (
+    "os"
+    "gopkg.in/yaml.v3"
+)
+
+// LoadConfig loads simulator configuration from a YAML file.
+func LoadConfig(path string) (SimConfig, error) {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return SimConfig{}, err
+    }
+
+    config := NewDefaultSimConfig()
+    if err := yaml.Unmarshal(data, &config); err != nil {
+        return SimConfig{}, err
+    }
+
+    return config, nil
+}
+```
+
+Then remove the stub `LoadConfig` from main.go.
+
+## Task 2: Real IPC Client (meow-vvr9)
+
+Replace the `StubIPCClient` in `cmd/meow-agent-sim/state.go` with a real implementation.
+
+Create `cmd/meow-agent-sim/ipc.go` with a real Unix socket IPC client that:
+- Connects to the socket path from MEOW_ORCH_SOCK env var
+- Implements `StepDone(outputs)` - sends step_done message
+- Implements `GetPrompt()` - sends get_prompt request, reads response
+- Implements `Event(type, data)` - sends event message (fire-and-forget)
+- Uses newline-delimited JSON protocol
+
+Look at `internal/ipc/messages.go` for the message format.
+
+Then:
+1. Update `NewSimulator` in state.go to use the real IPC client
+2. Remove the `StubIPCClient` from state.go
+
+## Workflow
+1. Create config.go
+2. Remove LoadConfig stub from main.go
+3. Create ipc.go
+4. Update state.go to use real IPC client
+5. Remove StubIPCClient from state.go
+6. Verify: `go build ./cmd/meow-agent-sim/...`
+7. Commit: `git add -A && git commit -m "feat(simulator): Real config loading and IPC client"`
+8. Close beads: `bd close meow-v0bp meow-vvr9`
+
+When done: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-agent-1"
+executor = "kill"
+agent = "sim-complete"
+needs = ["work-1"]
+graceful = true
+
+[[main.steps]]
+id = "track-1-done"
+executor = "shell"
+command = "echo 'Track 1 (simulator completion) done'"
+needs = ["kill-agent-1"]
+
+# --- Track 2: Test Framework ---
+
+[[main.steps]]
+id = "spawn-agent-2"
+executor = "spawn"
+agent = "test-framework"
+workdir = "{{create-worktree-2.outputs.path}}"
+needs = ["create-worktree-2"]
+
+[[main.steps]]
+id = "work-2"
+executor = "agent"
+agent = "test-framework"
+needs = ["spawn-agent-2"]
+prompt = """
+# Track 2: E2E Test Framework
+
+Build the E2E test framework infrastructure.
+
+## Task 1: Simulator Config Builder (meow-tr1q)
+
+Create `internal/testutil/e2e/sim_config.go`:
+```go
+package e2e
+
+// SimConfigBuilder provides a fluent API for building simulator configs.
+type SimConfigBuilder struct {
+    config SimTestConfig
+}
+
+type SimTestConfig struct {
+    Behaviors []BehaviorConfig `yaml:"behaviors"`
+    // ... other fields
+}
+
+func NewSimConfigBuilder() *SimConfigBuilder { ... }
+func (b *SimConfigBuilder) WithBehavior(pattern string, action string) *SimConfigBuilder { ... }
+func (b *SimConfigBuilder) WithDelay(d time.Duration) *SimConfigBuilder { ... }
+func (b *SimConfigBuilder) Build() SimTestConfig { ... }
+func (b *SimConfigBuilder) WriteToFile(path string) error { ... }
+```
+
+## Task 2: Test Harness (meow-two3)
+
+Create `internal/testutil/e2e/harness.go`:
+```go
+package e2e
+
+// Harness provides test isolation for E2E tests.
+type Harness struct {
+    TempDir    string
+    TmuxSocket string
+    // ...
+}
+
+func NewHarness(t *testing.T) *Harness { ... }
+func (h *Harness) Cleanup() { ... }
+func (h *Harness) RunWorkflow(templatePath string) (*WorkflowRun, error) { ... }
+```
+
+## Task 3: Workflow Run Helpers (meow-hy8z)
+
+Create `internal/testutil/e2e/workflow_run.go`:
+```go
+package e2e
+
+// WorkflowRun represents a running workflow for testing.
+type WorkflowRun struct {
+    ID string
+    // ...
+}
+
+func (r *WorkflowRun) WaitForStep(stepID string, status string, timeout time.Duration) error { ... }
+func (r *WorkflowRun) WaitForDone(timeout time.Duration) error { ... }
+func (r *WorkflowRun) Status() string { ... }
+func (r *WorkflowRun) StepOutput(stepID, key string) (any, error) { ... }
+```
+
+## Task 4: Simulator Adapter Config (meow-f153)
+
+Create `test/adapters/simulator/adapter.toml`:
+```toml
+[adapter]
+name = "simulator"
+description = "Claude Code simulator for E2E testing"
+
+[spawn]
+command = "meow-agent-sim"
+# Config path is passed via MEOW_SIM_CONFIG env var by test harness
+args = []
+
+[timing]
+startup_delay = "100ms"
+prompt_delay = "10ms"
+
+[prompt_injection]
+method = "literal"
+suffix = "\n"
+
+[graceful_stop]
+method = "signal"
+signal = "SIGINT"
+timeout = "200ms"
+```
+
+## Workflow
+1. Create `internal/testutil/e2e/` directory
+2. Create sim_config.go
+3. Create harness.go
+4. Create workflow_run.go
+5. Create `test/adapters/simulator/` directory
+6. Create adapter.toml
+7. Verify: `go build ./internal/testutil/...`
+8. Commit: `git add -A && git commit -m "feat(e2e): Test framework infrastructure"`
+9. Close beads: `bd close meow-tr1q meow-two3 meow-hy8z meow-f153`
+
+When done: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-agent-2"
+executor = "kill"
+agent = "test-framework"
+needs = ["work-2"]
+graceful = true
+
+[[main.steps]]
+id = "track-2-done"
+executor = "shell"
+command = "echo 'Track 2 (test framework) done'"
+needs = ["kill-agent-2"]
+
+# ============================================================================
+# PHASE 3: Merge Tracks
+# ============================================================================
+
+[[main.steps]]
+id = "merge-tracks"
+executor = "shell"
+description = "Merge both tracks to main"
+needs = ["track-1-done", "track-2-done"]
+command = """
+set -e
+cd /data/projects/meow-machine
+
+BRANCH_1=$(cat .meow/worktrees/sim-complete-track/.meow-branch)
+BRANCH_2=$(cat .meow/worktrees/test-framework-track/.meow-branch)
+
+echo "Merging $BRANCH_1 (simulator completion)..."
+git merge "$BRANCH_1" --no-edit -m "Merge: simulator completion (config, IPC)"
+
+echo "Merging $BRANCH_2 (test framework)..."
+git merge "$BRANCH_2" --no-edit -m "Merge: test framework infrastructure"
+
+echo "Verifying build..."
+go build ./...
+
+echo "All tracks merged successfully"
+git log --oneline -5
+"""
+
+# ============================================================================
+# PHASE 4: Unit Tests (after merge)
+# ============================================================================
+
+[[main.steps]]
+id = "spawn-test-agent"
+executor = "spawn"
+agent = "test-writer"
+needs = ["merge-tracks"]
+
+[[main.steps]]
+id = "write-tests"
+executor = "agent"
+agent = "test-writer"
+needs = ["spawn-test-agent"]
+prompt = """
+# Write Simulator Unit Tests (meow-xxv7)
+
+Now that the simulator is complete, write unit tests.
+
+Create `cmd/meow-agent-sim/simulator_test.go`:
+
+## Tests to Write
+
+1. **TestLoadConfig** - Test YAML config loading
+   - Valid config file
+   - Missing file error
+   - Invalid YAML error
+   - Default values for missing fields
+
+2. **TestBehaviorMatching** - Test behavior matching
+   - Contains match
+   - Regex match
+   - First match wins
+   - Default fallback
+
+3. **TestStateTransitions** - Test state machine
+   - Starting -> Idle
+   - Idle -> Working -> Idle
+   - Idle -> Working -> Asking -> Working -> Idle
+
+4. **TestActionTypes** - Test action execution
+   - ActionComplete
+   - ActionAsk
+   - ActionFail
+   - ActionFailThenSucceed
+
+## Workflow
+1. Read the existing simulator code to understand the implementation
+2. Create simulator_test.go with comprehensive tests
+3. Run tests: `go test ./cmd/meow-agent-sim/...`
+4. Fix any issues
+5. Commit: `git add -A && git commit -m "test(simulator): Add unit tests"`
+6. Close bead: `bd close meow-xxv7`
+
+When done: `meow done`
+"""
+
+[[main.steps]]
+id = "kill-test-agent"
+executor = "kill"
+agent = "test-writer"
+needs = ["write-tests"]
+graceful = true
+
+# ============================================================================
+# PHASE 5: Final
+# ============================================================================
+
+[[main.steps]]
+id = "final-verify"
+executor = "shell"
+needs = ["kill-test-agent"]
+command = """
+set -e
+cd /data/projects/meow-machine
+
+echo "Final verification..."
+go build ./...
+go test ./cmd/meow-agent-sim/... -v 2>&1 | tail -30
+
+echo ""
+echo "=============================================="
+echo "  E2E COMPLETION WORKFLOW DONE"
+echo "=============================================="
+echo "Completed:"
+echo "  - Simulator: config.go, ipc.go"
+echo "  - Test Framework: harness, helpers, adapter"
+echo "  - Unit tests: simulator_test.go"
+echo "=============================================="
+"""
