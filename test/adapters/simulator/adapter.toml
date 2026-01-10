@@ -1,0 +1,41 @@
+# Claude Code simulator adapter for E2E testing
+# This adapter runs the meow-agent-sim binary which simulates
+# agent behavior based on configurable patterns.
+
+[adapter]
+name = "simulator"
+description = "Claude Code simulator for E2E testing"
+
+[spawn]
+# Command to start the simulator
+# Config path is passed via MEOW_SIM_CONFIG env var by test harness
+command = "meow-agent-sim"
+# Resume is a no-op for the simulator but accepted for compatibility
+resume_command = "meow-agent-sim --resume {{session_id}}"
+# Fast startup for tests
+startup_delay = "100ms"
+
+[environment]
+# Prevent tmux nesting issues
+TMUX = ""
+
+[prompt_injection]
+# Keys to send before the prompt
+pre_keys = ["Escape"]
+pre_delay = "50ms"
+# Use literal mode to handle special characters in prompts
+method = "literal"
+# Enter to submit the prompt
+post_keys = ["Enter"]
+# Short delay for fast tests
+post_delay = "10ms"
+
+[graceful_stop]
+# Send interrupt to gracefully stop
+keys = ["C-c"]
+# Short timeout for fast tests
+wait = "200ms"
+
+[events]
+# No event translator needed for simulator - it handles events internally
+translator = ""
