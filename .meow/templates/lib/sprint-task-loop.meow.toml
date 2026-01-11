@@ -1,0 +1,211 @@
+# ============================================================================
+# MEOW Library: Sprint Sequential Task Loop
+# ============================================================================
+#
+# Processes tasks one at a time sequentially. Each task completes before the
+# next one starts. This is an alternative to the parallel foreach pattern.
+#
+# Architecture:
+#
+#   loop ─► check-more ─[yes]─► extract-task ─► run-agent ─► increment ─► loop
+#                       │
+#                       └─[no]─► done
+#
+# Variables:
+#   tasks_file (required) - Path to enriched tasks JSON file
+#   current_index (default: "0") - Current task index
+#   + all standard agent track options
+#
+# Usage:
+#   [[main.steps]]
+#   id = "agents"
+#   executor = "expand"
+#   template = "lib/sprint-task-loop"
+#   variables = {
+#     tasks_file = ".meow/worktrees/.enriched-tasks.json",
+#     spec_file = "{{spec_file}}",
+#     spawn_args = "{{spawn_args}}",
+#     ...
+#   }
+#
+# ============================================================================
+
+
+[main]
+name = "sprint-task-loop"
+description = "Sequential task processing loop"
+
+[main.variables]
+tasks_file = { required = true, description = "Path to enriched tasks JSON file" }
+current_index = { default = "0", description = "Current task index" }
+spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first" }
+spawn_args = { default = "", description = "Extra CLI args for claude" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor" }
+max_nudges = { default = "10", description = "Max nudges before force-completing" }
+enable_context_monitor = { default = "true", description = "Enable context usage auto-compact" }
+context_threshold = { default = "70", description = "Context % to trigger /compact" }
+
+[[main.steps]]
+id = "loop"
+executor = "expand"
+template = ".task-loop-check"
+
+[main.steps.variables]
+tasks_file = "{{tasks_file}}"
+current_index = "{{current_index}}"
+spec_file = "{{spec_file}}"
+spawn_args = "{{spawn_args}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
+enable_context_monitor = "{{enable_context_monitor}}"
+context_threshold = "{{context_threshold}}"
+
+
+# ============================================================================
+# TASK LOOP CHECK (Internal)
+# ============================================================================
+#
+# Checks if there are more tasks to process.
+
+[task-loop-check]
+name = "task-loop-check"
+description = "Internal: Check if more tasks remain"
+internal = true
+
+[task-loop-check.variables]
+tasks_file = { required = true }
+current_index = { required = true }
+spec_file = { default = "docs/MVP-SPEC-v2.md" }
+spawn_args = { default = "" }
+enable_rw = { default = "true" }
+max_nudges = { default = "10" }
+enable_context_monitor = { default = "true" }
+context_threshold = { default = "70" }
+
+[[task-loop-check.steps]]
+id = "check"
+executor = "branch"
+# Check if current_index < task count
+condition = "test {{current_index}} -lt $(jq 'length' {{tasks_file}})"
+
+# More tasks remaining - process the current one
+[task-loop-check.steps.on_true]
+template = ".process-task"
+variables = { tasks_file = "{{tasks_file}}", current_index = "{{current_index}}", spec_file = "{{spec_file}}", spawn_args = "{{spawn_args}}", enable_rw = "{{enable_rw}}", max_nudges = "{{max_nudges}}", enable_context_monitor = "{{enable_context_monitor}}", context_threshold = "{{context_threshold}}" }
+
+# No more tasks - we're done
+[task-loop-check.steps.on_false]
+inline = [
+  { id = "done", executor = "shell", command = "echo 'All tasks processed sequentially'" }
+]
+
+
+# ============================================================================
+# PROCESS TASK (Internal)
+# ============================================================================
+#
+# Extracts the current task, runs the agent track, then loops.
+
+[process-task]
+name = "process-task"
+description = "Internal: Process current task and continue loop"
+internal = true
+
+[process-task.variables]
+tasks_file = { required = true }
+current_index = { required = true }
+spec_file = { default = "docs/MVP-SPEC-v2.md" }
+spawn_args = { default = "" }
+enable_rw = { default = "true" }
+max_nudges = { default = "10" }
+enable_context_monitor = { default = "true" }
+context_threshold = { default = "70" }
+
+# Extract task data at current index
+[[process-task.steps]]
+id = "extract"
+executor = "shell"
+command = """
+# Extract task fields from JSON at index {{current_index}}
+TASK_JSON=$(jq -c '.[{{current_index}}]' {{tasks_file}})
+
+# Output individual fields for downstream use
+echo "Processing task: $(echo "$TASK_JSON" | jq -r '.name')"
+
+# Write task data to individual files for easy variable access
+echo "$TASK_JSON" | jq -r '.name' > /tmp/meow-task-name-{{current_index}}
+echo "$TASK_JSON" | jq -r '.workdir' > /tmp/meow-task-workdir-{{current_index}}
+echo "$TASK_JSON" | jq -r '.beads // ""' > /tmp/meow-task-beads-{{current_index}}
+# Prompt is multi-line, so use base64 to avoid issues
+echo "$TASK_JSON" | jq -r '.prompt' > /tmp/meow-task-prompt-{{current_index}}
+"""
+
+[process-task.steps.shell_outputs]
+task_name = { source = "file:/tmp/meow-task-name-{{current_index}}" }
+task_workdir = { source = "file:/tmp/meow-task-workdir-{{current_index}}" }
+task_beads = { source = "file:/tmp/meow-task-beads-{{current_index}}" }
+task_prompt = { source = "file:/tmp/meow-task-prompt-{{current_index}}" }
+
+# Run the agent track for this task
+[[process-task.steps]]
+id = "agent"
+executor = "expand"
+template = "lib/agent-track"
+needs = ["extract"]
+
+[process-task.steps.variables]
+agent_name = "agent-{{current_index}}"
+track_name = "{{extract.outputs.task_name}}"
+workdir = "{{extract.outputs.task_workdir}}"
+task_prompt = """
+{{extract.outputs.task_prompt}}
+
+## Bead References (if any)
+{{extract.outputs.task_beads}}
+
+If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
+"""
+spec_file = "{{spec_file}}"
+spawn_args = "{{spawn_args}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
+enable_context_monitor = "{{enable_context_monitor}}"
+context_threshold = "{{context_threshold}}"
+
+# Clean up temp files
+[[process-task.steps]]
+id = "cleanup"
+executor = "shell"
+needs = ["agent.done"]
+command = """
+rm -f /tmp/meow-task-name-{{current_index}} /tmp/meow-task-workdir-{{current_index}} \
+      /tmp/meow-task-beads-{{current_index}} /tmp/meow-task-prompt-{{current_index}}
+echo "Task {{current_index}} complete, continuing to next..."
+"""
+
+# Increment index and continue loop
+[[process-task.steps]]
+id = "increment"
+executor = "shell"
+needs = ["cleanup"]
+command = "echo $(({{current_index}} + 1))"
+
+[process-task.steps.shell_outputs]
+next_index = { source = "stdout" }
+
+# Recurse to check for more tasks
+[[process-task.steps]]
+id = "loop"
+executor = "expand"
+template = ".task-loop-check"
+needs = ["increment"]
+
+[process-task.steps.variables]
+tasks_file = "{{tasks_file}}"
+current_index = "{{increment.outputs.next_index}}"
+spec_file = "{{spec_file}}"
+spawn_args = "{{spawn_args}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
+enable_context_monitor = "{{enable_context_monitor}}"
+context_threshold = "{{context_threshold}}"
