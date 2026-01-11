@@ -130,7 +130,13 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case sig := <-sigChan:
 			o.logger.Info("received signal, initiating cleanup", "signal", sig)
+
+			// Cancel in-flight commands (branch and shell)
+			o.cancelPendingCommands()
+
+			// Wait for goroutines (should exit quickly after cancellation)
 			o.wg.Wait()
+
 			// Run cleanup for the active workflow
 			if o.workflowID != "" {
 				if err := o.cleanupOnSignal(ctx); err != nil {
