@@ -308,6 +308,8 @@ These wait for external completion signals.
 
 Execute a shell command and capture outputs. Use this for setup tasks like creating git worktrees.
 
+**Implementation Note:** Shell is syntactic sugar over branch. Internally, `handleShell()` converts the config to `BranchConfig` and delegates to `handleBranch()`. This means shell steps run asynchronously and honor the DAG parallelism contract—shell steps with the same dependencies execute in parallel.
+
 ```yaml
 id: "create-worktree"
 executor: "shell"
@@ -336,10 +338,11 @@ env:                       # Optional
 - `file:/path`: Contents of a file
 
 **Orchestrator Behavior:**
-1. Execute command in shell
-2. Capture specified outputs
-3. If exit code != 0 and `on_error: fail`, mark step `failed`
-4. Otherwise, mark step `done` with outputs
+1. Convert shell config to branch config (with no expansion targets)
+2. Execute command asynchronously in goroutine
+3. Capture specified outputs
+4. If exit code != 0 and `on_error: fail`, mark step `failed`
+5. Otherwise, mark step `done` with outputs
 
 ---
 
@@ -2584,28 +2587,30 @@ Understanding MEOW's performance model helps design efficient workflows.
 |-----------|-------------|-------|
 | Agent steps | Fully parallel | Each agent works independently |
 | Branch conditions | Fully parallel | Conditions run in goroutines |
-| Shell steps | Sequential per tick | Fast, rarely a bottleneck |
+| Shell steps | Fully parallel | Shell is sugar over branch, runs async |
 | Expand steps | Sequential per tick | Template loading is fast |
+
+**Note:** Shell steps use the same async execution path as branch conditions. Both run their commands in goroutines and honor the DAG parallelism contract.
 
 **Serialization Points:**
 
-Branch completions serialize through the workflow mutex:
+Command completions (both branch and shell) serialize through the workflow mutex:
 
 ```
-Goroutine 1: condition completes → acquire mutex → expand → save → release
-Goroutine 2: condition completes → [wait] → acquire mutex → expand → save → release
-Goroutine 3: condition completes → [wait] → [wait] → acquire mutex → ...
+Goroutine 1: command completes → acquire mutex → save → release
+Goroutine 2: command completes → [wait] → acquire mutex → save → release
+Goroutine 3: command completes → [wait] → [wait] → acquire mutex → ...
 ```
 
 Each completion involves:
 - Mutex acquisition (~0-10ms wait, depends on contention)
 - Workflow file read (~1-5ms, SSD)
-- Expansion (~0.1ms, in-memory)
+- Output capture / expansion (~0.1ms, in-memory)
 - Workflow file write (~1-5ms, SSD)
 
 **Throughput Estimates:**
 
-| Parallel Branches | Completion Time | Impact |
+| Parallel Commands | Completion Time | Impact |
 |-------------------|-----------------|--------|
 | 10 | ~50-100ms | Imperceptible |
 | 50 | ~250-500ms | Minimal |
@@ -2634,7 +2639,7 @@ Each completion involves:
 **Memory Usage:**
 
 - Each step: ~200-500 bytes in workflow state
-- Each pending branch: ~100 bytes (goroutine + tracking)
+- Each pending command: ~100 bytes (goroutine + tracking)
 - 1000 steps: ~500KB workflow file
 - 10000 steps: ~5MB workflow file
 
