@@ -47,9 +47,11 @@ func runEvent(cmd *cobra.Command, args []string) error {
 	eventType := args[0]
 
 	// Get orchestrator socket from environment
+	// If not set, exit silently (no-op) - allows agents to call meow event
+	// without being in a MEOW workflow
 	sockPath := os.Getenv("MEOW_ORCH_SOCK")
 	if sockPath == "" {
-		return fmt.Errorf("MEOW_ORCH_SOCK not set - are you running in a MEOW workflow?")
+		return nil // Silent no-op
 	}
 
 	// Parse --data flags into map

@@ -155,33 +155,15 @@ func (s *Simulator) handleInput(prompt string) error {
 }
 
 // fireStopHook emulates the Claude Code stop hook behavior.
-// When transitioning to IDLE, this fires:
-// 1. meow event agent-stopped
-// 2. meow prime --format prompt (to check for next prompt)
+// When transitioning to IDLE, this emits the agent-stopped event.
+// The orchestrator is responsible for prompt injection via tmux send-keys,
+// so the simulator just waits for stdin input after emitting the event.
 func (s *Simulator) fireStopHook() {
 	s.logger.Debug("firing stop hook")
 
-	// Fire agent-stopped event
+	// Fire agent-stopped event (no-op if MEOW_ORCH_SOCK not set)
 	if err := s.ipc.Event("agent-stopped", nil); err != nil {
 		s.logger.Debug("agent-stopped event failed", "error", err)
-	}
-
-	// Check for next prompt from orchestrator
-	prompt, err := s.ipc.GetPrompt()
-	if err != nil {
-		s.logger.Debug("get prompt failed", "error", err)
-		return
-	}
-
-	// If we got a prompt, self-inject it
-	if prompt != "" {
-		s.logger.Debug("got prompt from orchestrator, self-injecting",
-			"prompt", truncate(prompt, 50),
-		)
-		// Process the prompt as if it came from stdin
-		if err := s.handleInput(prompt); err != nil {
-			s.logger.Error("handling injected prompt", "error", err)
-		}
 	}
 }
 

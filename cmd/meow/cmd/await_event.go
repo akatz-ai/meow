@@ -57,10 +57,11 @@ func runAwaitEvent(cmd *cobra.Command, args []string) error {
 	eventType := args[0]
 
 	// Get orchestrator socket from environment
+	// If not set, exit with timeout semantics (exit 1) - allows await-event
+	// to be used in conditions outside of MEOW workflows
 	sockPath := os.Getenv("MEOW_ORCH_SOCK")
 	if sockPath == "" {
-		fmt.Fprintln(os.Stderr, "MEOW_ORCH_SOCK not set - are you running in a MEOW workflow?")
-		os.Exit(2)
+		os.Exit(1) // Timeout semantics
 	}
 
 	// Parse filters

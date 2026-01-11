@@ -51,6 +51,13 @@ func init() {
 }
 
 func runDone(cmd *cobra.Command, args []string) error {
+	// Check if orchestrator socket is set
+	// If not set, exit silently (no-op) - allows agents to call meow done
+	// without being in a MEOW workflow
+	if os.Getenv("MEOW_ORCH_SOCK") == "" {
+		return nil // Silent no-op
+	}
+
 	// Get agent ID from environment
 	agentID := os.Getenv("MEOW_AGENT")
 	if agentID == "" {
