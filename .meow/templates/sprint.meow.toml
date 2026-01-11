@@ -1,33 +1,30 @@
 # ============================================================================
-# MEOW Workflow: Sprint Sequential
+# MEOW Workflow: Sprint
 # ============================================================================
 #
-# Sequential agent sprint using foreach with parallel=false. Tasks are
-# processed one at a time - each agent completes before the next one starts.
+# Agent sprint workflow for parallel or sequential task execution.
 #
 # This workflow:
 #   1. Creates worktrees for each task (serialized for git safety)
-#   2. Processes tasks sequentially (one agent at a time)
-#   3. After all tasks complete, merges all branches into integration worktree
-#   4. Merges to target branch (or pushes for PR)
-#
-# USE CASES:
-#
-#   - Resource-constrained environments (one agent at a time uses less memory)
-#   - Tasks that benefit from isolation (no concurrent git operations)
-#   - Debugging workflow issues (easier to trace sequential execution)
-#   - Tasks with implicit ordering requirements
+#   2. Spawns agents (parallel or sequential based on `parallel` variable)
+#   3. Waits for all agents to complete
+#   4. Merges all branches into integration worktree
+#   5. Merges to target branch (or pushes for PR)
 #
 # USAGE:
 #
-#   # With a JSON file of tasks:
-#   meow run sprint-sequential --var tasks=my-sprint-tasks.json
+#   # Parallel mode (default) - all agents run concurrently:
+#   meow run sprint --var tasks=my-tasks.json
+#
+#   # Sequential mode - one agent at a time:
+#   meow run sprint --var tasks=my-tasks.json --var parallel=false
 #
 #   # With options:
-#   meow run sprint-sequential \
+#   meow run sprint \
 #     --var tasks=tasks.json \
 #     --var target_branch=feature/my-feature \
-#     --var skip_merge_to_target=true
+#     --var skip_merge_to_target=true \
+#     --var parallel=false
 #
 # TASK FORMAT:
 #
@@ -40,17 +37,17 @@
 #
 # SEE ALSO:
 #
-#   - sprint-parallel: Same workflow but runs all agents concurrently
 #   - lib/sprint-common: Shared templates for setup, integration, cleanup
 #
 # ============================================================================
 
 [main]
-name = "sprint-sequential"
-description = "Sequential agent sprint using foreach with parallel=false"
+name = "sprint"
+description = "Agent sprint workflow (parallel or sequential)"
 
 [main.variables]
 tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
+parallel = { default = "true", description = "Run agents in parallel (true) or sequential (false)" }
 target_branch = { default = "main", description = "Target branch for final merge" }
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
@@ -92,11 +89,11 @@ description = "Create worktrees and prepare enriched task list"
 tasks = "{{tasks}}"
 
 # ============================================================================
-# PHASE 2: Sequential Agent Tracks (foreach with parallel=false)
+# PHASE 2: Agent Tracks (foreach)
 # ============================================================================
 #
-# Uses foreach with parallel=false to process tasks one at a time.
-# Each task completes before the next one starts.
+# Uses foreach to process tasks. Set parallel=true (default) for concurrent
+# execution or parallel=false for sequential (one at a time).
 
 [[main.steps]]
 id = "agents"
@@ -105,7 +102,7 @@ items_file = ".meow/worktrees/.enriched-tasks.json"
 item_var = "task"
 index_var = "i"
 template = "lib/sprint-common#agent-track-wrapper"
-parallel = false
+parallel = {{parallel}}
 needs = ["setup.done"]
 
 [main.steps.variables]
