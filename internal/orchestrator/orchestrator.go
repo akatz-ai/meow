@@ -1126,6 +1126,33 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			// Treat "completing" as "running" for recovery purposes
 			// (orchestrator crashed during transition)
 
+			// Handle branch and shell steps specially
+			if step.Executor == types.ExecutorBranch || step.Executor == types.ExecutorShell {
+				if len(step.ExpandedInto) == 0 {
+					// Case 1: Condition was in-flight (not yet expanded)
+					// Reset to pending - condition will re-run
+					o.logger.Info("resetting branch/shell step (condition was in-flight)",
+						"step", step.ID,
+						"executor", step.Executor,
+						"workflow", wf.ID)
+					step.Status = types.StepStatusPending
+					step.StartedAt = nil
+					step.InterruptedAt = nil
+					step.Outputs = nil
+					modified = true
+				} else {
+					// Case 2: Already expanded, waiting for children
+					// Keep running - checkBranchCompletion will handle
+					o.logger.Info("keeping branch/shell step running (has expanded children)",
+						"step", step.ID,
+						"executor", step.Executor,
+						"childCount", len(step.ExpandedInto),
+						"workflow", wf.ID)
+					// Don't reset - children are live
+				}
+				continue // Skip the generic orchestrator reset below
+			}
+
 			if step.Executor.IsOrchestrator() {
 				// Orchestrator step was mid-execution - reset to pending
 				o.logger.Info("resetting orchestrator step",
@@ -1219,39 +1246,121 @@ func (o *Orchestrator) resumeCleanup(ctx context.Context, wf *types.Workflow) er
 	return o.store.Save(ctx, wf)
 }
 
+// completeBranchCondition finalizes a branch/shell step after its condition completes.
+// Called from goroutine - acquires mutex for thread-safe state mutation.
+//
+// Parameters:
+// - workflowID, stepID: identifiers (captured by value)
+// - outcome: true/false/timeout
+// - target: branch target to expand (may be nil for shell-as-sugar)
+// - result: ShellResult containing stdout, stderr, exit_code
+// - cfg: BranchConfig for output capture definitions
+func (o *Orchestrator) completeBranchCondition(
+	ctx context.Context,
+	workflowID string,
+	stepID string,
+	outcome BranchOutcome,
+	target *types.BranchTarget,
+	result *ShellResult,
+	cfg *types.BranchConfig,
+) {
+	// Acquire mutex for state mutation
+	o.wfMu.Lock()
+	defer o.wfMu.Unlock()
+
+	// Re-fetch workflow to get fresh state
+	wf, err := o.store.Get(ctx, workflowID)
+	if err != nil {
+		o.logger.Error("re-fetching workflow after command", "error", err)
+		return
+	}
+	if wf == nil || wf.Status.IsTerminal() {
+		return
+	}
+
+	step, ok := wf.GetStep(stepID)
+	if !ok || step.Status != types.StepStatusRunning {
+		return
+	}
+
+	// Handle expansion for branch with targets
+	if target != nil {
+		if err := o.expandBranchTarget(ctx, wf, step, target); err != nil {
+			step.Fail(&types.StepError{Message: fmt.Sprintf("expansion failed: %v", err)})
+			o.store.Save(ctx, wf)
+			return
+		}
+	}
+
+	// Build outputs - capture per cfg.Outputs definitions
+	outputs := map[string]any{
+		"outcome":   string(outcome),
+		"exit_code": result.ExitCode,
+	}
+
+	// Capture defined outputs (stdout, stderr, file:path)
+	if cfg.Outputs != nil {
+		for name, source := range cfg.Outputs {
+			value, err := captureOutput(source.Source, result)
+			if err != nil {
+				o.logger.Warn("output capture failed", "name", name, "error", err)
+				outputs[name] = nil
+			} else {
+				outputs[name] = value
+			}
+		}
+	}
+
+	// Handle on_error for shell-as-sugar (no expansion targets)
+	if target == nil && result.ExitCode != 0 {
+		if cfg.OnError == "fail" {
+			step.Fail(&types.StepError{
+				Message: "command failed",
+				Code:    result.ExitCode,
+				Output:  result.Stderr,
+			})
+			o.store.Save(ctx, wf)
+			return
+		}
+		// on_error: continue - include error info in outputs
+		outputs["error"] = result.Stderr
+	}
+
+	// Complete or stay running based on children
+	if len(step.ExpandedInto) > 0 {
+		step.Outputs = outputs
+	} else {
+		step.Complete(outputs)
+	}
+
+	o.store.Save(ctx, wf)
+}
+
 // --- Executor Handlers (Stubs) ---
 // These will be implemented by the executor track (pivot-402 through pivot-407)
 
 // handleShell executes a shell command.
+// Shell is syntactic sugar over branch - this converts the config and delegates.
 func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	if step.Shell == nil {
 		return fmt.Errorf("shell step %s missing config", step.ID)
 	}
 
-	if err := step.Start(); err != nil {
-		return fmt.Errorf("starting step: %w", err)
+	// Convert shell config to branch config
+	step.Branch = &types.BranchConfig{
+		Condition: step.Shell.Command,
+		Workdir:   step.Shell.Workdir,
+		Env:       step.Shell.Env,
+		Outputs:   step.Shell.Outputs,
+		OnError:   step.Shell.OnError,
+		// No on_true/on_false → just run, capture outputs, complete
 	}
 
-	if o.shell == nil {
-		return fmt.Errorf("shell executor not implemented: %w", ErrNotImplemented)
-	}
+	// Clear shell config (now using branch)
+	step.Shell = nil
 
-	outputs, err := o.shell.Run(ctx, step.Shell)
-	if err != nil {
-		if step.Shell.OnError == "continue" {
-			o.logger.Warn("shell command failed, continuing", "step", step.ID, "error", err)
-			if completeErr := step.Complete(outputs); completeErr != nil {
-				return fmt.Errorf("completing step after error: %w", completeErr)
-			}
-			return nil
-		}
-		return fmt.Errorf("shell command failed: %w", err)
-	}
-
-	if err := step.Complete(outputs); err != nil {
-		return fmt.Errorf("completing step: %w", err)
-	}
-	return nil
+	// Delegate to branch handler (which runs async)
+	return o.handleBranch(ctx, wf, step)
 }
 
 // handleSpawn starts an agent in a tmux session.
@@ -1614,6 +1723,34 @@ func (o *Orchestrator) completeBranchCondition(
 			}
 			return
 		}
+	}
+
+	// Build outputs
+	outputs := map[string]any{
+		"outcome":   string(outcome),
+		"exit_code": exitCode,
+	}
+
+	// Capture defined outputs (for shell-as-sugar support)
+	if cfg.Outputs != nil {
+		for name, source := range cfg.Outputs {
+			value, err := captureOutput(source.Source, result)
+			if err != nil {
+				o.logger.Warn("output capture failed", "name", name, "error", err)
+				outputs[name] = nil
+			} else {
+				outputs[name] = value
+			}
+		}
+	}
+
+	// Handle on_error for shell-as-sugar (no expansion targets)
+	if target == nil && exitCode != 0 {
+		if cfg.OnError == "fail" {
+			return fmt.Errorf("command failed with exit code %d: %s", exitCode, stderr)
+		}
+		// on_error: continue - include error info in outputs
+		outputs["error"] = stderr
 	}
 
 	// If we expanded children, stay in "running" state until they complete.
