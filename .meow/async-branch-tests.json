@@ -1,0 +1,27 @@
+[
+  {
+    "name": "test-async-dispatch",
+    "prompt": "# Task: Unit Tests for Async Dispatch (meow-nq9w)\n\n## Read First\n\n```bash\nbd show meow-nq9w\n```\n\n## Tests to Add\n\nIn `internal/orchestrator/orchestrator_test.go`, add:\n\n### TestHandleBranch_ReturnsImmediately\n\nVerify handleBranch returns in <100ms even with slow condition.\n\n### TestHandleBranch_StepStaysRunning\n\nVerify step.Status is StepStatusRunning after handleBranch returns.\n\n### TestHandleBranch_TracksPendingCommand\n\nVerify pendingCommands.Load(stepID) returns cancel func.\n\n### TestParallelBranchSteps\n\nTwo branch steps with same needs start in same tick.\n\n## Run Tests\n\n```bash\ngo test -v -run TestHandleBranch ./internal/orchestrator/...\ngo test -race ./internal/orchestrator/...\n```\n\n## When Done\n\n```bash\ngit add -A && git commit -m 'test(orchestrator): Add async dispatch behavior tests'\nbd close meow-nq9w\nmeow done\n```",
+    "beads": "meow-nq9w"
+  },
+  {
+    "name": "test-outcomes",
+    "prompt": "# Task: Unit Tests for Condition Outcomes (meow-8cqw)\n\n## Read First\n\n```bash\nbd show meow-8cqw\n```\n\n## Tests to Add\n\nIn `internal/orchestrator/orchestrator_test.go`, add:\n\n### TestBranchCondition_TrueOutcome\n\nCondition exits 0 → outcome is \"true\", on_true expanded.\n\n### TestBranchCondition_FalseOutcome\n\nCondition exits non-zero → outcome is \"false\", on_false expanded.\n\n### TestBranchCondition_TimeoutOutcome\n\nCondition with short timeout → outcome is \"timeout\".\n\n### TestBranchCondition_OutputCapture\n\nVerify stdout/stderr captured in step outputs.\n\n### TestBranchCondition_NoTargets_Completes\n\nBranch with no targets (shell pattern) completes with outputs.\n\n## Run Tests\n\n```bash\ngo test -v -run TestBranchCondition ./internal/orchestrator/...\ngo test -race ./internal/orchestrator/...\n```\n\n## When Done\n\n```bash\ngit add -A && git commit -m 'test(orchestrator): Add condition outcome tests'\nbd close meow-8cqw\nmeow done\n```",
+    "beads": "meow-8cqw"
+  },
+  {
+    "name": "test-cancellation",
+    "prompt": "# Task: Unit Tests for Cancellation (meow-bkd0)\n\n## Read First\n\n```bash\nbd show meow-bkd0\n```\n\n## Tests to Add\n\nIn `internal/orchestrator/orchestrator_test.go`, add:\n\n### TestCancelPendingCommands_CancelsAll\n\nStart multiple conditions, call cancel, verify all cancelled.\n\n### TestCancelPendingCommands_EmptyMap\n\nNo pending commands → no panic.\n\n### TestConditionCancelledMidExecution\n\nCancel during execution → step stays running (no completion).\n\n### TestSignalTriggersCleanShutdown\n\nSend signal → commands cancelled → wg.Wait() completes quickly.\n\n## Run Tests\n\n```bash\ngo test -v -run TestCancel ./internal/orchestrator/...\ngo test -race ./internal/orchestrator/...\n```\n\n## When Done\n\n```bash\ngit add -A && git commit -m 'test(orchestrator): Add cancellation and cleanup tests'\nbd close meow-bkd0\nmeow done\n```",
+    "beads": "meow-bkd0"
+  },
+  {
+    "name": "test-shell-sugar",
+    "prompt": "# Task: Unit Tests for Shell-as-Sugar (meow-f8sk)\n\n## Read First\n\n```bash\nbd show meow-f8sk\n```\n\n## Tests to Add\n\nIn `internal/orchestrator/orchestrator_test.go`, add:\n\n### TestHandleShell_DelegatesToBranch\n\nAfter handleShell, step.Branch is set, step.Shell is nil.\n\n### TestHandleShell_RunsAsync\n\nShell with slow command returns immediately.\n\n### TestShellConfigConversion\n\nAll ShellConfig fields transfer to BranchConfig.\n\n### TestShellOutputsCapture\n\nShell outputs captured in step.Outputs.\n\n### TestShellOnErrorFail\n\nCommand fails + on_error:fail → step failed.\n\n### TestShellOnErrorContinue\n\nCommand fails + on_error:continue → step done with error in outputs.\n\n### TestParallelShellSteps\n\nTwo shell steps run in parallel (total time ~max, not sum).\n\n## Run Tests\n\n```bash\ngo test -v -run TestHandleShell ./internal/orchestrator/...\ngo test -v -run TestShell ./internal/orchestrator/...\ngo test -race ./internal/orchestrator/...\n```\n\n## When Done\n\n```bash\ngit add -A && git commit -m 'test(orchestrator): Add shell-as-sugar tests'\nbd close meow-f8sk\nmeow done\n```",
+    "beads": "meow-f8sk"
+  },
+  {
+    "name": "test-e2e",
+    "prompt": "# Task: E2E Tests for Async Execution (meow-tota)\n\n## Read First\n\n```bash\nbd show meow-tota\n```\n\n## Primary Task: Enable Skipped Test\n\nFind `TestE2E_EventRouting_AgentStopped` in `internal/testutil/e2e/e2e_test.go`:\n\n```bash\ngrep -n 'EventRouting_AgentStopped\\|t.Skip.*Ralph' internal/testutil/e2e/e2e_test.go\n```\n\nRemove the `t.Skip()` call and run:\n\n```bash\ngo test -v -run TestE2E_EventRouting_AgentStopped ./internal/testutil/e2e/...\n```\n\nThis test verifies the Ralph Wiggum pattern works:\n- Branch monitor runs alongside agent\n- Events route correctly while agent works\n\n## Additional E2E Tests (if time permits)\n\n### TestE2E_ParallelShellSteps\n\nTwo shell steps with same needs run in parallel.\n\n### TestE2E_ShellOutputChain\n\nShell step outputs available to downstream via variable substitution.\n\n## Run Full E2E Suite\n\n```bash\ngo test -v ./internal/testutil/e2e/...\n```\n\n## When Done\n\n```bash\ngit add -A && git commit -m 'test(e2e): Enable async branch tests'\nbd close meow-tota\nmeow done\n```",
+    "beads": "meow-tota"
+  }
+]
