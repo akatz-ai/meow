@@ -7,14 +7,17 @@ import (
 var adapterCmd = &cobra.Command{
 	Use:   "adapter",
 	Short: "Manage agent adapters",
-	Long: `Manage adapters that define how MEOW interacts with different AI agents.
+	Long: `Manage agent adapters that define how to start, stop, and inject prompts into agents.
 
-Adapters encapsulate agent-specific behavior:
-  - How to start and stop the agent
-  - How to inject prompts into the agent's tmux session
-  - Environment variables for the agent
+Adapters encapsulate agent-specific runtime behavior, allowing MEOW to orchestrate
+different types of agents (Claude Code, Aider, etc.) through a common interface.
 
-Adapters are installed to ~/.meow/adapters/<name>/.`,
+Adapters can come from three locations (in priority order):
+  1. Project-local: .meow/adapters/<name>/adapter.toml
+  2. Global:        ~/.meow/adapters/<name>/adapter.toml
+  3. Built-in:      Compiled into the MEOW binary
+
+Project adapters override global ones, which override built-in ones.`,
 }
 
 func init() {
