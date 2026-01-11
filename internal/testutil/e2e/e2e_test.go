@@ -3195,3 +3195,98 @@ command = "echo '{{step-1.outputs.greeting}} {{step-2.outputs.target}}' > %s"
 		t.Logf("✓ Output chain verified: %q", actualOutput)
 	}
 }
+
+// TestE2E_EventRouting tests that events can be sent and received between
+// concurrent workflow steps using meow event and meow await-event.
+//
+// This verifies the core event routing mechanism needed for Ralph Wiggum patterns:
+//   1. A branch step waits for an event (meow await-event)
+//   2. A shell step sends the event (meow event)
+//   3. The waiting branch receives the event and completes
+//
+// Timeline:
+//   - t=0s: Both event-waiter and event-sender start (parallel branches)
+//   - t=0s: event-waiter blocks on await-event
+//   - t=1s: event-sender sends the event after 1s delay
+//   - t=1s: event-waiter receives event, completes with on_true
+//   - t=1s: verify step runs (both branches done)
+//
+// Expected: Workflow completes successfully with event routing working
+func TestE2E_EventRouting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	template := `
+[main]
+name = "event-routing"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = "echo 'starting event routing test'"
+
+# Branch that waits for an event
+[[main.steps]]
+id = "event-waiter"
+executor = "branch"
+needs = ["setup"]
+condition = "meow await-event test-signal --timeout 10s"
+timeout = "15s"
+
+[main.steps.on_true]
+inline = [
+  { id = "waiter-done", executor = "shell", command = "echo 'event received!'" }
+]
+
+[main.steps.on_timeout]
+inline = [
+  { id = "waiter-timeout", executor = "shell", command = "echo 'timeout - event not received'" }
+]
+
+# Shell step that sends the event after a delay
+[[main.steps]]
+id = "event-sender"
+executor = "shell"
+needs = ["setup"]
+command = "sleep 1 && meow event test-signal && echo 'event sent'"
+
+# Verify both complete
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["event-waiter", "event-sender"]
+command = "echo 'event routing verified'"
+`
+
+	if err := h.WriteTemplate("event-routing.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "event-routing.toml"))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Verify event was received (not timeout)
+	if strings.Contains(stdout, "timeout - event not received") {
+		t.Errorf("event-waiter timed out instead of receiving event\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Should complete in ~1-3s (sender waits 1s, then sends event)
+	if elapsed > 10*time.Second {
+		t.Errorf("workflow took too long (%.2fs) - event routing may have failed", elapsed.Seconds())
+	} else {
+		t.Logf("✓ Event routing verified in %.2fs", elapsed.Seconds())
+	}
+}

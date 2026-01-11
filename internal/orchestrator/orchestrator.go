@@ -1619,7 +1619,10 @@ func (o *Orchestrator) executeBranchConditionAsync(
 	defer o.pendingCommands.Delete(stepID)
 
 	// Execute condition command (may block for seconds/minutes/hours)
-	condExec := &SimpleConditionExecutor{}
+	// Pass IPC socket path so condition can use meow event/await-event
+	condExec := &SimpleConditionExecutor{
+		SocketPath: ipc.SocketPath(workflowID),
+	}
 	exitCode, stdout, stderr, execErr := condExec.Execute(ctx, condition)
 
 	// Check for context cancellation (workflow stopped/shutdown)

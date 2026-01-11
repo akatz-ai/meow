@@ -210,16 +210,29 @@ func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[stri
 }
 
 // SimpleConditionExecutor is a basic implementation using the shell executor.
-type SimpleConditionExecutor struct{}
+type SimpleConditionExecutor struct {
+	// SocketPath is the IPC socket path for MEOW_ORCH_SOCK environment variable.
+	// If set, condition commands can use meow event/await-event.
+	SocketPath string
+}
 
 // Execute runs a command using the shell executor.
 func (e *SimpleConditionExecutor) Execute(ctx context.Context, command string) (int, string, string, error) {
+	// Build environment - include MEOW_ORCH_SOCK if we have a socket path
+	var env map[string]string
+	if e.SocketPath != "" {
+		env = map[string]string{
+			"MEOW_ORCH_SOCK": e.SocketPath,
+		}
+	}
+
 	step := &types.Step{
 		ID:       "condition",
 		Executor: types.ExecutorShell,
 		Shell: &types.ShellConfig{
 			Command: command,
 			OnError: "continue", // Don't fail on non-zero exit
+			Env:     env,
 		},
 	}
 
