@@ -1094,10 +1094,12 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 	for _, wf := range runningWorkflows {
 		modified := false
 
-		// First pass: identify partial expansions (expand steps that were running)
+		// First pass: identify partial expansions (steps that expand children and were running)
 		partialExpands := make(map[string]bool)
 		for _, step := range wf.Steps {
-			if step.Executor == types.ExecutorExpand &&
+			if (step.Executor == types.ExecutorExpand ||
+				step.Executor == types.ExecutorBranch ||
+				step.Executor == types.ExecutorForeach) &&
 				(step.Status == types.StepStatusRunning || step.Status == types.StepStatusCompleting) {
 				partialExpands[step.ID] = true
 			}
@@ -1134,8 +1136,10 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 				step.Status = types.StepStatusPending
 				step.StartedAt = nil
 				step.InterruptedAt = nil
-				// Clear ExpandedInto for expand steps (we deleted the children)
-				if step.Executor == types.ExecutorExpand {
+				// Clear ExpandedInto for steps that expand (expand, branch, foreach)
+				if step.Executor == types.ExecutorExpand ||
+					step.Executor == types.ExecutorBranch ||
+					step.Executor == types.ExecutorForeach {
 					step.ExpandedInto = nil
 				}
 				modified = true
@@ -1456,16 +1460,17 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 	stepID := step.ID
 
 	// Create cancellable context for the condition
-	condCtx, cancel := context.WithCancel(ctx)
+	var condCtx context.Context
+	var cancel context.CancelFunc
 
-	// Handle branch-level timeout if specified
 	if cfg.Timeout != "" {
 		timeout, err := time.ParseDuration(cfg.Timeout)
 		if err != nil {
-			cancel()
 			return fmt.Errorf("invalid timeout %q: %v", cfg.Timeout, err)
 		}
 		condCtx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		condCtx, cancel = context.WithCancel(ctx)
 	}
 
 	// Track for cleanup (shared with shell-as-sugar)
