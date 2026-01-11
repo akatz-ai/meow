@@ -199,6 +199,8 @@ description = "Integration agent that merges all task branches"
 [integration.variables]
 spawn_args = { default = "", description = "Extra CLI args for claude" }
 merge_model = { default = "opus", description = "Model for integration agent (opus, sonnet, haiku)" }
+target_branch = { default = "main", description = "Target branch to merge into" }
+skip_merge_to_target = { default = "false", description = "If true, skip final merge to target (just merge tracks)" }
 
 [[integration.steps]]
 id = "spawn"
@@ -213,12 +215,12 @@ executor = "agent"
 agent = "agent-integration"
 needs = ["spawn"]
 prompt = """
-# Integration Agent: Merge All Sprint Tracks
+# Integration Agent: Merge All Sprint Tracks into {{target_branch}}
 
-Your job is to merge all feature branches into this integration worktree.
+Your job is to merge all feature branches into {{target_branch}}.
 When parallel agents work on the same files, conflicts are expected. Resolve them.
 
-## Find Branch Names
+## Step 1: Find Branch Names
 
 Read the track directories list and get branch names:
 ```bash
@@ -229,7 +231,7 @@ echo "Tracks to merge: $TRACK_DIRS"
 # For each track, the branch is in ../<track-dir>/.meow-branch
 ```
 
-## Merge Each Branch
+## Step 2: Merge Each Branch
 
 For each track directory:
 ```bash
@@ -259,13 +261,20 @@ When you see "CONFLICT" in the output:
 6. Complete the merge: `git commit -m "Merge: <track-name> (conflicts resolved)"`
 7. Continue with the next branch
 
-## After All Merges
+## Step 3: Verify Build and Tests
 
 1. Run `go build ./...` to verify build passes
 2. Run `go test -short ./...` to verify tests pass
 3. If tests fail, fix the issues and commit
 
-When all tracks are merged and tests pass: `meow done`
+## Step 4: Push to {{target_branch}}
+
+After all merges pass tests, push directly to {{target_branch}}:
+```bash
+git push origin HEAD:{{target_branch}}
+```
+
+When pushed successfully: `meow done`
 """
 
 [[integration.steps]]
@@ -276,13 +285,13 @@ needs = ["work"]
 prompt = """
 # Integration Review
 
-All tracks should be merged. Final verification:
+All tracks should be merged and pushed to {{target_branch}}. Final verification:
 
 1. `git log --oneline -20` - verify all merges present
-2. `go build ./...` - verify build
-3. `go test -short ./...` - verify tests
+2. `git status` - verify clean state
+3. Verify remote is updated: `git log origin/{{target_branch}} --oneline -5`
 
-Fix any issues you find.
+If anything looks wrong, fix it and push again.
 
 When verified: `meow done`
 """

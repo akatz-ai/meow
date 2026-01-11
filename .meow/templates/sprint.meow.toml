@@ -123,7 +123,7 @@ enable_context_monitor = "{{enable_context_monitor}}"
 context_threshold = "{{context_threshold}}"
 
 # ============================================================================
-# PHASE 3: Integration (Merge all branches)
+# PHASE 3: Integration (Merge all branches directly to target)
 # ============================================================================
 
 [[main.steps]]
@@ -135,35 +135,18 @@ needs = ["agents"]
 [main.steps.variables]
 spawn_args = "{{spawn_args}}"
 merge_model = "{{merge_model}}"
-
-# ============================================================================
-# PHASE 4: Final Merge to Target Branch
-# ============================================================================
-
-[[main.steps]]
-id = "final"
-executor = "expand"
-template = "lib/merge-agent"
-needs = ["integration.done"]
-
-[main.steps.variables]
-workdir = ".meow/worktrees/sprint-integration-track"
-branches = "sprint tasks"
-merge_message = "Merge: Sprint implementation"
 target_branch = "{{target_branch}}"
 skip_merge_to_target = "{{skip_merge_to_target}}"
-spawn_args = "{{spawn_args}}"
-merge_model = "{{merge_model}}"
 
 # ============================================================================
-# PHASE 5: Done
+# PHASE 4: Done
 # ============================================================================
 
 [[main.steps]]
 id = "workflow-done"
 executor = "expand"
 template = "lib/sprint-common#summary"
-needs = ["final.done"]
+needs = ["integration.done"]
 
 [main.steps.variables]
 target_branch = "{{target_branch}}"
