@@ -26,10 +26,6 @@ type Handler interface {
 	// Returns an AckMessage or ErrorMessage.
 	HandleStepDone(ctx context.Context, msg *StepDoneMessage) any
 
-	// HandleGetPrompt returns the current prompt for an agent.
-	// Returns a PromptMessage.
-	HandleGetPrompt(ctx context.Context, msg *GetPromptMessage) any
-
 	// HandleGetSessionID returns the Claude session ID for an agent.
 	// Returns a SessionIDMessage or ErrorMessage.
 	HandleGetSessionID(ctx context.Context, msg *GetSessionIDMessage) any
@@ -240,10 +236,6 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) any {
 	case *StepDoneMessage:
 		s.logger.Debug("handling step_done", "workflow", m.Workflow, "agent", m.Agent, "step", m.Step)
 		return s.handler.HandleStepDone(ctx, m)
-
-	case *GetPromptMessage:
-		s.logger.Debug("handling get_prompt", "agent", m.Agent)
-		return s.handler.HandleGetPrompt(ctx, m)
 
 	case *GetSessionIDMessage:
 		s.logger.Debug("handling get_session_id", "agent", m.Agent)

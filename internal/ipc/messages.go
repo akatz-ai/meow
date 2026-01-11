@@ -15,7 +15,6 @@ type MessageType string
 const (
 	// Request types (agent → orchestrator)
 	MsgStepDone      MessageType = "step_done"
-	MsgGetPrompt     MessageType = "get_prompt"
 	MsgGetSessionID  MessageType = "get_session_id"
 	MsgApproval      MessageType = "approval"
 	MsgEvent         MessageType = "event"
@@ -25,7 +24,6 @@ const (
 	// Response types (orchestrator → agent)
 	MsgAck        MessageType = "ack"
 	MsgError      MessageType = "error"
-	MsgPrompt     MessageType = "prompt"
 	MsgSessionID  MessageType = "session_id"
 	MsgEventMatch MessageType = "event_match"
 	MsgStepStatus MessageType = "step_status"
@@ -34,9 +32,9 @@ const (
 // Valid returns true if this is a recognized message type.
 func (t MessageType) Valid() bool {
 	switch t {
-	case MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval,
+	case MsgStepDone, MsgGetSessionID, MsgApproval,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus,
-		MsgAck, MsgError, MsgPrompt, MsgSessionID,
+		MsgAck, MsgError, MsgSessionID,
 		MsgEventMatch, MsgStepStatus:
 		return true
 	}
@@ -46,7 +44,7 @@ func (t MessageType) Valid() bool {
 // IsRequest returns true if this message type is sent from agent to orchestrator.
 func (t MessageType) IsRequest() bool {
 	switch t {
-	case MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval,
+	case MsgStepDone, MsgGetSessionID, MsgApproval,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus:
 		return true
 	}
@@ -56,7 +54,7 @@ func (t MessageType) IsRequest() bool {
 // IsResponse returns true if this message type is sent from orchestrator to agent.
 func (t MessageType) IsResponse() bool {
 	switch t {
-	case MsgAck, MsgError, MsgPrompt, MsgSessionID,
+	case MsgAck, MsgError, MsgSessionID,
 		MsgEventMatch, MsgStepStatus:
 		return true
 	}
@@ -74,13 +72,6 @@ type StepDoneMessage struct {
 	Step     string         `json:"step"`
 	Outputs  map[string]any `json:"outputs,omitempty"`
 	Notes    string         `json:"notes,omitempty"`
-}
-
-// GetPromptMessage requests the current prompt for an agent.
-// Sent by: meow prime (stop hook)
-type GetPromptMessage struct {
-	Type  MessageType `json:"type"` // Always "get_prompt"
-	Agent string      `json:"agent"`
 }
 
 // GetSessionIDMessage requests the Claude session ID for an agent.
@@ -151,13 +142,6 @@ type ErrorMessage struct {
 	Message string      `json:"message"`
 }
 
-// PromptMessage returns the current prompt for an agent.
-// Empty Content means "no prompt, stay idle".
-type PromptMessage struct {
-	Type    MessageType `json:"type"` // Always "prompt"
-	Content string      `json:"content"`
-}
-
 // SessionIDMessage returns the Claude session ID for an agent.
 type SessionIDMessage struct {
 	Type      MessageType `json:"type"` // Always "session_id"
@@ -190,7 +174,6 @@ type Message interface {
 // Implement Message interface for all message types
 
 func (m *StepDoneMessage) MessageType() MessageType      { return MsgStepDone }
-func (m *GetPromptMessage) MessageType() MessageType     { return MsgGetPrompt }
 func (m *GetSessionIDMessage) MessageType() MessageType  { return MsgGetSessionID }
 func (m *ApprovalMessage) MessageType() MessageType      { return MsgApproval }
 func (m *EventMessage) MessageType() MessageType         { return MsgEvent }
@@ -198,7 +181,6 @@ func (m *AwaitEventMessage) MessageType() MessageType    { return MsgAwaitEvent 
 func (m *GetStepStatusMessage) MessageType() MessageType { return MsgGetStepStatus }
 func (m *AckMessage) MessageType() MessageType           { return MsgAck }
 func (m *ErrorMessage) MessageType() MessageType         { return MsgError }
-func (m *PromptMessage) MessageType() MessageType        { return MsgPrompt }
 func (m *SessionIDMessage) MessageType() MessageType     { return MsgSessionID }
 func (m *EventMatchMessage) MessageType() MessageType    { return MsgEventMatch }
 func (m *StepStatusMessage) MessageType() MessageType    { return MsgStepStatus }
@@ -222,8 +204,6 @@ func ParseMessage(data []byte) (Message, error) {
 	switch raw.Type {
 	case MsgStepDone:
 		msg = &StepDoneMessage{}
-	case MsgGetPrompt:
-		msg = &GetPromptMessage{}
 	case MsgGetSessionID:
 		msg = &GetSessionIDMessage{}
 	case MsgApproval:
@@ -238,8 +218,6 @@ func ParseMessage(data []byte) (Message, error) {
 		msg = &AckMessage{}
 	case MsgError:
 		msg = &ErrorMessage{}
-	case MsgPrompt:
-		msg = &PromptMessage{}
 	case MsgSessionID:
 		msg = &SessionIDMessage{}
 	case MsgEventMatch:

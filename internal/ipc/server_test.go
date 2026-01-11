@@ -14,23 +14,20 @@ type mockHandler struct {
 	mu sync.Mutex
 
 	stepDoneCalls     []*StepDoneMessage
-	getPromptCalls    []*GetPromptMessage
 	getSessionIDCalls []*GetSessionIDMessage
 	approvalCalls     []*ApprovalMessage
 
 	// Configurable responses
 	stepDoneResponse     any
-	getPromptResponse    any
 	getSessionIDResponse any
 	approvalResponse     any
 }
 
 func newMockHandler() *mockHandler {
 	return &mockHandler{
-		stepDoneResponse: &AckMessage{Type: MsgAck, Success: true},
-		getPromptResponse: &PromptMessage{Type: MsgPrompt, Content: "Test prompt"},
+		stepDoneResponse:     &AckMessage{Type: MsgAck, Success: true},
 		getSessionIDResponse: &SessionIDMessage{Type: MsgSessionID, SessionID: "test-session-123"},
-		approvalResponse: &AckMessage{Type: MsgAck, Success: true},
+		approvalResponse:     &AckMessage{Type: MsgAck, Success: true},
 	}
 }
 
@@ -39,13 +36,6 @@ func (h *mockHandler) HandleStepDone(ctx context.Context, msg *StepDoneMessage) 
 	defer h.mu.Unlock()
 	h.stepDoneCalls = append(h.stepDoneCalls, msg)
 	return h.stepDoneResponse
-}
-
-func (h *mockHandler) HandleGetPrompt(ctx context.Context, msg *GetPromptMessage) any {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.getPromptCalls = append(h.getPromptCalls, msg)
-	return h.getPromptResponse
 }
 
 func (h *mockHandler) HandleGetSessionID(ctx context.Context, msg *GetSessionIDMessage) any {
@@ -167,71 +157,6 @@ func TestServer_HandleStepDone(t *testing.T) {
 	}
 }
 
-func TestServer_HandleGetPrompt(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	handler := newMockHandler()
-	handler.getPromptResponse = &PromptMessage{Type: MsgPrompt, Content: "Do this task"}
-	server := NewServerWithPath(socketPath, handler, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.StartAsync(ctx); err != nil {
-		t.Fatalf("StartAsync() error: %v", err)
-	}
-	defer server.Shutdown()
-
-	time.Sleep(50 * time.Millisecond)
-
-	client := NewClient(socketPath)
-	prompt, err := client.GetPrompt("agent-1")
-	if err != nil {
-		t.Fatalf("GetPrompt() error: %v", err)
-	}
-
-	if prompt != "Do this task" {
-		t.Errorf("prompt = %q, want %q", prompt, "Do this task")
-	}
-
-	// Verify handler was called
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-
-	if len(handler.getPromptCalls) != 1 {
-		t.Fatalf("getPromptCalls = %d, want 1", len(handler.getPromptCalls))
-	}
-	if handler.getPromptCalls[0].Agent != "agent-1" {
-		t.Errorf("Agent = %q, want %q", handler.getPromptCalls[0].Agent, "agent-1")
-	}
-}
-
-func TestServer_HandleGetPrompt_Empty(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	handler := newMockHandler()
-	handler.getPromptResponse = &PromptMessage{Type: MsgPrompt, Content: ""} // Empty = stay idle
-	server := NewServerWithPath(socketPath, handler, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.StartAsync(ctx); err != nil {
-		t.Fatalf("StartAsync() error: %v", err)
-	}
-	defer server.Shutdown()
-
-	time.Sleep(50 * time.Millisecond)
-
-	client := NewClient(socketPath)
-	prompt, err := client.GetPrompt("agent-1")
-	if err != nil {
-		t.Fatalf("GetPrompt() error: %v", err)
-	}
-
-	if prompt != "" {
-		t.Errorf("prompt = %q, want empty string", prompt)
-	}
-}
-
 func TestServer_HandleGetSessionID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	handler := newMockHandler()
@@ -316,7 +241,7 @@ func TestServer_HandleApproval(t *testing.T) {
 func TestServer_ErrorResponse(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	handler := newMockHandler()
-	handler.getPromptResponse = &ErrorMessage{Type: MsgError, Message: "agent not found"}
+	handler.getSessionIDResponse = &ErrorMessage{Type: MsgError, Message: "agent not found"}
 	server := NewServerWithPath(socketPath, handler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -330,9 +255,9 @@ func TestServer_ErrorResponse(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient(socketPath)
-	_, err := client.GetPrompt("unknown-agent")
+	_, err := client.GetSessionID("unknown-agent")
 	if err == nil {
-		t.Fatal("GetPrompt() should return error when server returns ErrorMessage")
+		t.Fatal("GetSessionID() should return error when server returns ErrorMessage")
 	}
 
 	if err.Error() != "server error: agent not found" {
@@ -364,7 +289,7 @@ func TestServer_MultipleConnections(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			client := NewClient(socketPath)
-			_, err := client.GetPrompt("agent-1")
+			_, err := client.GetSessionID("agent-1")
 			if err != nil {
 				errors <- err
 			}
@@ -382,8 +307,8 @@ func TestServer_MultipleConnections(t *testing.T) {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 
-	if len(handler.getPromptCalls) != 10 {
-		t.Errorf("getPromptCalls = %d, want 10", len(handler.getPromptCalls))
+	if len(handler.getSessionIDCalls) != 10 {
+		t.Errorf("getSessionIDCalls = %d, want 10", len(handler.getSessionIDCalls))
 	}
 }
 
@@ -427,8 +352,8 @@ func TestClient_ConnectionError(t *testing.T) {
 	client := NewClient("/tmp/nonexistent-socket-12345.sock")
 	client.SetTimeout(100 * time.Millisecond)
 
-	_, err := client.GetPrompt("agent-1")
+	_, err := client.GetSessionID("agent-1")
 	if err == nil {
-		t.Fatal("GetPrompt() should return error for non-existent socket")
+		t.Fatal("GetSessionID() should return error for non-existent socket")
 	}
 }
