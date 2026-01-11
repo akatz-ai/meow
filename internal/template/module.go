@@ -361,8 +361,11 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	if v, ok := data["index_var"].(string); ok {
 		s.IndexVar = v
 	}
+	// Handle parallel as bool (direct) or string (for variable substitution)
 	if v, ok := data["parallel"].(bool); ok {
-		s.Parallel = &v
+		s.Parallel = v
+	} else if v, ok := data["parallel"].(string); ok {
+		s.Parallel = v
 	}
 	// Handle max_concurrent as string (new) or int64 (backwards compat)
 	if v, ok := data["max_concurrent"].(string); ok {
@@ -684,8 +687,11 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	if v, ok := data["index_var"].(string); ok {
 		step.IndexVar = v
 	}
+	// Handle parallel as bool (direct) or string (for variable substitution)
 	if v, ok := data["parallel"].(bool); ok {
-		step.Parallel = &v
+		step.Parallel = v
+	} else if v, ok := data["parallel"].(string); ok {
+		step.Parallel = v
 	}
 	// Handle max_concurrent as string (new) or int64 (backwards compat)
 	if v, ok := data["max_concurrent"].(string); ok {

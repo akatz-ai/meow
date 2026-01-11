@@ -263,6 +263,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	// Check for foreach steps with implicit join that are ready to complete
 	o.checkForeachCompletion(wf)
 
+	// Check for branch steps waiting for their expanded children to complete
+	o.checkBranchCompletion(wf)
+
 	readySteps := wf.GetReadySteps()
 	if len(readySteps) == 0 {
 		if wf.AllDone() {
@@ -800,6 +803,89 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
 			}
 		}
 	}
+}
+
+// checkBranchCompletion checks for branch steps that are waiting for their expanded
+// children to complete. When all children are done, the branch step is marked done.
+// This is analogous to checkForeachCompletion for foreach steps.
+func (o *Orchestrator) checkBranchCompletion(wf *types.Workflow) {
+	for _, step := range wf.Steps {
+		// Only check running branch steps with expanded children
+		if step.Status != types.StepStatusRunning {
+			continue
+		}
+		if step.Executor != types.ExecutorBranch {
+			continue
+		}
+		if len(step.ExpandedInto) == 0 {
+			continue
+		}
+
+		// Check if all children are complete
+		if IsBranchComplete(step, wf.Steps) {
+			// Check if any children failed
+			if IsBranchFailed(step, wf.Steps) {
+				o.logger.Info("branch step failed (child failed)",
+					"step", step.ID)
+				if err := step.Fail(&types.StepError{
+					Message: "branch child step failed",
+				}); err != nil {
+					o.logger.Error("failed to fail branch step",
+						"step", step.ID,
+						"error", err)
+				}
+			} else {
+				o.logger.Info("branch step complete (all children done)",
+					"step", step.ID,
+					"childCount", len(step.ExpandedInto))
+				// Use the outcome that was stored during handleBranch
+				if err := step.Complete(step.Outputs); err != nil {
+					o.logger.Error("failed to complete branch step",
+						"step", step.ID,
+						"error", err)
+				}
+			}
+		}
+	}
+}
+
+// IsBranchComplete checks if all children of a branch step are done.
+func IsBranchComplete(branchStep *types.Step, allSteps map[string]*types.Step) bool {
+	if branchStep.ExpandedInto == nil || len(branchStep.ExpandedInto) == 0 {
+		return true // No children = complete
+	}
+
+	// Check all expanded steps
+	for _, childID := range branchStep.ExpandedInto {
+		child, ok := allSteps[childID]
+		if !ok {
+			continue // Step not found - treat as complete (may have been cleaned up)
+		}
+		if child.Status != types.StepStatusDone && child.Status != types.StepStatusFailed {
+			return false // Still running
+		}
+	}
+
+	return true
+}
+
+// IsBranchFailed checks if any child of a branch step has failed.
+func IsBranchFailed(branchStep *types.Step, allSteps map[string]*types.Step) bool {
+	if branchStep.ExpandedInto == nil {
+		return false
+	}
+
+	for _, childID := range branchStep.ExpandedInto {
+		child, ok := allSteps[childID]
+		if !ok {
+			continue
+		}
+		if child.Status == types.StepStatusFailed {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isForeachThrottled checks if a step should be throttled due to its parent
@@ -1394,7 +1480,19 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 		}
 	}
 
-	// Mark step as done
+	// If we expanded children, stay in "running" state until they complete.
+	// The main loop's checkBranchCompletion will mark us done when children finish.
+	// This is the same pattern as foreach with join=true.
+	if len(step.ExpandedInto) > 0 {
+		o.logger.Info("branch expansion complete, waiting for children",
+			"step", step.ID,
+			"childCount", len(step.ExpandedInto))
+		// Store the outcome for later when we complete
+		step.Outputs = map[string]any{"outcome": string(outcome)}
+		return nil
+	}
+
+	// No children - mark step as done immediately
 	if err := step.Complete(map[string]any{"outcome": string(outcome)}); err != nil {
 		return fmt.Errorf("completing step: %w", err)
 	}

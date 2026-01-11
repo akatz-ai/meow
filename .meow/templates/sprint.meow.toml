@@ -102,7 +102,7 @@ items_file = ".meow/worktrees/.enriched-tasks.json"
 item_var = "task"
 index_var = "i"
 template = "lib/sprint-common#agent-track-wrapper"
-parallel = {{parallel}}
+parallel = "{{parallel}}"
 needs = ["setup.done"]
 
 [main.steps.variables]

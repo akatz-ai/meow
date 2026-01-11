@@ -370,6 +370,30 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		variables[k] = subV
 	}
 
+	// Convert and substitute parallel (supports bool or string like "{{parallel}}")
+	var parallel *bool
+	switch v := ts.Parallel.(type) {
+	case bool:
+		parallel = &v
+	case string:
+		// Substitute variables first
+		substituted, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute parallel: %w", err)
+		}
+		// Parse the result as bool
+		switch strings.ToLower(substituted) {
+		case "true", "1", "yes":
+			t := true
+			parallel = &t
+		case "false", "0", "no":
+			f := false
+			parallel = &f
+		default:
+			return fmt.Errorf("parallel must be true or false, got: %q", substituted)
+		}
+	}
+
 	// Convert and substitute max_concurrent (supports int or string like "{{max_agents}}")
 	var maxConcurrent string
 	switch v := ts.MaxConcurrent.(type) {
@@ -396,7 +420,7 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		IndexVar:      indexVar,
 		Template:      template,
 		Variables:     variables,
-		Parallel:      ts.Parallel,
+		Parallel:      parallel,
 		MaxConcurrent: maxConcurrent,
 		Join:          ts.Join,
 	}

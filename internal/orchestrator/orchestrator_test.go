@@ -1560,3 +1560,108 @@ func TestOrchestrator_ConcurrentStepCompletionWithOrchTick(t *testing.T) {
 		}
 	}
 }
+
+// TestOrchestrator_BranchWaitsForChildren tests that a step depending on a branch
+// step does NOT become ready until all the branch's expanded children are complete.
+// This is a regression test for the bug where branch steps marked themselves as
+// "done" immediately after expanding, causing dependent steps to run prematurely.
+func TestOrchestrator_BranchWaitsForChildren(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with:
+	// - A branch step that has expanded into child steps (simulating post-expansion state)
+	// - A "done" step that depends on the branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	now := time.Now()
+
+	// Branch step is "running" with expanded children.
+	// This simulates the correct state AFTER handleBranch expands the target.
+	// The bug is that handleBranch currently marks this as "done" instead of "running".
+	wf.Steps["branch-step"] = &types.Step{
+		ID:           "branch-step",
+		Executor:     types.ExecutorBranch,
+		Status:       types.StepStatusRunning,
+		StartedAt:    &now,
+		ExpandedInto: []string{"branch-step.child-1", "branch-step.child-2"},
+		Branch: &types.BranchConfig{
+			Condition: "true",
+			OnTrue: &types.BranchTarget{
+				Template: ".on-true",
+			},
+		},
+	}
+
+	// Child steps are still pending (not completed yet)
+	wf.Steps["branch-step.child-1"] = &types.Step{
+		ID:           "branch-step.child-1",
+		Executor:     types.ExecutorShell,
+		Status:       types.StepStatusPending,
+		ExpandedFrom: "branch-step",
+		Shell:        &types.ShellConfig{Command: "echo child 1"},
+	}
+	wf.Steps["branch-step.child-2"] = &types.Step{
+		ID:           "branch-step.child-2",
+		Executor:     types.ExecutorShell,
+		Status:       types.StepStatusPending,
+		ExpandedFrom: "branch-step",
+		Needs:        []string{"branch-step.child-1"},
+		Shell:        &types.ShellConfig{Command: "echo child 2"},
+	}
+
+	// Done step depends on branch step
+	wf.Steps["done-step"] = &types.Step{
+		ID:       "done-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"branch-step"},
+		Shell:    &types.ShellConfig{Command: "echo done"},
+	}
+
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	// Run the orchestrator - it should complete successfully
+	// WITHOUT the fix, the orchestrator will hang because:
+	// - The branch step is "running" with children
+	// - No code completes the branch when children are done
+	// - The done-step is blocked waiting for branch to be "done"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil (this means branch step never completed after children finished)", err)
+	}
+
+	// Verify execution order: children must complete before done-step
+	// shell.executed should be: ["echo child 1", "echo child 2", "echo done"]
+	if len(shell.executed) != 3 {
+		t.Fatalf("Expected 3 commands executed, got %d: %v", len(shell.executed), shell.executed)
+	}
+	if shell.executed[0] != "echo child 1" {
+		t.Errorf("First command should be 'echo child 1', got %q", shell.executed[0])
+	}
+	if shell.executed[1] != "echo child 2" {
+		t.Errorf("Second command should be 'echo child 2', got %q", shell.executed[1])
+	}
+	if shell.executed[2] != "echo done" {
+		t.Errorf("Third command should be 'echo done', got %q", shell.executed[2])
+	}
+}
+
+// getStepIDs returns a slice of step IDs for debugging output.
+func getStepIDs(steps []*types.Step) []string {
+	ids := make([]string, len(steps))
+	for i, s := range steps {
+		ids[i] = s.ID
+	}
+	return ids
+}

@@ -1343,8 +1343,16 @@ task_description = "{{task}}"
 	if step.Template != ".worker-task" {
 		t.Errorf("expected template '.worker-task', got %q", step.Template)
 	}
-	if step.Parallel == nil || !*step.Parallel {
-		t.Error("expected parallel to be true")
+	// Parallel is any type (can be bool or string)
+	switch v := step.Parallel.(type) {
+	case bool:
+		if !v {
+			t.Error("expected parallel to be true")
+		}
+	case nil:
+		t.Error("expected parallel to be set")
+	default:
+		t.Errorf("unexpected parallel type: %T", v)
 	}
 	// MaxConcurrent is any type (can be int64 or string)
 	switch v := step.MaxConcurrent.(type) {
