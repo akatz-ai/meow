@@ -1314,8 +1314,10 @@ func (o *Orchestrator) completeBranchCondition(
 	}
 
 	// Handle on_error for shell-as-sugar (no expansion targets)
+	// Default is "fail" when on_error is empty
 	if target == nil && result.ExitCode != 0 {
-		if cfg.OnError == "fail" {
+		if cfg.OnError != "continue" {
+			// Default to fail
 			if failErr := step.Fail(&types.StepError{
 				Message: "command failed",
 				Code:    result.ExitCode,
