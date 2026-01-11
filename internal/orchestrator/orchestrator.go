@@ -81,6 +81,11 @@ type Orchestrator struct {
 	// must acquire this mutex before reading/writing workflow state.
 	wfMu sync.Mutex
 
+	// Track pending async command executions (branch and shell-as-sugar)
+	// Key: stepID (string)
+	// Value: context.CancelFunc
+	pendingCommands sync.Map
+
 	// Shutdown coordination
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
