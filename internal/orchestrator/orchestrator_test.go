@@ -1675,3 +1675,236 @@ func getStepIDs(steps []*types.Step) []string {
 	}
 	return ids
 }
+
+// --- Async Dispatch Tests ---
+
+// TestHandleBranch_ReturnsImmediately verifies that handleBranch returns immediately
+// even when the condition command takes a long time to execute.
+func TestHandleBranch_ReturnsImmediately(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a branch step that has a slow condition (sleeps 5 seconds)
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 5", // Slow condition
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+
+	// Measure how long handleBranch takes
+	start := time.Now()
+	err := orch.handleBranch(ctx, wf, wf.Steps["branch-step"])
+	elapsed := time.Since(start)
+
+	// handleBranch should return immediately (< 100ms)
+	if err != nil {
+		t.Errorf("handleBranch error = %v, want nil", err)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("handleBranch took %v, want < 100ms (async dispatch failed)", elapsed)
+	}
+
+	// Clean up: cancel the pending command
+	if cancel, ok := orch.pendingCommands.Load("branch-step"); ok {
+		if cancelFunc, ok := cancel.(context.CancelFunc); ok {
+			cancelFunc()
+		}
+	}
+	orch.wg.Wait() // Wait for goroutine to exit
+}
+
+// TestHandleBranch_StepStaysRunning verifies that the step status is "running"
+// after handleBranch returns, not "done".
+func TestHandleBranch_StepStaysRunning(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 1", // Condition that takes time
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.handleBranch(ctx, wf, wf.Steps["branch-step"])
+	if err != nil {
+		t.Fatalf("handleBranch error = %v", err)
+	}
+
+	// Step status should be "running" after handleBranch returns
+	if wf.Steps["branch-step"].Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want %v", wf.Steps["branch-step"].Status, types.StepStatusRunning)
+	}
+
+	// StartedAt should be set
+	if wf.Steps["branch-step"].StartedAt == nil {
+		t.Error("Step StartedAt should be set")
+	}
+
+	// Clean up
+	if cancel, ok := orch.pendingCommands.Load("branch-step"); ok {
+		if cancelFunc, ok := cancel.(context.CancelFunc); ok {
+			cancelFunc()
+		}
+	}
+	orch.wg.Wait()
+}
+
+// TestHandleBranch_TracksPendingCommand verifies that handleBranch stores the
+// cancel function in pendingCommands.
+func TestHandleBranch_TracksPendingCommand(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 2",
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.handleBranch(ctx, wf, wf.Steps["branch-step"])
+	if err != nil {
+		t.Fatalf("handleBranch error = %v", err)
+	}
+
+	// pendingCommands should contain the step ID
+	cancel, ok := orch.pendingCommands.Load("branch-step")
+	if !ok {
+		t.Fatal("pendingCommands does not contain branch-step")
+	}
+
+	// Value should be a cancel function
+	cancelFunc, ok := cancel.(context.CancelFunc)
+	if !ok {
+		t.Fatalf("pendingCommands value is %T, want context.CancelFunc", cancel)
+	}
+
+	// Cancel should be callable (won't panic)
+	cancelFunc()
+	orch.wg.Wait()
+}
+
+// TestParallelBranchSteps verifies that multiple branch steps with the same
+// dependencies start in the same orchestrator tick (parallel execution).
+func TestParallelBranchSteps(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with two branch steps that both need "init" step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Initial step that's already done
+	wf.Steps["init"] = &types.Step{
+		ID:       "init",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusDone,
+		Shell:    &types.ShellConfig{Command: "echo init"},
+	}
+
+	// Two branch steps that both depend on "init"
+	wf.Steps["branch-1"] = &types.Step{
+		ID:       "branch-1",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"init"},
+		Branch: &types.BranchConfig{
+			Condition: "sleep 1 && true",
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	wf.Steps["branch-2"] = &types.Step{
+		ID:       "branch-2",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"init"},
+		Branch: &types.BranchConfig{
+			Condition: "sleep 1 && true",
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+
+	// Process workflow once - should dispatch both branch steps
+	start := time.Now()
+	err := orch.processWorkflow(ctx, wf)
+	if err != nil {
+		t.Fatalf("processWorkflow error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// processWorkflow should return quickly (dispatches async, doesn't wait)
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("processWorkflow took %v, want < 200ms (should not wait for conditions)", elapsed)
+	}
+
+	// Both branch steps should be running
+	if wf.Steps["branch-1"].Status != types.StepStatusRunning {
+		t.Errorf("branch-1 status = %v, want running", wf.Steps["branch-1"].Status)
+	}
+	if wf.Steps["branch-2"].Status != types.StepStatusRunning {
+		t.Errorf("branch-2 status = %v, want running", wf.Steps["branch-2"].Status)
+	}
+
+	// Both should be tracked in pendingCommands
+	_, ok1 := orch.pendingCommands.Load("branch-1")
+	_, ok2 := orch.pendingCommands.Load("branch-2")
+	if !ok1 {
+		t.Error("branch-1 not tracked in pendingCommands")
+	}
+	if !ok2 {
+		t.Error("branch-2 not tracked in pendingCommands")
+	}
+
+	// Clean up
+	orch.cancelPendingCommands()
+	orch.wg.Wait()
+}
