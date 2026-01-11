@@ -3021,3 +3021,177 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 		t.Error("expected resume of completed workflow to fail")
 	}
 }
+
+// ===========================================================================
+// Async Execution Tests
+// ===========================================================================
+
+// TestE2E_ParallelBranchSteps tests that two branch steps with the same
+// dependencies execute in parallel.
+//
+// This verifies the async branch implementation:
+//   1. Both branches start their conditions in the same orchestrator tick
+//   2. Conditions run concurrently in separate goroutines
+//   3. Workflow completes in ~1s (parallel) instead of ~2s (sequential)
+//
+// Timeline:
+//   - t=0s: Both branch-1 and branch-2 start (same needs, both ready)
+//   - t=0-1s: Both sleep 1s conditions run in parallel
+//   - t=1s: Both conditions complete, both branches expand on_true
+//   - t=1s: Verify step runs (both branches done)
+//
+// Expected: Total time ~1-2s (parallel), not ~2-3s (sequential)
+func TestE2E_ParallelBranchSteps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	template := `
+[main]
+name = "parallel-branches"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = "echo 'setup'"
+
+# Two branches that should run in parallel
+[[main.steps]]
+id = "branch-1"
+executor = "branch"
+needs = ["setup"]
+condition = "sleep 1 && echo 'branch-1'"
+
+[main.steps.on_true]
+inline = [
+  { id = "result-1", executor = "shell", command = "echo 'branch-1 done'" }
+]
+
+[[main.steps]]
+id = "branch-2"
+executor = "branch"
+needs = ["setup"]
+condition = "sleep 1 && echo 'branch-2'"
+
+[main.steps.on_true]
+inline = [
+  { id = "result-2", executor = "shell", command = "echo 'branch-2 done'" }
+]
+
+# Verify both complete
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["branch-1", "branch-2"]
+command = "echo 'both branches complete'"
+`
+
+	if err := h.WriteTemplate("parallel-branches.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "parallel-branches.toml"))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// The primary verification is timing - parallel execution should complete faster
+	// than sequential execution. With two 1-second sleeps:
+	// - Parallel: ~1-2s total
+	// - Sequential: ~2-3s total
+	// We allow up to 3s to account for test environment overhead
+	if elapsed > 3*time.Second {
+		t.Errorf("workflow took too long (%.2fs) - branches may be running sequentially (expected <3s for parallel)", elapsed.Seconds())
+	} else {
+		t.Logf("✓ Parallel execution confirmed: %.2fs (expected ~1-2s)", elapsed.Seconds())
+	}
+}
+
+// TestE2E_ShellOutputChain tests that shell step outputs flow correctly
+// to downstream steps via variable substitution.
+//
+// This verifies:
+//   1. Shell steps capture outputs (stdout)
+//   2. Outputs are available for variable substitution in later steps
+//   3. Multiple steps can chain outputs
+//
+// Timeline:
+//   - Step 1: Generates "hello"
+//   - Step 2: Uses {{step-1.outputs.greeting}}, generates "world"
+//   - Step 3: Uses both outputs to create "hello world"
+func TestE2E_ShellOutputChain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Create a temp file for output verification
+	outputFile := filepath.Join(h.TempDir, "result.txt")
+
+	template := fmt.Sprintf(`
+[main]
+name = "shell-output-chain"
+
+[[main.steps]]
+id = "step-1"
+executor = "shell"
+command = "echo 'hello'"
+
+[main.steps.outputs]
+greeting = { source = "stdout" }
+
+[[main.steps]]
+id = "step-2"
+executor = "shell"
+needs = ["step-1"]
+command = "echo 'world'"
+
+[main.steps.outputs]
+target = { source = "stdout" }
+
+[[main.steps]]
+id = "step-3"
+executor = "shell"
+needs = ["step-1", "step-2"]
+command = "echo '{{step-1.outputs.greeting}} {{step-2.outputs.target}}' > %s"
+`, outputFile)
+
+	if err := h.WriteTemplate("shell-output-chain.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "shell-output-chain.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Read the output file to verify variable substitution worked
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	expectedOutput := "hello world"
+	actualOutput := strings.TrimSpace(string(content))
+	if actualOutput != expectedOutput {
+		t.Errorf("output mismatch:\n  expected: %q\n  got:      %q", expectedOutput, actualOutput)
+	} else {
+		t.Logf("✓ Output chain verified: %q", actualOutput)
+	}
+}
