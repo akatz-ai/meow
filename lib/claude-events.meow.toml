@@ -43,25 +43,44 @@ executor = "shell"
 command = """
 mkdir -p "{{worktree}}/.claude"
 
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
 cat > "{{worktree}}/.claude/settings.json" << 'EOF'
 {
   "hooks": {
     "Stop": [
       {
-        "type": "command",
-        "command": "meow event agent-stopped"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "meow event tool-starting --data tool=$TOOL_NAME"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-starting --data tool=$TOOL_NAME"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "type": "command",
-        "command": "meow event tool-completed --data tool=$TOOL_NAME"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-completed --data tool=$TOOL_NAME"
+          }
+        ]
       }
     ]
   }
@@ -101,13 +120,24 @@ executor = "shell"
 command = """
 mkdir -p "{{worktree}}/.claude"
 
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
 cat > "{{worktree}}/.claude/settings.json" << 'EOF'
 {
   "hooks": {
     "Stop": [
       {
-        "type": "command",
-        "command": "meow event agent-stopped"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped"
+          }
+        ]
       }
     ]
   }
@@ -149,19 +179,34 @@ executor = "shell"
 command = """
 mkdir -p "{{worktree}}/.claude"
 
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
 cat > "{{worktree}}/.claude/settings.json" << 'EOF'
 {
   "hooks": {
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "meow event tool-starting --data tool=$TOOL_NAME"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-starting --data tool=$TOOL_NAME"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "type": "command",
-        "command": "meow event tool-completed --data tool=$TOOL_NAME"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-completed --data tool=$TOOL_NAME"
+          }
+        ]
       }
     ]
   }
@@ -200,6 +245,12 @@ executor = "shell"
 command = """
 mkdir -p "{{worktree}}/.claude"
 
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
 HOOKS="{{hooks}}"
 
 # Normalize: "stop,tools" or "tools,stop" → "all"
@@ -207,14 +258,15 @@ if [[ "$HOOKS" == *","* ]]; then
     HOOKS="all"
 fi
 
+# New Claude Code hook format uses matcher + hooks structure
 case "$HOOKS" in
     all)
         cat > "{{worktree}}/.claude/settings.json" << 'EOF'
 {
   "hooks": {
-    "Stop": [{"type": "command", "command": "meow event agent-stopped"}],
-    "PreToolUse": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}],
-    "PostToolUse": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]
+    "Stop": [{"hooks": [{"type": "command", "command": "meow event agent-stopped"}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]}]
   }
 }
 EOF
@@ -222,7 +274,7 @@ EOF
         ;;
     stop)
         cat > "{{worktree}}/.claude/settings.json" << 'EOF'
-{"hooks": {"Stop": [{"type": "command", "command": "meow event agent-stopped"}]}}
+{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "meow event agent-stopped"}]}]}}
 EOF
         echo "Configured Stop hook"
         ;;
@@ -230,8 +282,8 @@ EOF
         cat > "{{worktree}}/.claude/settings.json" << 'EOF'
 {
   "hooks": {
-    "PreToolUse": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}],
-    "PostToolUse": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]}]
   }
 }
 EOF

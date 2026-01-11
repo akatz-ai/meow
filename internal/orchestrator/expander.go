@@ -58,6 +58,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	templateRef := config.Template
 	var workflow *template.Workflow
 	var workflowID string
+	var resolvedModulePath string // Track which module file was resolved, for local refs in nested templates
 
 	// Determine the workflow ID
 	if parentWorkflowID != "" {
@@ -91,6 +92,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		if workflow == nil {
 			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, modulePath)
 		}
+		resolvedModulePath = modulePath
 	}
 
 	// Check for file#workflow format
@@ -125,6 +127,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		if workflow == nil {
 			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, filePath)
 		}
+		resolvedModulePath = filePath
 	} else if strings.HasSuffix(templateRef, ".toml") || strings.Contains(templateRef, "/") {
 		// File path
 		filePath := templateRef
@@ -158,6 +161,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		if workflow == nil {
 			return nil, fmt.Errorf("no workflow found in %s", filePath)
 		}
+		resolvedModulePath = filePath
 	} else {
 		// Template name - use loader
 		return nil, fmt.Errorf("named template loading not yet supported for expansion: %s", templateRef)
@@ -186,6 +190,9 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		for i, need := range step.Needs {
 			step.Needs[i] = parentStepID + "." + need
 		}
+
+		// Set the source module for local reference resolution in nested templates
+		step.SourceModule = resolvedModulePath
 
 		// Steps with no dependencies should depend on parent completing
 		// (This will be handled by the orchestrator when inserting)
@@ -227,8 +234,14 @@ func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Workflow
 		return fmt.Errorf("step %s missing expand config", step.ID)
 	}
 
-	// Call the underlying expander, passing the workflow's source template for local refs
-	result, err := a.Expander.Expand(ctx, step.Expand, step.ID, wf.ID, wf.Template)
+	// Use step's SourceModule if set (for nested expansions), otherwise fall back to workflow template
+	sourceModule := step.SourceModule
+	if sourceModule == "" {
+		sourceModule = wf.Template
+	}
+
+	// Call the underlying expander, passing the source module for local refs
+	result, err := a.Expander.Expand(ctx, step.Expand, step.ID, wf.ID, sourceModule)
 	if err != nil {
 		return err
 	}

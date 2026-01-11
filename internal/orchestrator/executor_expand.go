@@ -149,6 +149,7 @@ func cloneStep(src *types.Step) *types.Step {
 		Needs:        append([]string(nil), src.Needs...),
 		ExpandedFrom: src.ExpandedFrom,
 		ExpandedInto: append([]string(nil), src.ExpandedInto...),
+		SourceModule: src.SourceModule,
 	}
 
 	// Clone executor-specific configs
@@ -166,6 +167,9 @@ func cloneStep(src *types.Step) *types.Step {
 	}
 	if src.Branch != nil {
 		dst.Branch = cloneBranchConfig(src.Branch)
+	}
+	if src.Foreach != nil {
+		dst.Foreach = cloneForeachConfig(src.Foreach)
 	}
 	if src.Agent != nil {
 		dst.Agent = cloneAgentConfig(src.Agent)

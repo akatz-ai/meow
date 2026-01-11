@@ -476,6 +476,48 @@ func TestExecuteExpand_DefaultLimits(t *testing.T) {
 	}
 }
 
+func TestExecuteExpand_SourceModulePropagation(t *testing.T) {
+	// Steps with SourceModule set (as if loaded from a template file)
+	loader := &mockTemplateLoader{
+		steps: []*types.Step{
+			{
+				ID:           "task-1",
+				Executor:     types.ExecutorShell,
+				Shell:        &types.ShellConfig{Command: "echo 1"},
+				SourceModule: "/some/module.meow.toml",
+			},
+			{
+				ID:           "task-2",
+				Executor:     types.ExecutorBranch,
+				Needs:        []string{"task-1"},
+				SourceModule: "/some/module.meow.toml",
+				Branch: &types.BranchConfig{
+					Condition: "true",
+				},
+			},
+		},
+	}
+
+	step := &types.Step{
+		ID:       "expand",
+		Executor: types.ExecutorExpand,
+		Expand:   &types.ExpandConfig{Template: ".template"},
+	}
+
+	result, stepErr := ExecuteExpand(context.Background(), step, loader, nil, 0, nil)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	// Verify SourceModule is preserved on expanded steps
+	for _, expanded := range result.ExpandedSteps {
+		if expanded.SourceModule != "/some/module.meow.toml" {
+			t.Errorf("step %s: expected SourceModule '/some/module.meow.toml', got %q",
+				expanded.ID, expanded.SourceModule)
+		}
+	}
+}
+
 func TestSubstituteVars(t *testing.T) {
 	tests := []struct {
 		input    string

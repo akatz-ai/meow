@@ -1280,12 +1280,17 @@ func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Workflow, st
 	}
 
 	// Build template loader from the expander
+	// Use step's SourceModule if set (for nested foreach), otherwise workflow template
+	sourceModule := step.SourceModule
+	if sourceModule == "" {
+		sourceModule = wf.Template
+	}
 	var loader TemplateLoader
 	if o.expander != nil {
 		if adapter, ok := o.expander.(*TemplateExpanderAdapter); ok {
 			loader = &fileTemplateLoader{
 				expander:     adapter.Expander,
-				sourceModule: wf.Template,
+				sourceModule: sourceModule,
 				workflowID:   wf.ID,
 			}
 		}
@@ -1401,9 +1406,11 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Workflow, step *types.Step, target *types.BranchTarget) error {
 	if target.Template != "" {
 		// Create a temporary expand step to reuse the expander
+		// Copy SourceModule from branch step so nested local refs resolve correctly
 		expandStep := &types.Step{
-			ID:       step.ID,
-			Executor: types.ExecutorExpand,
+			ID:           step.ID,
+			Executor:     types.ExecutorExpand,
+			SourceModule: step.SourceModule,
 			Expand: &types.ExpandConfig{
 				Template:  target.Template,
 				Variables: target.Variables,
