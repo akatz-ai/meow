@@ -1,0 +1,423 @@
+# Agent Persistence Library Template (Ralph Wiggum Pattern)
+#
+# Monitors an agent and re-injects prompts when it stops unexpectedly.
+# Named after Ralph Wiggum's famous "I'm helping!" persistence.
+#
+# The pattern ensures agent persistence by:
+#   1. Listening for agent-stopped events
+#   2. Re-injecting a nudge prompt when the agent stops
+#   3. Checking if the main task is complete
+#   4. Looping until the task completes
+#
+# This is agent-agnostic - works with any agent that emits agent-stopped events
+# (configure via lib/claude-events#setup-stop-hook for Claude Code).
+#
+# USAGE:
+#
+#   Start monitoring in parallel with your main task:
+#
+#   [[main.steps]]
+#   id = "spawn"
+#   executor = "spawn"
+#   agent = "worker"
+#   workdir = "{{worktree}}"
+#
+#   # Main task
+#   [[main.steps]]
+#   id = "work"
+#   executor = "agent"
+#   agent = "worker"
+#   prompt = "Implement the feature..."
+#   needs = ["spawn"]
+#
+#   # Start persistence monitor in parallel
+#   [[main.steps]]
+#   id = "persistence-monitor"
+#   executor = "expand"
+#   template = "lib/agent-persistence#monitor"
+#   needs = ["spawn"]
+#   variables = {
+#     agent = "worker",
+#     nudge_prompt = "Continue with your task. When complete, run: meow done",
+#     check_step = "work"
+#   }
+#
+#   # Kill only needs main task, not the monitor
+#   [[main.steps]]
+#   id = "kill"
+#   executor = "kill"
+#   agent = "worker"
+#   needs = ["work"]
+#
+# ARCHITECTURE:
+#
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │                      WORKFLOW                                    │
+#   │                                                                  │
+#   │  spawn ─┬─► work (agent executor, waits for meow done)          │
+#   │         │                                                        │
+#   │         └─► monitor (expand, parallel)                           │
+#   │                 │                                                │
+#   │                 ▼                                                │
+#   │            monitor-loop (internal)                               │
+#   │                 │                                                │
+#   │                 ├─► await-event agent-stopped (timeout: 60s)    │
+#   │                 │                                                │
+#   │                 ├─[event]─► nudge via fire_forget               │
+#   │                 │           └─► check if done → loop/exit       │
+#   │                 │                                                │
+#   │                 └─[timeout]─► check if done → loop/exit         │
+#   │                                                                  │
+#   │  kill ◄── needs: [work] (NOT monitor)                           │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+# The monitor naturally terminates when check_step completes because:
+#   1. The await-event times out
+#   2. meow step-status shows the step is done
+#   3. The loop exits via the on_false branch (no more recursion)
+#
+# VARIABLES:
+#
+#   agent (required): Agent ID to monitor for agent-stopped events
+#   nudge_prompt (required): Prompt to re-inject when agent stops unexpectedly
+#   check_step (required): Step ID to check for completion (exits loop when done)
+#   timeout (default "60s"): How long to wait between checks
+#
+# PREREQUISITES:
+#
+#   The agent must emit agent-stopped events. For Claude Code, use:
+#     template = "lib/claude-events#setup-stop-hook"
+#     variables = { worktree = "{{workdir}}" }
+#
+# NOTES:
+#
+#   - The monitor runs in parallel with the main task
+#   - Kill/cleanup should depend on the main task, not the monitor
+#   - The monitor self-terminates when check_step completes
+#   - Uses fire_forget mode to inject prompts without blocking
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MONITOR (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Starts the persistence monitor loop. Expand this in parallel with your main
+# agent task to ensure the agent stays on track.
+#
+# Example:
+#   [[main.steps]]
+#   id = "persistence"
+#   executor = "expand"
+#   template = "lib/agent-persistence#monitor"
+#   needs = ["spawn"]
+#   variables = {
+#     agent = "worker",
+#     nudge_prompt = "Continue working. Run 'meow done' when finished.",
+#     check_step = "main-task"
+#   }
+
+[monitor]
+name = "agent-persistence-monitor"
+description = "Monitor agent for unexpected stops and re-inject prompts"
+
+[monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
+check_step = { required = true, description = "Step ID to check for completion" }
+timeout = { default = "60s", description = "How long to wait between checks" }
+
+[[monitor.steps]]
+id = "start"
+executor = "shell"
+command = "echo 'Starting persistence monitor for agent {{agent}}, watching step {{check_step}}'"
+
+[[monitor.steps]]
+id = "loop"
+executor = "expand"
+template = ".monitor-loop"
+needs = ["start"]
+
+[monitor.steps.variables]
+agent = "{{agent}}"
+nudge_prompt = "{{nudge_prompt}}"
+check_step = "{{check_step}}"
+timeout = "{{timeout}}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MONITOR LOOP (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# The core monitoring loop that waits for events and handles them.
+# This template calls itself recursively until check_step completes.
+
+[monitor-loop]
+name = "monitor-loop"
+description = "Internal: Event monitoring loop"
+internal = true
+
+[monitor-loop.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+# Wait for agent-stopped event with timeout
+[[monitor-loop.steps]]
+id = "wait-for-event"
+executor = "branch"
+condition = "meow await-event agent-stopped --filter agent={{agent}} --timeout {{timeout}}"
+
+# Event received - agent stopped unexpectedly
+[monitor-loop.steps.on_true]
+template = ".handle-stop-event"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+# Timeout - no event, just check if we should continue
+[monitor-loop.steps.on_false]
+template = ".check-and-continue"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HANDLE STOP EVENT (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Called when an agent-stopped event is received. Nudges the agent and
+# then checks if we should continue monitoring.
+
+[handle-stop-event]
+name = "handle-stop-event"
+description = "Internal: Handle agent-stopped event"
+internal = true
+
+[handle-stop-event.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+# Re-inject the prompt using fire_forget
+[[handle-stop-event.steps]]
+id = "nudge"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "{{nudge_prompt}}"
+mode = "fire_forget"
+
+# Small delay to let the nudge take effect
+[[handle-stop-event.steps]]
+id = "delay"
+executor = "shell"
+command = "sleep 2"
+needs = ["nudge"]
+
+# Check if we should continue monitoring
+[[handle-stop-event.steps]]
+id = "check"
+executor = "expand"
+template = ".check-and-continue"
+needs = ["delay"]
+
+[handle-stop-event.steps.variables]
+agent = "{{agent}}"
+nudge_prompt = "{{nudge_prompt}}"
+check_step = "{{check_step}}"
+timeout = "{{timeout}}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHECK AND CONTINUE (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Checks if the main task step is done. If not, continues the loop.
+# If done, exits gracefully.
+
+[check-and-continue]
+name = "check-and-continue"
+description = "Internal: Check if main step done, continue loop if not"
+internal = true
+
+[check-and-continue.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+# Check if the main task step is NOT done (still running or pending)
+[[check-and-continue.steps]]
+id = "check-step"
+executor = "branch"
+condition = "meow step-status {{check_step}} --is-not done"
+
+# Main task still running - continue monitoring
+[check-and-continue.steps.on_true]
+template = ".monitor-loop"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+# Main task done - exit the monitor loop gracefully
+[check-and-continue.steps.on_false]
+inline = [
+  { id = "exit", executor = "shell", command = "echo 'Persistence monitor exiting - step {{check_step}} is done'" }
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGGRESSIVE MONITOR (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A more aggressive variant that sends Escape before the nudge prompt.
+# Useful when you want to interrupt an agent that might be stuck.
+#
+# Example:
+#   [[main.steps]]
+#   id = "persistence"
+#   executor = "expand"
+#   template = "lib/agent-persistence#aggressive-monitor"
+#   needs = ["spawn"]
+#   variables = { ... }
+
+[aggressive-monitor]
+name = "aggressive-agent-persistence"
+description = "Monitor with aggressive interrupt before nudge"
+
+[aggressive-monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
+check_step = { required = true, description = "Step ID to check for completion" }
+timeout = { default = "60s", description = "How long to wait between checks" }
+
+[[aggressive-monitor.steps]]
+id = "start"
+executor = "shell"
+command = "echo 'Starting AGGRESSIVE persistence monitor for agent {{agent}}'"
+
+[[aggressive-monitor.steps]]
+id = "loop"
+executor = "expand"
+template = ".aggressive-monitor-loop"
+needs = ["start"]
+
+[aggressive-monitor.steps.variables]
+agent = "{{agent}}"
+nudge_prompt = "{{nudge_prompt}}"
+check_step = "{{check_step}}"
+timeout = "{{timeout}}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGGRESSIVE MONITOR LOOP (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[aggressive-monitor-loop]
+name = "aggressive-monitor-loop"
+description = "Internal: Aggressive event monitoring loop"
+internal = true
+
+[aggressive-monitor-loop.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+[[aggressive-monitor-loop.steps]]
+id = "wait-for-event"
+executor = "branch"
+condition = "meow await-event agent-stopped --filter agent={{agent}} --timeout {{timeout}}"
+
+[aggressive-monitor-loop.steps.on_true]
+template = ".aggressive-handle-stop"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+[aggressive-monitor-loop.steps.on_false]
+template = ".check-and-continue-aggressive"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGGRESSIVE HANDLE STOP (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[aggressive-handle-stop]
+name = "aggressive-handle-stop"
+description = "Internal: Handle stop with Escape before nudge"
+internal = true
+
+[aggressive-handle-stop.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+# Send Escape first to ensure agent is in clean state
+[[aggressive-handle-stop.steps]]
+id = "escape"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "Escape"
+mode = "fire_forget"
+
+# Small delay for escape to take effect
+[[aggressive-handle-stop.steps]]
+id = "escape-delay"
+executor = "shell"
+command = "sleep 0.5"
+needs = ["escape"]
+
+# Then send the nudge prompt
+[[aggressive-handle-stop.steps]]
+id = "nudge"
+executor = "agent"
+agent = "{{agent}}"
+prompt = "{{nudge_prompt}}"
+mode = "fire_forget"
+needs = ["escape-delay"]
+
+# Delay before checking
+[[aggressive-handle-stop.steps]]
+id = "nudge-delay"
+executor = "shell"
+command = "sleep 2"
+needs = ["nudge"]
+
+# Check and potentially continue
+[[aggressive-handle-stop.steps]]
+id = "check"
+executor = "expand"
+template = ".check-and-continue-aggressive"
+needs = ["nudge-delay"]
+
+[aggressive-handle-stop.steps.variables]
+agent = "{{agent}}"
+nudge_prompt = "{{nudge_prompt}}"
+check_step = "{{check_step}}"
+timeout = "{{timeout}}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHECK AND CONTINUE AGGRESSIVE (Internal)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[check-and-continue-aggressive]
+name = "check-and-continue-aggressive"
+description = "Internal: Check if main step done for aggressive monitor"
+internal = true
+
+[check-and-continue-aggressive.variables]
+agent = { required = true }
+nudge_prompt = { required = true }
+check_step = { required = true }
+timeout = { default = "60s" }
+
+[[check-and-continue-aggressive.steps]]
+id = "check-step"
+executor = "branch"
+condition = "meow step-status {{check_step}} --is-not done"
+
+[check-and-continue-aggressive.steps.on_true]
+template = ".aggressive-monitor-loop"
+variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+
+[check-and-continue-aggressive.steps.on_false]
+inline = [
+  { id = "exit", executor = "shell", command = "echo 'Aggressive monitor exiting - step {{check_step}} is done'" }
+]
