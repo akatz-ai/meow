@@ -1286,7 +1286,9 @@ func (o *Orchestrator) completeBranchCondition(
 	// Handle expansion for branch with targets
 	if target != nil {
 		if err := o.expandBranchTarget(ctx, wf, step, target); err != nil {
-			step.Fail(&types.StepError{Message: fmt.Sprintf("expansion failed: %v", err)})
+			if failErr := step.Fail(&types.StepError{Message: fmt.Sprintf("expansion failed: %v", err)}); failErr != nil {
+				o.logger.Error("failed to mark step as failed", "step", stepID, "error", failErr)
+			}
 			o.store.Save(ctx, wf)
 			return
 		}
@@ -1314,11 +1316,13 @@ func (o *Orchestrator) completeBranchCondition(
 	// Handle on_error for shell-as-sugar (no expansion targets)
 	if target == nil && result.ExitCode != 0 {
 		if cfg.OnError == "fail" {
-			step.Fail(&types.StepError{
+			if failErr := step.Fail(&types.StepError{
 				Message: "command failed",
 				Code:    result.ExitCode,
 				Output:  result.Stderr,
-			})
+			}); failErr != nil {
+				o.logger.Error("failed to mark step as failed", "step", stepID, "error", failErr)
+			}
 			o.store.Save(ctx, wf)
 			return
 		}
@@ -1330,7 +1334,10 @@ func (o *Orchestrator) completeBranchCondition(
 	if len(step.ExpandedInto) > 0 {
 		step.Outputs = outputs
 	} else {
-		step.Complete(outputs)
+		if err := step.Complete(outputs); err != nil {
+			o.logger.Error("failed to complete step", "step", stepID, "error", err)
+			return
+		}
 	}
 
 	o.store.Save(ctx, wf)
