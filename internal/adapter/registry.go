@@ -309,3 +309,213 @@ func IsBuiltinPath(err error) bool {
 	_, ok := err.(*BuiltinPathError)
 	return ok
 }
+
+// AdapterSource represents where an adapter was loaded from.
+type AdapterSource string
+
+const (
+	// SourceBuiltin indicates a built-in adapter.
+	SourceBuiltin AdapterSource = "built-in"
+	// SourceGlobal indicates an adapter from ~/.meow/adapters/.
+	SourceGlobal AdapterSource = "global"
+	// SourceProject indicates an adapter from .meow/adapters/.
+	SourceProject AdapterSource = "project"
+)
+
+// AdapterInfo contains information about an adapter including its source.
+type AdapterInfo struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	Source      AdapterSource         `json:"source"`
+	Path        string                `json:"path,omitempty"` // Empty for built-in
+	Config      *types.AdapterConfig  `json:"config"`
+	Overrides   *AdapterOverrideInfo  `json:"overrides,omitempty"` // What this adapter is overriding
+}
+
+// AdapterOverrideInfo describes what an adapter is overriding.
+type AdapterOverrideInfo struct {
+	Source AdapterSource `json:"source"`
+	Path   string        `json:"path,omitempty"`
+}
+
+// ListWithInfo returns detailed information about all available adapters.
+// Unlike List(), this provides the source location and override information.
+func (r *Registry) ListWithInfo() ([]AdapterInfo, error) {
+	type adapterLocation struct {
+		name   string
+		source AdapterSource
+		path   string
+	}
+
+	// Collect all adapter locations (project, global, built-in)
+	var locations []adapterLocation
+
+	// Project adapters
+	if r.projectDir != "" {
+		projectNames, err := r.listDir(r.projectDir)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("listing project adapters: %w", err)
+		}
+		for _, name := range projectNames {
+			locations = append(locations, adapterLocation{
+				name:   name,
+				source: SourceProject,
+				path:   filepath.Join(r.projectDir, name),
+			})
+		}
+	}
+
+	// Global adapters
+	if r.globalDir != "" {
+		globalNames, err := r.listDir(r.globalDir)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("listing global adapters: %w", err)
+		}
+		for _, name := range globalNames {
+			locations = append(locations, adapterLocation{
+				name:   name,
+				source: SourceGlobal,
+				path:   filepath.Join(r.globalDir, name),
+			})
+		}
+	}
+
+	// Built-in adapters
+	r.mu.RLock()
+	for name := range r.builtins {
+		locations = append(locations, adapterLocation{
+			name:   name,
+			source: SourceBuiltin,
+			path:   "",
+		})
+	}
+	r.mu.RUnlock()
+
+	// Build result map - first occurrence wins (project > global > built-in)
+	seen := make(map[string]bool)
+	overrides := make(map[string][]adapterLocation) // Track what each name overrides
+
+	for _, loc := range locations {
+		if !seen[loc.name] {
+			seen[loc.name] = true
+		} else {
+			// This is an override - track the overridden location
+			overrides[loc.name] = append(overrides[loc.name], loc)
+		}
+	}
+
+	// Build the result
+	var result []AdapterInfo
+	seen = make(map[string]bool) // Reset for iteration
+
+	for _, loc := range locations {
+		if seen[loc.name] {
+			continue // Skip duplicates - only keep the first (highest priority)
+		}
+		seen[loc.name] = true
+
+		// Load the config
+		config, err := r.Load(loc.name)
+		if err != nil {
+			return nil, fmt.Errorf("loading adapter %q: %w", loc.name, err)
+		}
+
+		info := AdapterInfo{
+			Name:        loc.name,
+			Description: config.Adapter.Description,
+			Source:      loc.source,
+			Path:        loc.path,
+			Config:      config,
+		}
+
+		// Check for overrides
+		if ov, ok := overrides[loc.name]; ok && len(ov) > 0 {
+			// The first override is what the current adapter is overriding
+			info.Overrides = &AdapterOverrideInfo{
+				Source: ov[0].source,
+				Path:   ov[0].path,
+			}
+		}
+
+		result = append(result, info)
+	}
+
+	return result, nil
+}
+
+// GetInfo returns detailed information about a specific adapter.
+func (r *Registry) GetInfo(name string) (*AdapterInfo, error) {
+	config, err := r.Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine the source
+	var source AdapterSource
+	var path string
+	var overrides *AdapterOverrideInfo
+
+	// Check project first
+	if r.projectDir != "" {
+		configPath := filepath.Join(r.projectDir, name, "adapter.toml")
+		if _, err := os.Stat(configPath); err == nil {
+			source = SourceProject
+			path = filepath.Join(r.projectDir, name)
+
+			// Check if it overrides global
+			if r.globalDir != "" {
+				globalPath := filepath.Join(r.globalDir, name, "adapter.toml")
+				if _, err := os.Stat(globalPath); err == nil {
+					overrides = &AdapterOverrideInfo{
+						Source: SourceGlobal,
+						Path:   filepath.Join(r.globalDir, name),
+					}
+				}
+			}
+			// Check if it overrides built-in
+			if overrides == nil {
+				r.mu.RLock()
+				_, isBuiltin := r.builtins[name]
+				r.mu.RUnlock()
+				if isBuiltin {
+					overrides = &AdapterOverrideInfo{
+						Source: SourceBuiltin,
+					}
+				}
+			}
+		}
+	}
+
+	// Check global
+	if source == "" && r.globalDir != "" {
+		configPath := filepath.Join(r.globalDir, name, "adapter.toml")
+		if _, err := os.Stat(configPath); err == nil {
+			source = SourceGlobal
+			path = filepath.Join(r.globalDir, name)
+
+			// Check if it overrides built-in
+			r.mu.RLock()
+			_, isBuiltin := r.builtins[name]
+			r.mu.RUnlock()
+			if isBuiltin {
+				overrides = &AdapterOverrideInfo{
+					Source: SourceBuiltin,
+				}
+			}
+		}
+	}
+
+	// Must be built-in
+	if source == "" {
+		source = SourceBuiltin
+	}
+
+	return &AdapterInfo{
+		Name:        name,
+		Description: config.Adapter.Description,
+		Source:      source,
+		Path:        path,
+		Config:      config,
+		Overrides:   overrides,
+	}, nil
+}

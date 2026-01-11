@@ -440,3 +440,235 @@ command = "cmd"
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestRegistry_ListWithInfo(t *testing.T) {
+	tempDir := t.TempDir()
+	projectDir := filepath.Join(tempDir, "project")
+	globalDir := filepath.Join(tempDir, "global")
+
+	// Create project adapter
+	projectAdapterDir := filepath.Join(projectDir, "project-only")
+	if err := os.MkdirAll(projectAdapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAdapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "project-only"
+description = "Project-only adapter"
+[spawn]
+command = "cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create global adapter
+	globalAdapterDir := filepath.Join(globalDir, "global-only")
+	if err := os.MkdirAll(globalAdapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalAdapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "global-only"
+description = "Global-only adapter"
+[spawn]
+command = "cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry(globalDir, projectDir)
+
+	// Register a built-in
+	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
+		Adapter: types.AdapterMeta{Name: "builtin", Description: "Built-in adapter"},
+		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
+	})
+
+	infos, err := registry.ListWithInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(infos) != 3 {
+		t.Errorf("expected 3 adapters, got %d", len(infos))
+	}
+
+	// Check that we have all sources represented
+	sources := make(map[AdapterSource]bool)
+	for _, info := range infos {
+		sources[info.Source] = true
+		if info.Config == nil {
+			t.Errorf("adapter %q has nil config", info.Name)
+		}
+	}
+
+	if !sources[SourceProject] {
+		t.Error("missing project adapter")
+	}
+	if !sources[SourceGlobal] {
+		t.Error("missing global adapter")
+	}
+	if !sources[SourceBuiltin] {
+		t.Error("missing built-in adapter")
+	}
+}
+
+func TestRegistry_ListWithInfo_Override(t *testing.T) {
+	tempDir := t.TempDir()
+	projectDir := filepath.Join(tempDir, "project")
+	globalDir := filepath.Join(tempDir, "global")
+
+	// Create project adapter that overrides global
+	projectAdapterDir := filepath.Join(projectDir, "shared-name")
+	if err := os.MkdirAll(projectAdapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAdapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "shared-name"
+description = "Project version"
+[spawn]
+command = "project-cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create global adapter with same name
+	globalAdapterDir := filepath.Join(globalDir, "shared-name")
+	if err := os.MkdirAll(globalAdapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalAdapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "shared-name"
+description = "Global version"
+[spawn]
+command = "global-cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry(globalDir, projectDir)
+
+	infos, err := registry.ListWithInfo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should only have one adapter (project overrides global)
+	if len(infos) != 1 {
+		t.Errorf("expected 1 adapter, got %d", len(infos))
+	}
+
+	info := infos[0]
+	if info.Source != SourceProject {
+		t.Errorf("expected source %q, got %q", SourceProject, info.Source)
+	}
+	if info.Description != "Project version" {
+		t.Errorf("expected project description, got %q", info.Description)
+	}
+	if info.Overrides == nil {
+		t.Error("expected override info")
+	} else if info.Overrides.Source != SourceGlobal {
+		t.Errorf("expected override source %q, got %q", SourceGlobal, info.Overrides.Source)
+	}
+}
+
+func TestRegistry_GetInfo(t *testing.T) {
+	tempDir := t.TempDir()
+	globalDir := filepath.Join(tempDir, "global")
+
+	// Create adapter
+	adapterDir := filepath.Join(globalDir, "test-agent")
+	if err := os.MkdirAll(adapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(adapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "test-agent"
+description = "Test agent"
+[spawn]
+command = "cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry(globalDir, "")
+
+	// Global adapter
+	info, err := registry.GetInfo("test-agent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Source != SourceGlobal {
+		t.Errorf("expected source %q, got %q", SourceGlobal, info.Source)
+	}
+	if info.Path != adapterDir {
+		t.Errorf("expected path %q, got %q", adapterDir, info.Path)
+	}
+
+	// Built-in adapter
+	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
+		Adapter: types.AdapterMeta{Name: "builtin", Description: "Built-in"},
+		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
+	})
+	info, err = registry.GetInfo("builtin")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Source != SourceBuiltin {
+		t.Errorf("expected source %q, got %q", SourceBuiltin, info.Source)
+	}
+	if info.Path != "" {
+		t.Errorf("expected empty path for built-in, got %q", info.Path)
+	}
+
+	// Non-existent
+	_, err = registry.GetInfo("nonexistent")
+	if !IsNotFound(err) {
+		t.Errorf("expected NotFoundError, got %T: %v", err, err)
+	}
+}
+
+func TestRegistry_GetInfo_OverrideBuiltin(t *testing.T) {
+	tempDir := t.TempDir()
+	globalDir := filepath.Join(tempDir, "global")
+
+	// Create global adapter that overrides built-in
+	adapterDir := filepath.Join(globalDir, "builtin")
+	if err := os.MkdirAll(adapterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(adapterDir, "adapter.toml"), []byte(`
+[adapter]
+name = "builtin"
+description = "Custom version"
+[spawn]
+command = "custom-cmd"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry(globalDir, "")
+	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
+		Adapter: types.AdapterMeta{Name: "builtin", Description: "Original built-in"},
+		Spawn:   types.AdapterSpawnConfig{Command: "builtin-cmd"},
+	})
+
+	info, err := registry.GetInfo("builtin")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if info.Source != SourceGlobal {
+		t.Errorf("expected source %q, got %q", SourceGlobal, info.Source)
+	}
+	if info.Description != "Custom version" {
+		t.Errorf("expected custom description, got %q", info.Description)
+	}
+	if info.Overrides == nil {
+		t.Error("expected override info")
+	} else if info.Overrides.Source != SourceBuiltin {
+		t.Errorf("expected override source %q, got %q", SourceBuiltin, info.Overrides.Source)
+	}
+}
