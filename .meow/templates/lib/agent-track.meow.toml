@@ -18,6 +18,8 @@
 #   spawn_args   (default: "") - Extra CLI args for claude
 #   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor
 #   max_nudges   (default: "10") - RW safety limit before force-completing
+#   enable_context_monitor (default: "true") - Enable context usage auto-compact
+#   context_threshold (default: "70") - Context % to trigger /compact
 #
 # Usage:
 #   [[main.steps]]
@@ -46,6 +48,8 @@ spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read 
 spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --settings /path/to/hooks.json)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
 max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
+enable_context_monitor = { default = "true", description = "Enable context usage monitor with auto-compact (true/false)" }
+context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
 
 # ============================================================================
 # Step 1: Spawn Agent
@@ -83,7 +87,31 @@ inline = [
 ]
 
 # ============================================================================
-# Step 3: Main Work
+# Step 3: Context Monitor (runs in parallel, optional)
+# ============================================================================
+#
+# Monitors agent context usage and auto-compacts when above threshold.
+# Runs in parallel with work/review/verify-clean steps.
+# Self-terminates when agent tmux session is killed.
+# Disable with enable_context_monitor = "false"
+
+[[main.steps]]
+id = "context-monitor"
+executor = "branch"
+condition = "test '{{enable_context_monitor}}' = 'true'"
+needs = ["spawn"]
+
+[main.steps.on_true]
+template = "lib/claude-utils#context-monitor"
+variables = { agent = "{{agent_name}}", threshold = "{{context_threshold}}" }
+
+[main.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Context monitor disabled (enable_context_monitor=false)'" }
+]
+
+# ============================================================================
+# Step 4: Main Work
 # ============================================================================
 
 [[main.steps]]
@@ -127,7 +155,7 @@ meow done
 """
 
 # ============================================================================
-# Step 4: Self-Review
+# Step 5: Self-Review
 # ============================================================================
 
 [[main.steps]]
@@ -159,7 +187,7 @@ meow done
 """
 
 # ============================================================================
-# Step 5: Verify Clean Git State
+# Step 6: Verify Clean Git State
 # ============================================================================
 
 [[main.steps]]
@@ -182,7 +210,7 @@ When clean, run: `meow done`
 """
 
 # ============================================================================
-# Step 6: Kill Agent
+# Step 7: Kill Agent
 # ============================================================================
 
 [[main.steps]]
@@ -193,7 +221,7 @@ needs = ["verify-clean"]
 graceful = true
 
 # ============================================================================
-# Step 7: Done Marker (for downstream dependencies)
+# Step 8: Done Marker (for downstream dependencies)
 # ============================================================================
 
 [[main.steps]]

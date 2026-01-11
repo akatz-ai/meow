@@ -67,6 +67,8 @@ spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agen
 spawn_args = { default = "", description = "Extra CLI args for spawned agents (e.g., --settings /path/to/hooks.json)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
 max_nudges = { default = "10", description = "Max RW nudges before force-completing agent" }
+enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (true/false)" }
+context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
 
 # Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
 cleanup_on_success = """
@@ -245,6 +247,8 @@ spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
 enable_rw = "{{enable_rw}}"
 max_nudges = "{{max_nudges}}"
+enable_context_monitor = "{{enable_context_monitor}}"
+context_threshold = "{{context_threshold}}"
 
 
 # ============================================================================
@@ -436,6 +440,8 @@ spec_file = { default = "docs/MVP-SPEC-v2.md" }
 spawn_args = { default = "" }
 enable_rw = { default = "true" }
 max_nudges = { default = "10" }
+enable_context_monitor = { default = "true" }
+context_threshold = { default = "70" }
 
 [[agent-track-wrapper.steps]]
 id = "track"
@@ -459,6 +465,8 @@ spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
 enable_rw = "{{enable_rw}}"
 max_nudges = "{{max_nudges}}"
+enable_context_monitor = "{{enable_context_monitor}}"
+context_threshold = "{{context_threshold}}"
 
 # Done marker that downstream can reference
 [[agent-track-wrapper.steps]]
