@@ -148,6 +148,12 @@ type BranchConfig struct {
 	OnFalse   *BranchTarget `yaml:"on_false,omitempty" toml:"on_false,omitempty"`
 	OnTimeout *BranchTarget `yaml:"on_timeout,omitempty" toml:"on_timeout,omitempty"`
 	Timeout   string        `yaml:"timeout,omitempty" toml:"timeout,omitempty"` // Duration string
+
+	// Shell-compatible fields for unified command execution (shell-as-sugar support)
+	Workdir string                  `yaml:"workdir,omitempty" toml:"workdir,omitempty"`
+	Env     map[string]string       `yaml:"env,omitempty" toml:"env,omitempty"`
+	Outputs map[string]OutputSource `yaml:"outputs,omitempty" toml:"outputs,omitempty"`
+	OnError string                  `yaml:"on_error,omitempty" toml:"on_error,omitempty"` // continue | fail (default: fail when no on_false)
 }
 
 // ForeachConfig for executor: foreach

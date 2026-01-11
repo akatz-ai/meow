@@ -452,9 +452,41 @@ func (b *Baker) setBranchConfig(step *types.Step, ts *Step) error {
 		}
 	}
 
+	// Substitute workdir (shell-as-sugar support)
+	workdir := ts.Workdir
+	if workdir != "" {
+		workdir, err = b.VarContext.Substitute(workdir)
+		if err != nil {
+			return fmt.Errorf("substitute workdir: %w", err)
+		}
+	}
+
+	// Substitute env values (shell-as-sugar support)
+	env := make(map[string]string)
+	for k, v := range ts.Env {
+		subV, err := b.VarContext.Substitute(v)
+		if err != nil {
+			return fmt.Errorf("substitute env %s: %w", k, err)
+		}
+		env[k] = subV
+	}
+
+	// Convert shell outputs to types format (shell-as-sugar support)
+	var outputs map[string]types.OutputSource
+	if len(ts.ShellOutputs) > 0 {
+		outputs = make(map[string]types.OutputSource)
+		for k, v := range ts.ShellOutputs {
+			outputs[k] = types.OutputSource{Source: v.Source}
+		}
+	}
+
 	step.Branch = &types.BranchConfig{
 		Condition: condition,
 		Timeout:   ts.Timeout,
+		Workdir:   workdir,
+		Env:       env,
+		Outputs:   outputs,
+		OnError:   ts.OnError,
 	}
 
 	// Convert expansion targets
