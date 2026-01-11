@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -120,6 +121,15 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		filePath := templateRef
 		if !filepath.IsAbs(filePath) {
 			filePath = filepath.Join(e.BaseDir, filePath)
+		}
+
+		// Try adding .meow.toml extension if file doesn't exist
+		if !strings.HasSuffix(filePath, ".toml") {
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				if _, err := os.Stat(filePath + ".meow.toml"); err == nil {
+					filePath = filePath + ".meow.toml"
+				}
+			}
 		}
 
 		// Load the module
