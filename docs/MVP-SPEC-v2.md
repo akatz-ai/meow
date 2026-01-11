@@ -506,10 +506,39 @@ on_true:
 ```
 
 **Orchestrator Behavior:**
-1. Execute condition as shell command (may block)
-2. Based on exit code, select appropriate branch
-3. Expand selected branch (if any)
-4. Mark branch step `done`
+1. Mark step `running` and launch condition in background goroutine
+2. Return immediately (enables parallel execution with other steps)
+3. When condition completes: evaluate exit code, select branch
+4. Expand selected branch (if any)
+5. If no children: mark step `done`
+6. If has children: stay `running` until children complete
+
+**Async Execution Model:**
+
+Branch conditions execute **asynchronously** in goroutines, allowing parallel execution of monitoring branches alongside agent work. This enables patterns like:
+
+```yaml
+# Both steps start in the same tick after spawn completes
+[[steps]]
+id = "main-work"
+executor = "agent"
+needs = ["spawn"]
+prompt = "Do the work"
+
+[[steps]]
+id = "monitor-for-stop"
+executor = "branch"
+needs = ["spawn"]
+condition = "meow await-event agent-stopped --timeout 30s"
+on_true:
+  template = ".handle-agent-stopped"
+```
+
+Without async execution, `monitor-for-stop` would block for 30 seconds before `main-work` could start—defeating the purpose of parallel monitoring.
+
+**Completion Serialization:**
+
+While conditions run in parallel, their completions serialize through the workflow mutex to ensure consistency. This provides correctness guarantees at the cost of completion throughput (~100-200 branches/second). See [Performance Characteristics](#performance-characteristics) for details.
 
 ### Human Approval Pattern
 
@@ -2544,6 +2573,72 @@ If not configured, these defaults apply:
 - `max_workflow_file_size`: 50MB
 
 These are generous limits that should never trigger in normal operation.
+
+### Performance Characteristics
+
+Understanding MEOW's performance model helps design efficient workflows.
+
+**Parallel Execution:**
+
+| Component | Parallelism | Notes |
+|-----------|-------------|-------|
+| Agent steps | Fully parallel | Each agent works independently |
+| Branch conditions | Fully parallel | Conditions run in goroutines |
+| Shell steps | Sequential per tick | Fast, rarely a bottleneck |
+| Expand steps | Sequential per tick | Template loading is fast |
+
+**Serialization Points:**
+
+Branch completions serialize through the workflow mutex:
+
+```
+Goroutine 1: condition completes → acquire mutex → expand → save → release
+Goroutine 2: condition completes → [wait] → acquire mutex → expand → save → release
+Goroutine 3: condition completes → [wait] → [wait] → acquire mutex → ...
+```
+
+Each completion involves:
+- Mutex acquisition (~0-10ms wait, depends on contention)
+- Workflow file read (~1-5ms, SSD)
+- Expansion (~0.1ms, in-memory)
+- Workflow file write (~1-5ms, SSD)
+
+**Throughput Estimates:**
+
+| Parallel Branches | Completion Time | Impact |
+|-------------------|-----------------|--------|
+| 10 | ~50-100ms | Imperceptible |
+| 50 | ~250-500ms | Minimal |
+| 100 | ~0.5-1s | Noticeable |
+| 500 | ~2.5-5s | Significant |
+| 1000+ | ~5-10s+ | Consider redesign |
+
+**Recommendations for Large Workflows:**
+
+1. **Use `max_concurrent` on foreach** to limit parallel iterations:
+   ```yaml
+   [[steps]]
+   id = "parallel-workers"
+   executor = "foreach"
+   items = "{{tasks}}"
+   template = ".worker"
+   max_concurrent = 10  # Process at most 10 in parallel
+   ```
+
+2. **Avoid deep branch nesting** where each branch expands more branches. Prefer flat structures.
+
+3. **Break into multiple workflows** for truly massive parallelism. Each workflow has its own state file and mutex.
+
+4. **Accept reasonable latency** for orchestration. MEOW optimizes for correctness and durability over raw throughput.
+
+**Memory Usage:**
+
+- Each step: ~200-500 bytes in workflow state
+- Each pending branch: ~100 bytes (goroutine + tracking)
+- 1000 steps: ~500KB workflow file
+- 10000 steps: ~5MB workflow file
+
+Memory is rarely a concern for realistic workflows.
 
 ---
 

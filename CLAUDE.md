@@ -62,6 +62,39 @@ We are implementing the workflow-centric model from MVP-SPEC-v2. Key changes fro
 
 **Gate is NOT an executor.** Human approval is implemented as: `branch` with `condition = "meow await-approval <gate-id>"`.
 
+## Async Branch Execution
+
+Branch conditions execute **asynchronously** in goroutines. This is critical for enabling parallel monitoring patterns (the "Ralph Wiggum pattern"):
+
+```yaml
+# Both steps start in the same tick after spawn completes
+[[steps]]
+id = "main-work"
+executor = "agent"
+needs = ["spawn"]
+
+[[steps]]
+id = "monitor"
+executor = "branch"
+needs = ["spawn"]
+condition = "meow await-event agent-stopped --timeout 30s"
+```
+
+**Key implementation details:**
+
+1. `handleBranch()` launches condition in goroutine and returns immediately
+2. Condition execution holds NO mutex (pure I/O)
+3. `completeBranchCondition()` acquires mutex, re-reads workflow, expands, saves
+4. Completions serialize through mutex (~100-200/second throughput)
+5. `pendingBranches` sync.Map tracks cancel functions for cleanup
+6. Recovery resets in-flight branches (no ExpandedInto) to pending
+
+**Files:**
+- Implementation: `internal/orchestrator/orchestrator.go` (handleBranch, completeBranchCondition)
+- Design: `docs/MVP-SPEC-v2.md` §branch, §Performance Characteristics
+
+**Performance:** Parallel conditions are fine, but completions serialize. For 100+ concurrent branches, expect ~1s completion latency. Use `max_concurrent` on foreach to limit parallelism if needed.
+
 ## Step Status Lifecycle
 
 ```
