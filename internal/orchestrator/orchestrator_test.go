@@ -1688,14 +1688,8 @@ func TestBranchCondition_TrueOutcome(t *testing.T) {
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	// Configure shell to return exit code 0
-	shell.results["exit 0"] = map[string]any{
-		"exit_code": 0,
-		"stdout":    "success",
-		"stderr":    "",
-	}
-
 	// Create workflow with branch step
+	// Branch conditions execute real shell commands (not mocked)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
@@ -1756,14 +1750,8 @@ func TestBranchCondition_FalseOutcome(t *testing.T) {
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	// Configure shell to return exit code 1
-	shell.results["exit 1"] = map[string]any{
-		"exit_code": 1,
-		"stdout":    "",
-		"stderr":    "failed",
-	}
-
 	// Create workflow with branch step
+	// Branch conditions execute real shell commands (not mocked)
 	wf := types.NewWorkflow("test-wf", "test-template", nil)
 	wf.Status = types.WorkflowStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
