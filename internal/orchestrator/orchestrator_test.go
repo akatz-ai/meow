@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1674,4 +1675,339 @@ func getStepIDs(steps []*types.Step) []string {
 		ids[i] = s.ID
 	}
 	return ids
+}
+
+// --- Branch Condition Outcome Tests ---
+
+// TestBranchCondition_TrueOutcome tests that exit code 0 results in "true" outcome
+// and on_true is expanded.
+func TestBranchCondition_TrueOutcome(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Configure shell to return exit code 0
+	shell.results["exit 0"] = map[string]any{
+		"exit_code": 0,
+		"stdout":    "success",
+		"stderr":    "",
+	}
+
+	// Create workflow with branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "exit 0",
+			OnTrue: &types.BranchTarget{
+				Inline: []types.InlineStep{
+					{
+						ID:       "on-true-step",
+						Executor: types.ExecutorShell,
+						Command:  "echo on-true",
+					},
+				},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Re-fetch workflow
+	wf, _ = store.Get(ctx, wf.ID)
+
+	// Verify outcome
+	if wf.Steps["branch-step"].Outputs["outcome"] != "true" {
+		t.Errorf("Branch step outcome = %v, want 'true'", wf.Steps["branch-step"].Outputs["outcome"])
+	}
+
+	// Verify on_true was expanded
+	if _, ok := wf.Steps["branch-step.on-true-step"]; !ok {
+		t.Error("on_true step should be expanded")
+	}
+
+	// Verify branch step is done
+	if wf.Steps["branch-step"].Status != types.StepStatusDone {
+		t.Errorf("Branch step status = %v, want done", wf.Steps["branch-step"].Status)
+	}
+}
+
+// TestBranchCondition_FalseOutcome tests that non-zero exit code results in
+// "false" outcome and on_false is expanded.
+func TestBranchCondition_FalseOutcome(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Configure shell to return exit code 1
+	shell.results["exit 1"] = map[string]any{
+		"exit_code": 1,
+		"stdout":    "",
+		"stderr":    "failed",
+	}
+
+	// Create workflow with branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "exit 1",
+			OnFalse: &types.BranchTarget{
+				Inline: []types.InlineStep{
+					{
+						ID:       "on-false-step",
+						Executor: types.ExecutorShell,
+						Command:  "echo on-false",
+					},
+				},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Re-fetch workflow
+	wf, _ = store.Get(ctx, wf.ID)
+
+	// Verify outcome
+	if wf.Steps["branch-step"].Outputs["outcome"] != "false" {
+		t.Errorf("Branch step outcome = %v, want 'false'", wf.Steps["branch-step"].Outputs["outcome"])
+	}
+
+	// Verify on_false was expanded
+	if _, ok := wf.Steps["branch-step.on-false-step"]; !ok {
+		t.Error("on_false step should be expanded")
+	}
+
+	// Verify branch step is done
+	if wf.Steps["branch-step"].Status != types.StepStatusDone {
+		t.Errorf("Branch step status = %v, want done", wf.Steps["branch-step"].Status)
+	}
+}
+
+// TestBranchCondition_TimeoutOutcome tests that timeout results in "timeout" outcome
+// and on_timeout is expanded.
+func TestBranchCondition_TimeoutOutcome(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with branch step with timeout
+	// Use a command that will take longer than the timeout
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 2",      // Sleep for 2 seconds
+			Timeout:   "100ms",        // Timeout after 100ms
+			OnTimeout: &types.BranchTarget{
+				Inline: []types.InlineStep{
+					{
+						ID:       "on-timeout-step",
+						Executor: types.ExecutorShell,
+						Command:  "echo timeout",
+					},
+				},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Re-fetch workflow
+	wf, _ = store.Get(ctx, wf.ID)
+
+	// Verify outcome
+	if wf.Steps["branch-step"].Outputs["outcome"] != "timeout" {
+		t.Errorf("Branch step outcome = %v, want 'timeout'", wf.Steps["branch-step"].Outputs["outcome"])
+	}
+
+	// Verify on_timeout was expanded
+	if _, ok := wf.Steps["branch-step.on-timeout-step"]; !ok {
+		t.Error("on_timeout step should be expanded")
+	}
+
+	// Verify branch step is done
+	if wf.Steps["branch-step"].Status != types.StepStatusDone {
+		t.Errorf("Branch step status = %v, want done", wf.Steps["branch-step"].Status)
+	}
+}
+
+// TestBranchCondition_OutputCapture tests that stdout/stderr are captured
+// in step outputs.
+func TestBranchCondition_OutputCapture(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with branch step that captures outputs
+	// Using a real shell command since branch conditions execute actual commands
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "echo hello && echo debug >&2",
+			Outputs: map[string]types.OutputSource{
+				"out": {Source: "stdout"},
+				"err": {Source: "stderr"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Re-fetch workflow
+	wf, _ = store.Get(ctx, wf.ID)
+
+	// Verify outputs
+	outputs := wf.Steps["branch-step"].Outputs
+	if outputs["outcome"] != "true" {
+		t.Errorf("outcome = %v, want 'true'", outputs["outcome"])
+	}
+	if outputs["exit_code"] != 0 {
+		t.Errorf("exit_code = %v, want 0", outputs["exit_code"])
+	}
+	// Stdout should contain "hello" (may have trailing newline)
+	if out, ok := outputs["out"].(string); !ok || !strings.Contains(out, "hello") {
+		t.Errorf("out = %v, want to contain 'hello'", outputs["out"])
+	}
+	// Stderr should contain "debug" (may have trailing newline)
+	if err, ok := outputs["err"].(string); !ok || !strings.Contains(err, "debug") {
+		t.Errorf("err = %v, want to contain 'debug'", outputs["err"])
+	}
+
+	// Verify step is done (no targets to expand)
+	if wf.Steps["branch-step"].Status != types.StepStatusDone {
+		t.Errorf("Branch step status = %v, want done", wf.Steps["branch-step"].Status)
+	}
+}
+
+// TestBranchCondition_NoTargets_Completes tests that a branch with no targets
+// (shell pattern) completes with outputs.
+func TestBranchCondition_NoTargets_Completes(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with branch step with on_true but no on_false
+	// Condition will exit 1, so outcome is "false" but no on_false target
+	// Use on_error: continue so it doesn't fail the step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "exit 1",
+			OnError:   "continue", // Continue on error instead of failing
+			OnTrue: &types.BranchTarget{
+				Inline: []types.InlineStep{
+					{
+						ID:       "on-true-step",
+						Executor: types.ExecutorShell,
+						Command:  "echo on-true",
+					},
+				},
+			},
+			// No OnFalse - this is the key point
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Re-fetch workflow
+	wf, _ = store.Get(ctx, wf.ID)
+
+	// Verify outcome is "false"
+	if wf.Steps["branch-step"].Outputs["outcome"] != "false" {
+		t.Errorf("Branch step outcome = %v, want 'false'", wf.Steps["branch-step"].Outputs["outcome"])
+	}
+
+	// Verify no expansion occurred
+	if len(wf.Steps["branch-step"].ExpandedInto) != 0 {
+		t.Errorf("Branch step should not have expanded children, got %v", wf.Steps["branch-step"].ExpandedInto)
+	}
+
+	// Verify step is done (no target to expand, so completes immediately)
+	if wf.Steps["branch-step"].Status != types.StepStatusDone {
+		t.Errorf("Branch step status = %v, want done", wf.Steps["branch-step"].Status)
+	}
+
+	// Verify workflow is done
+	if wf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", wf.Status)
+	}
 }
