@@ -1432,6 +1432,7 @@ func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Workflow, st
 }
 
 // handleBranch evaluates a condition and expands the appropriate branch.
+// Launches condition execution asynchronously and returns immediately.
 func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	if step.Branch == nil {
 		return fmt.Errorf("branch step %s missing config", step.ID)
@@ -1442,68 +1443,205 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, ste
 	}
 
 	cfg := step.Branch
-
-	// Resolve variable references in the condition
 	condition := o.resolveOutputRefs(wf, cfg.Condition)
 
-	// Execute condition
-	condExec := &SimpleConditionExecutor{}
-	exitCode, _, _, execErr := condExec.Execute(ctx, condition)
+	// Capture IDs by value for goroutine (NOT pointers!)
+	workflowID := wf.ID
+	stepID := step.ID
 
-	// Determine which branch to take
-	var target *types.BranchTarget
+	// Create cancellable context for the condition
+	condCtx, cancel := context.WithCancel(ctx)
+
+	// Handle branch-level timeout if specified
+	if cfg.Timeout != "" {
+		timeout, err := time.ParseDuration(cfg.Timeout)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("invalid timeout %q: %v", cfg.Timeout, err)
+		}
+		condCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
+
+	// Track for cleanup (shared with shell-as-sugar)
+	o.pendingCommands.Store(stepID, cancel)
+
+	// Launch async condition execution
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		o.executeBranchConditionAsync(condCtx, workflowID, stepID, condition, cfg)
+	}()
+
+	// Step is running, return immediately
+	return nil
+}
+
+// executeBranchConditionAsync runs a branch condition and handles completion.
+// Called in a goroutine - does NOT hold any mutex during condition execution.
+// Acquires mutex only when calling completeBranchCondition.
+func (o *Orchestrator) executeBranchConditionAsync(
+	ctx context.Context,
+	workflowID string,
+	stepID string,
+	condition string,
+	cfg *types.BranchConfig,
+) {
+	// Clean up tracking regardless of outcome
+	defer o.pendingCommands.Delete(stepID)
+
+	// Execute condition command (may block for seconds/minutes/hours)
+	condExec := &SimpleConditionExecutor{}
+	exitCode, stdout, stderr, execErr := condExec.Execute(ctx, condition)
+
+	// Check for context cancellation (workflow stopped/shutdown)
+	if ctx.Err() == context.Canceled {
+		o.logger.Info("branch condition cancelled",
+			"step", stepID,
+			"reason", "context cancelled")
+		// Don't complete - workflow is stopping
+		return
+	}
+
+	// Determine outcome
 	var outcome BranchOutcome
+	var target *types.BranchTarget
 
 	if execErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			// Condition timed out
 			outcome = BranchOutcomeTimeout
 			target = cfg.OnTimeout
 			if target == nil {
-				target = cfg.OnFalse // fallback per spec
+				target = cfg.OnFalse // Fallback per spec
 			}
+			o.logger.Info("branch condition timed out",
+				"step", stepID)
 		} else {
+			// Execution error (command failed to run, not non-zero exit)
 			outcome = BranchOutcomeFalse
 			target = cfg.OnFalse
+			o.logger.Warn("branch condition execution error",
+				"step", stepID,
+				"error", execErr)
 		}
 	} else if exitCode == 0 {
+		// Condition evaluated to true
 		outcome = BranchOutcomeTrue
 		target = cfg.OnTrue
 	} else {
+		// Condition evaluated to false (non-zero exit)
 		outcome = BranchOutcomeFalse
 		target = cfg.OnFalse
 	}
 
-	o.logger.Info("branch condition evaluated",
-		"step", step.ID,
+	o.logger.Info("branch condition completed",
+		"step", stepID,
 		"outcome", outcome,
 		"exitCode", exitCode,
 		"hasTarget", target != nil)
 
+	// Complete the branch (acquires mutex, updates state, saves)
+	o.completeBranchCondition(ctx, workflowID, stepID, outcome, target, stdout, stderr)
+}
+
+// completeBranchCondition handles branch completion after async condition execution.
+// Acquires mutex, re-reads workflow, expands target, and saves state.
+func (o *Orchestrator) completeBranchCondition(
+	ctx context.Context,
+	workflowID string,
+	stepID string,
+	outcome BranchOutcome,
+	target *types.BranchTarget,
+	stdout string,
+	stderr string,
+) {
+	o.wfMu.Lock()
+	defer o.wfMu.Unlock()
+
+	// Re-read workflow to get latest state
+	wf, err := o.store.Get(ctx, workflowID)
+	if err != nil {
+		o.logger.Error("failed to get workflow for branch completion",
+			"workflow", workflowID,
+			"step", stepID,
+			"error", err)
+		return
+	}
+	if wf == nil {
+		o.logger.Error("workflow not found for branch completion",
+			"workflow", workflowID,
+			"step", stepID)
+		return
+	}
+
+	step, ok := wf.GetStep(stepID)
+	if !ok {
+		o.logger.Error("step not found for branch completion",
+			"workflow", workflowID,
+			"step", stepID)
+		return
+	}
+
+	// Step should be running (guard against double-completion)
+	if step.Status != types.StepStatusRunning {
+		o.logger.Warn("branch completion called for non-running step",
+			"step", stepID,
+			"status", step.Status)
+		return
+	}
+
 	// Expand the target if present
 	if target != nil {
 		if err := o.expandBranchTarget(ctx, wf, step, target); err != nil {
-			return fmt.Errorf("expanding branch target: %w", err)
+			o.logger.Error("failed to expand branch target",
+				"step", stepID,
+				"error", err)
+			// Mark step as failed
+			step.Fail(&types.StepError{Message: fmt.Sprintf("branch expansion failed: %v", err)})
+			if saveErr := o.store.Save(ctx, wf); saveErr != nil {
+				o.logger.Error("failed to save workflow after branch expansion error", "error", saveErr)
+			}
+			return
 		}
 	}
 
 	// If we expanded children, stay in "running" state until they complete.
 	// The main loop's checkBranchCompletion will mark us done when children finish.
-	// This is the same pattern as foreach with join=true.
 	if len(step.ExpandedInto) > 0 {
 		o.logger.Info("branch expansion complete, waiting for children",
-			"step", step.ID,
+			"step", stepID,
 			"childCount", len(step.ExpandedInto))
-		// Store the outcome for later when we complete
-		step.Outputs = map[string]any{"outcome": string(outcome)}
-		return nil
+		// Store the outcome for later
+		step.Outputs = map[string]any{
+			"outcome": string(outcome),
+			"stdout":  stdout,
+			"stderr":  stderr,
+		}
+		// Step stays running
+	} else {
+		// No children - mark step as done immediately
+		o.logger.Info("branch complete with no children",
+			"step", stepID,
+			"outcome", outcome)
+		if err := step.Complete(map[string]any{
+			"outcome": string(outcome),
+			"stdout":  stdout,
+			"stderr":  stderr,
+		}); err != nil {
+			o.logger.Error("failed to complete branch step",
+				"step", stepID,
+				"error", err)
+			return
+		}
 	}
 
-	// No children - mark step as done immediately
-	if err := step.Complete(map[string]any{"outcome": string(outcome)}); err != nil {
-		return fmt.Errorf("completing step: %w", err)
+	// Save workflow state
+	if err := o.store.Save(ctx, wf); err != nil {
+		o.logger.Error("failed to save workflow after branch completion",
+			"workflow", workflowID,
+			"step", stepID,
+			"error", err)
 	}
-
-	return nil
 }
 
 // expandBranchTarget expands a branch target (template or inline steps).
