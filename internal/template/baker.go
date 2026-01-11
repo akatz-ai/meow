@@ -2,6 +2,8 @@ package template
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -47,8 +49,18 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 	}
 
 	// Apply provided variables to context
+	// For file-type variables, read the file contents
 	for k, v := range vars {
-		b.VarContext.Set(k, v)
+		if varDef, ok := workflow.Variables[k]; ok && varDef.Type == VarTypeFile {
+			// Read file contents
+			content, err := os.ReadFile(v)
+			if err != nil {
+				return nil, fmt.Errorf("reading file for variable %q: %w", k, err)
+			}
+			b.VarContext.Set(k, strings.TrimSpace(string(content)))
+		} else {
+			b.VarContext.Set(k, v)
+		}
 	}
 
 	// Apply variable defaults from workflow

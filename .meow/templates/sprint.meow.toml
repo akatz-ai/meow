@@ -60,7 +60,7 @@ name = "sprint"
 description = "Dynamic parallel agent sprint with foreach"
 
 [main.variables]
-tasks = { required = true, description = "JSON array of {name, prompt} task objects" }
+tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
 target_branch = { default = "main", description = "Target branch for final merge" }
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
 max_agents = { default = "4", description = "Maximum concurrent agents" }

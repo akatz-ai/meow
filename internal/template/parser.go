@@ -40,13 +40,14 @@ const (
 	VarTypeString VarType = "string"
 	VarTypeInt    VarType = "int"
 	VarTypeBool   VarType = "bool"
+	VarTypeFile   VarType = "file" // Value is a file path; contents are read and used
 )
 
 // Var defines a template variable.
 type Var struct {
 	Required    bool     `toml:"required"`
 	Default     any      `toml:"default,omitempty"`
-	Type        VarType  `toml:"type,omitempty"`        // string (default), int, bool
+	Type        VarType  `toml:"type,omitempty"`        // string (default), int, bool, file
 	Description string   `toml:"description,omitempty"`
 	Enum        []string `toml:"enum,omitempty"`        // Allowed values
 }
