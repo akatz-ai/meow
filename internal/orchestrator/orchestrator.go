@@ -1644,6 +1644,34 @@ func (o *Orchestrator) completeBranchCondition(
 	}
 }
 
+// cancelPendingCommands cancels all in-flight async command executions.
+// Called during cleanup to ensure condition goroutines exit promptly.
+//
+// This allows wg.Wait() to complete quickly instead of waiting for
+// potentially long-running commands (meow await-event, etc.).
+func (o *Orchestrator) cancelPendingCommands() {
+	count := 0
+	o.pendingCommands.Range(func(key, value any) bool {
+		stepID, ok := key.(string)
+		if !ok {
+			return true // skip invalid entry
+		}
+		cancel, ok := value.(context.CancelFunc)
+		if !ok {
+			return true // skip invalid entry
+		}
+
+		o.logger.Info("cancelling pending command", "step", stepID)
+		cancel()
+		count++
+		return true // continue iteration
+	})
+
+	if count > 0 {
+		o.logger.Info("cancelled pending commands", "count", count)
+	}
+}
+
 // expandBranchTarget expands a branch target (template or inline steps).
 func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Workflow, step *types.Step, target *types.BranchTarget) error {
 	if target.Template != "" {
