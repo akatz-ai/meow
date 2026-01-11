@@ -327,7 +327,7 @@ description = "Wrapper for agent track with spec handling"
 [agent-track-wrapper.variables]
 task = { required = true, description = "Task object with name, prompt, workdir, beads" }
 i = { required = true, description = "Task index for agent naming" }
-spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first (use 'none' to skip)" }
+spec_file = { default = "none", description = "Spec file to read first (task prompts should be self-contained)" }
 spawn_args = { default = "", description = "Extra CLI args for claude" }
 impl_model = { default = "opus", description = "Model for implementation agents (opus, sonnet, haiku)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor" }
