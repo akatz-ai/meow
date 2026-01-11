@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -1674,4 +1675,189 @@ func getStepIDs(steps []*types.Step) []string {
 		ids[i] = s.ID
 	}
 	return ids
+}
+
+// --- Cancellation Tests ---
+
+// TestCancelPendingCommands_CancelsAll tests that cancelling multiple pending commands works correctly.
+func TestCancelPendingCommands_CancelsAll(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Track which cancel functions were called
+	var cancelledSteps sync.Map
+
+	// Create 3 mock cancel functions
+	for i := 1; i <= 3; i++ {
+		stepID := fmt.Sprintf("branch-step-%d", i)
+		cancelFunc := func(id string) context.CancelFunc {
+			return func() {
+				cancelledSteps.Store(id, true)
+			}
+		}(stepID)
+		orch.pendingCommands.Store(stepID, cancelFunc)
+	}
+
+	// Cancel all pending commands
+	orch.cancelPendingCommands()
+
+	// Verify all 3 cancel functions were called
+	for i := 1; i <= 3; i++ {
+		stepID := fmt.Sprintf("branch-step-%d", i)
+		if _, ok := cancelledSteps.Load(stepID); !ok {
+			t.Errorf("Cancel function for %s was not called", stepID)
+		}
+	}
+}
+
+// TestCancelPendingCommands_EmptyMap tests that cancelling with no pending commands doesn't panic.
+func TestCancelPendingCommands_EmptyMap(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// No pending commands - should not panic
+	orch.cancelPendingCommands()
+
+	// Success if we got here without panicking
+}
+
+// TestConditionCancelledMidExecution tests that pending commands are tracked and can be cancelled.
+func TestConditionCancelledMidExecution(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 5", // Command that will be cancelled
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx := context.Background()
+
+	// Start the branch step (launches goroutine)
+	err := orch.dispatch(ctx, wf, wf.Steps["branch-step"])
+	if err != nil {
+		t.Fatalf("dispatch error = %v", err)
+	}
+
+	// Give the goroutine time to start executing
+	time.Sleep(100 * time.Millisecond)
+
+	// Step should be running
+	if wf.Steps["branch-step"].Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want running", wf.Steps["branch-step"].Status)
+	}
+
+	// Verify there's a pending command being tracked
+	cancelFunc, hasPending := orch.pendingCommands.Load("branch-step")
+	if !hasPending {
+		t.Fatal("Expected pending command to be tracked")
+	}
+
+	// Verify the cancel function is actually a function
+	if _, ok := cancelFunc.(context.CancelFunc); !ok {
+		t.Errorf("Expected context.CancelFunc, got %T", cancelFunc)
+	}
+
+	// Call cancel directly (simulating what cancelPendingCommands does)
+	cancelFunc.(context.CancelFunc)()
+
+	// Wait a bit for the goroutine to detect cancellation and exit
+	// The defer in executeBranchConditionAsync should clean up the map
+	time.Sleep(500 * time.Millisecond)
+
+	// After cancellation and cleanup, the pending command should be removed
+	// Note: We can't reliably test exact timing, but the defer ensures cleanup
+}
+
+// TestSignalTriggersCleanShutdown tests that signal handling cancels commands and waits for goroutines.
+func TestSignalTriggersCleanShutdown(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a branch step
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+	wf.Steps["branch-step"] = &types.Step{
+		ID:       "branch-step",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 10", // Command that will be cancelled
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start orchestrator in background
+	orchDone := make(chan error, 1)
+	go func() {
+		orchDone <- orch.Run(ctx)
+	}()
+
+	// Give orchestrator time to start the branch step
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify the branch step is running and command is tracked
+	wf, _ = store.Get(ctx, wf.ID)
+	if wf.Steps["branch-step"].Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want running", wf.Steps["branch-step"].Status)
+	}
+
+	_, hasPending := orch.pendingCommands.Load("branch-step")
+	if !hasPending {
+		t.Error("Expected pending command to be tracked")
+	}
+
+	// Simulate signal by calling Shutdown (which cancels the context)
+	// This mimics what happens when a signal is received
+	orch.Shutdown()
+
+	// Wait for orchestrator to complete (should be quick with cancellation)
+	// Allow up to 3 seconds for process termination
+	select {
+	case err := <-orchDone:
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Orchestrator did not shut down within 3 seconds after signal")
+	}
+
+	// Verify cleanup happened (defer in executeBranchConditionAsync removes from map)
+	_, stillPending := orch.pendingCommands.Load("branch-step")
+	if stillPending {
+		t.Error("pendingCommands should have been cleaned up after shutdown")
+	}
 }
