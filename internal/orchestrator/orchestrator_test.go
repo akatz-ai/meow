@@ -2418,3 +2418,455 @@ func TestSignalTriggersCleanShutdown(t *testing.T) {
 		t.Error("pendingCommands should have been cleaned up after shutdown")
 	}
 }
+
+// --- Shell as Sugar Tests ---
+
+// TestHandleShell_DelegatesToBranch verifies that handleShell converts
+// shell config to branch config and delegates to handleBranch.
+func TestHandleShell_DelegatesToBranch(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create shell step
+	wf.Steps["shell-step"] = &types.Step{
+		ID:       "shell-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "echo hello",
+			Workdir: "/tmp",
+			Env:     map[string]string{"FOO": "bar"},
+			Outputs: map[string]types.OutputSource{
+				"out": {Source: "stdout"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	step := wf.Steps["shell-step"]
+
+	// Call handleShell
+	err := orch.handleShell(ctx, wf, step)
+	if err != nil {
+		t.Fatalf("handleShell error = %v", err)
+	}
+
+	// Verify step.Branch is populated
+	if step.Branch == nil {
+		t.Fatal("step.Branch should be populated after handleShell")
+	}
+
+	// Verify step.Shell is nil (cleared after conversion)
+	if step.Shell != nil {
+		t.Error("step.Shell should be nil after handleShell")
+	}
+
+	// Verify branch config has correct command
+	if step.Branch.Condition != "echo hello" {
+		t.Errorf("Branch condition = %q, want %q", step.Branch.Condition, "echo hello")
+	}
+
+	// Verify step is running (handleBranch marks it as running and launches async)
+	if step.Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want running", step.Status)
+	}
+}
+
+// TestHandleShell_RunsAsync verifies that handleShell returns immediately
+// without waiting for command completion.
+func TestHandleShell_RunsAsync(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create shell step with slow command
+	wf.Steps["slow-step"] = &types.Step{
+		ID:       "slow-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "sleep 2", // 2 second delay
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	step := wf.Steps["slow-step"]
+
+	// Measure time for handleShell call
+	start := time.Now()
+	err := orch.handleShell(ctx, wf, step)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("handleShell error = %v", err)
+	}
+
+	// Should return immediately (< 100ms)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("handleShell took %v, want < 100ms (should be async)", elapsed)
+	}
+
+	// Wait for goroutines to complete
+	orch.wg.Wait()
+
+	// After completion, verify step is done
+	// Re-fetch to avoid race condition with async updates
+	finalWf, _ := store.Get(ctx, wf.ID)
+	finalStep := finalWf.Steps["slow-step"]
+	if finalStep.Status != types.StepStatusDone {
+		t.Errorf("Step status = %v, want done (after async completion)", finalStep.Status)
+	}
+}
+
+// TestShellConfigConversion verifies that all ShellConfig fields
+// are correctly transferred to BranchConfig.
+func TestShellConfigConversion(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create shell step with all fields populated
+	wf.Steps["full-step"] = &types.Step{
+		ID:       "full-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "echo test",
+			Workdir: "/custom/path",
+			Env: map[string]string{
+				"VAR1": "value1",
+				"VAR2": "value2",
+			},
+			OnError: "continue",
+			Outputs: map[string]types.OutputSource{
+				"stdout": {Source: "stdout"},
+				"stderr": {Source: "stderr"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	step := wf.Steps["full-step"]
+
+	err := orch.handleShell(ctx, wf, step)
+	if err != nil {
+		t.Fatalf("handleShell error = %v", err)
+	}
+
+	// Verify all fields transferred
+	branch := step.Branch
+	if branch == nil {
+		t.Fatal("Branch config should be populated")
+	}
+
+	if branch.Condition != "echo test" {
+		t.Errorf("Condition = %q, want %q", branch.Condition, "echo test")
+	}
+
+	if branch.Workdir != "/custom/path" {
+		t.Errorf("Workdir = %q, want %q", branch.Workdir, "/custom/path")
+	}
+
+	if len(branch.Env) != 2 {
+		t.Errorf("Env has %d entries, want 2", len(branch.Env))
+	}
+	if branch.Env["VAR1"] != "value1" {
+		t.Errorf("Env[VAR1] = %q, want %q", branch.Env["VAR1"], "value1")
+	}
+
+	if branch.OnError != "continue" {
+		t.Errorf("OnError = %q, want %q", branch.OnError, "continue")
+	}
+
+	if len(branch.Outputs) != 2 {
+		t.Errorf("Outputs has %d entries, want 2", len(branch.Outputs))
+	}
+
+	// Verify no expansion targets (shell has no branches)
+	if branch.OnTrue != nil {
+		t.Error("OnTrue should be nil for shell-as-sugar")
+	}
+	if branch.OnFalse != nil {
+		t.Error("OnFalse should be nil for shell-as-sugar")
+	}
+	if branch.OnTimeout != nil {
+		t.Error("OnTimeout should be nil for shell-as-sugar")
+	}
+
+	// Wait for async completion
+	orch.wg.Wait()
+}
+
+// TestHandleShell_CapturesOutputs verifies that shell step outputs
+// are captured correctly after command execution.
+func TestHandleShell_CapturesOutputs(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create shell step with output definitions
+	wf.Steps["output-step"] = &types.Step{
+		ID:       "output-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "echo hello",
+			Outputs: map[string]types.OutputSource{
+				"result": {Source: "stdout"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Run the workflow
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+
+	// Re-fetch workflow to get final state
+	finalWf, _ := store.Get(ctx, wf.ID)
+
+	// Step should be done
+	step := finalWf.Steps["output-step"]
+	if step.Status != types.StepStatusDone {
+		t.Errorf("Step status = %v, want done", step.Status)
+	}
+
+	// Outputs should be captured
+	if step.Outputs == nil {
+		t.Fatal("Step outputs should be populated")
+	}
+}
+
+// TestHandleShell_OnErrorFail verifies that shell steps with on_error: fail
+// mark the step as failed when the command exits non-zero.
+func TestHandleShell_OnErrorFail(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create shell step with failing command and on_error: fail
+	wf.Steps["fail-step"] = &types.Step{
+		ID:       "fail-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "exit 1", // Fails
+			OnError: "fail",
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Run the workflow
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+
+	// Re-fetch workflow to get final state
+	finalWf, _ := store.Get(ctx, wf.ID)
+
+	// Step should be failed
+	step := finalWf.Steps["fail-step"]
+	if step.Status != types.StepStatusFailed {
+		t.Errorf("Step status = %v, want failed", step.Status)
+	}
+
+	// Error should be set
+	if step.Error == nil {
+		t.Error("Step error should be set")
+	}
+
+	// Workflow should be failed
+	if finalWf.Status != types.WorkflowStatusFailed {
+		t.Errorf("Workflow status = %v, want failed", finalWf.Status)
+	}
+}
+
+// TestHandleShell_OnErrorContinue verifies that shell steps with on_error: continue
+// mark the step as done even when the command fails.
+func TestHandleShell_OnErrorContinue(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create two steps: one that fails with continue, one that depends on it
+	wf.Steps["continue-step"] = &types.Step{
+		ID:       "continue-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell: &types.ShellConfig{
+			Command: "exit 1", // Fails
+			OnError: "continue",
+		},
+	}
+	wf.Steps["after-step"] = &types.Step{
+		ID:       "after-step",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"continue-step"},
+		Shell: &types.ShellConfig{
+			Command: "echo after",
+		},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Run the workflow
+	err := orch.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+
+	// Re-fetch workflow to get final state
+	finalWf, _ := store.Get(ctx, wf.ID)
+
+	// First step should be done (not failed)
+	step1 := finalWf.Steps["continue-step"]
+	if step1.Status != types.StepStatusDone {
+		t.Errorf("continue-step status = %v, want done", step1.Status)
+	}
+
+	// Error info should be in outputs
+	if step1.Outputs == nil || step1.Outputs["error"] == nil {
+		t.Error("Step outputs should contain error info")
+	}
+
+	// Second step should have run (workflow continues)
+	step2 := finalWf.Steps["after-step"]
+	if step2.Status != types.StepStatusDone {
+		t.Errorf("after-step status = %v, want done", step2.Status)
+	}
+
+	// Workflow should be done (not failed)
+	if finalWf.Status != types.WorkflowStatusDone {
+		t.Errorf("Workflow status = %v, want done", finalWf.Status)
+	}
+}
+
+// TestParallelShellSteps verifies that shell steps with the same dependencies
+// run in parallel rather than sequentially.
+func TestParallelShellSteps(t *testing.T) {
+	store := newMockWorkflowStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewWorkflow("test-wf", "test-template", nil)
+	wf.Status = types.WorkflowStatusRunning
+
+	// Create three steps: one setup, two parallel sleeps
+	wf.Steps["setup"] = &types.Step{
+		ID:       "setup",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Shell:    &types.ShellConfig{Command: "echo setup"},
+	}
+	wf.Steps["parallel-1"] = &types.Step{
+		ID:       "parallel-1",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"setup"},
+		Shell:    &types.ShellConfig{Command: "sleep 0.5"},
+	}
+	wf.Steps["parallel-2"] = &types.Step{
+		ID:       "parallel-2",
+		Executor: types.ExecutorShell,
+		Status:   types.StepStatusPending,
+		Needs:    []string{"setup"},
+		Shell:    &types.ShellConfig{Command: "sleep 0.5"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+	orch.SetWorkflowID(wf.ID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Measure total execution time
+	start := time.Now()
+	err := orch.Run(ctx)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+
+	// Re-fetch workflow to verify completion
+	finalWf, _ := store.Get(ctx, wf.ID)
+
+	// All steps should be done
+	for stepID, step := range finalWf.Steps {
+		if step.Status != types.StepStatusDone {
+			t.Errorf("Step %s status = %v, want done", stepID, step.Status)
+		}
+	}
+
+	// Total time should be ~0.5s (parallel) not ~1s (sequential)
+	// Allow up to 1s for overhead, but should be much less than 1.5s
+	if elapsed > 1200*time.Millisecond {
+		t.Errorf("Parallel execution took %v, want < 1.2s (suggesting sequential execution)", elapsed)
+	}
+
+	t.Logf("Parallel execution completed in %v", elapsed)
+}
