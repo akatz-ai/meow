@@ -69,25 +69,16 @@ template = ".merge-to-target"
 variables = { target_branch = "{{target_branch}}", merge_message = "{{merge_message}}" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# KILL: Gracefully terminate the agent
-# ═══════════════════════════════════════════════════════════════════════════════
-
-[[main.steps]]
-id = "kill"
-executor = "kill"
-agent = "merge-agent"
-graceful = true
-needs = ["check-mode"]
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # DONE: Mark completion
 # ═══════════════════════════════════════════════════════════════════════════════
+# Note: Kill is now inside each branch path (merge-to-target and push-for-pr).
+# This step depends on check-mode which completes after its expanded steps.
 
 [[main.steps]]
 id = "done"
 executor = "shell"
 command = "echo 'Merge agent completed - target: {{target_branch}}'"
-needs = ["kill"]
+needs = ["check-mode"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -154,6 +145,13 @@ Use this message for any merge commits:
 When done: `meow done`
 """
 
+[[merge-to-target.steps]]
+id = "kill"
+executor = "kill"
+agent = "merge-agent"
+graceful = true
+needs = ["merge"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INTERNAL: Push for PR (skip merge)
@@ -213,3 +211,10 @@ The PR should target: {{target_branch}}
 
 When done: `meow done`
 """
+
+[[push-for-pr.steps]]
+id = "kill"
+executor = "kill"
+agent = "merge-agent"
+graceful = true
+needs = ["push"]

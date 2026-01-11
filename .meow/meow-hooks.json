@@ -1,19 +1,8 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": {},
-        "hooks": [
-          {
-            "type": "command",
-            "command": "meow prime"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
-        "matcher": {},
+        "matcher": "",
         "hooks": [
           {
             "type": "command",

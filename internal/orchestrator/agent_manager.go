@@ -89,7 +89,7 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 		// Orchestrator-injected vars (reserved, override user values)
 		env["MEOW_AGENT"] = agentID
 		env["MEOW_WORKFLOW"] = wf.ID
-		env["MEOW_ORCH_SOCK"] = fmt.Sprintf("/tmp/meow-wf-%s.sock", wf.ID)
+		env["MEOW_ORCH_SOCK"] = fmt.Sprintf("/tmp/meow-%s.sock", wf.ID)
 		// Prevent Claude from detecting it's in an outer tmux session
 		// This avoids potential interactions with the parent tmux server
 		env["TMUX"] = ""

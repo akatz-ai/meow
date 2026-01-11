@@ -124,10 +124,11 @@ needs = ["review"]
 command = """
 cd "{{workdir}}"
 
-# Check for uncommitted changes
-if [ -n "$(git status --porcelain)" ]; then
+# Check for uncommitted changes (excluding .meow-branch which is workflow metadata)
+CHANGES=$(git status --porcelain | grep -v '.meow-branch' || true)
+if [ -n "$CHANGES" ]; then
     echo "ERROR: Uncommitted changes in {{track_name}} track!" >&2
-    git status >&2
+    echo "$CHANGES" >&2
     exit 1
 fi
 

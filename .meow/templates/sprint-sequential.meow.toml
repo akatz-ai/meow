@@ -2,8 +2,8 @@
 # MEOW Workflow: Sprint Sequential
 # ============================================================================
 #
-# Sequential agent sprint using a loop pattern. Tasks are processed one at a
-# time - each agent completes before the next one starts.
+# Sequential agent sprint using foreach with parallel=false. Tasks are
+# processed one at a time - each agent completes before the next one starts.
 #
 # This workflow:
 #   1. Creates worktrees for each task (serialized for git safety)
@@ -21,11 +21,11 @@
 # USAGE:
 #
 #   # With a JSON file of tasks:
-#   meow run sprint-sequential --var-file tasks=my-sprint-tasks.json
+#   meow run sprint-sequential --var tasks=my-sprint-tasks.json
 #
 #   # With options:
 #   meow run sprint-sequential \
-#     --var-file tasks=tasks.json \
+#     --var tasks=tasks.json \
 #     --var target_branch=feature/my-feature \
 #     --var skip_merge_to_target=true
 #
@@ -41,14 +41,13 @@
 # SEE ALSO:
 #
 #   - sprint-parallel: Same workflow but runs all agents concurrently
-#   - lib/sprint-task-loop: The sequential loop pattern
 #   - lib/sprint-common: Shared templates for setup, integration, cleanup
 #
 # ============================================================================
 
 [main]
 name = "sprint-sequential"
-description = "Sequential agent sprint using loop pattern"
+description = "Sequential agent sprint using foreach with parallel=false"
 
 [main.variables]
 tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
@@ -93,21 +92,23 @@ description = "Create worktrees and prepare enriched task list"
 tasks = "{{tasks}}"
 
 # ============================================================================
-# PHASE 2: Sequential Agent Tracks (loop)
+# PHASE 2: Sequential Agent Tracks (foreach with parallel=false)
 # ============================================================================
 #
-# Uses lib/sprint-task-loop to process tasks one at a time.
+# Uses foreach with parallel=false to process tasks one at a time.
 # Each task completes before the next one starts.
 
 [[main.steps]]
 id = "agents"
-executor = "expand"
-template = "lib/sprint-task-loop"
+executor = "foreach"
+items_file = ".meow/worktrees/.enriched-tasks.json"
+item_var = "task"
+index_var = "i"
+template = "lib/sprint-common#agent-track-wrapper"
+parallel = false
 needs = ["setup.done"]
 
 [main.steps.variables]
-tasks_file = ".meow/worktrees/.enriched-tasks.json"
-current_index = "0"
 spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
 enable_rw = "{{enable_rw}}"

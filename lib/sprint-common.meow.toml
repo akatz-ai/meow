@@ -21,7 +21,7 @@
 # Outputs enriched task list with workdir paths.
 #
 # Variables:
-#   tasks (required, file) - Path to JSON file with [{name, prompt}] task objects
+#   tasks (required) - JSON content of [{name, prompt}] task objects (parent reads file)
 #
 # Outputs (via files):
 #   .meow/worktrees/.enriched-tasks.json - Tasks with workdir/branch added
@@ -40,7 +40,8 @@ name = "sprint-setup"
 description = "Create worktrees and prepare enriched task list"
 
 [setup.variables]
-tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
+# Note: Parent template reads the file, so we receive the content here (not the path)
+tasks = { required = true, description = "JSON array of [{name, prompt}] task objects" }
 
 [[setup.steps]]
 id = "create-worktrees"
