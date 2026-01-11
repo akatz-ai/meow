@@ -124,6 +124,7 @@ type Step struct {
 	ShellOutputs map[string]OutputSource `toml:"shell_outputs,omitempty"` // For shell executor stdout/stderr/file capture
 
 	// Spawn executor fields (uses Agent, Workdir, Env)
+	Adapter       string `toml:"adapter,omitempty"`        // Which adapter to use (defaults to config hierarchy)
 	ResumeSession string `toml:"resume_session,omitempty"` // Claude session ID to resume
 	SpawnArgs     string `toml:"spawn_args,omitempty"`     // Extra CLI args to append to spawn command
 
@@ -207,8 +208,12 @@ func (s *Step) Validate() error {
 			return fmt.Errorf("branch executor requires condition")
 		}
 	case ExecutorForeach:
-		if s.Items == "" {
-			return fmt.Errorf("foreach executor requires items")
+		// Exactly one of items or items_file must be set
+		if s.Items == "" && s.ItemsFile == "" {
+			return fmt.Errorf("foreach executor requires items or items_file")
+		}
+		if s.Items != "" && s.ItemsFile != "" {
+			return fmt.Errorf("foreach executor cannot have both items and items_file")
 		}
 		if s.ItemVar == "" {
 			return fmt.Errorf("foreach executor requires item_var")
@@ -253,6 +258,7 @@ func (is *InlineStep) ToStep() *Step {
 		Env:           is.Env,
 		OnError:       is.OnError,
 		ShellOutputs:  is.ShellOutputs,
+		Adapter:       is.Adapter,
 		ResumeSession: is.ResumeSession,
 		SpawnArgs:     is.SpawnArgs,
 		Graceful:      is.Graceful,
@@ -327,6 +333,7 @@ type InlineStep struct {
 	ShellOutputs map[string]OutputSource     `toml:"shell_outputs,omitempty"`
 
 	// Spawn executor fields
+	Adapter       string `toml:"adapter,omitempty"`        // Which adapter to use (defaults to config hierarchy)
 	ResumeSession string `toml:"resume_session,omitempty"`
 	SpawnArgs     string `toml:"spawn_args,omitempty"` // Extra CLI args to append to spawn command
 
@@ -471,8 +478,8 @@ func (t *Template) Validate() error {
 
 	// Validate variables
 	for name, v := range t.Variables {
-		if v.Type != "" && v.Type != VarTypeString && v.Type != VarTypeInt && v.Type != VarTypeBool {
-			return fmt.Errorf("variable %q: invalid type %q (must be string, int, or bool)", name, v.Type)
+		if v.Type != "" && v.Type != VarTypeString && v.Type != VarTypeInt && v.Type != VarTypeBool && v.Type != VarTypeFile {
+			return fmt.Errorf("variable %q: invalid type %q (must be string, int, bool, or file)", name, v.Type)
 		}
 	}
 

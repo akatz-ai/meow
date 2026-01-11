@@ -202,8 +202,10 @@ func cloneShellConfig(src *types.ShellConfig) *types.ShellConfig {
 func cloneSpawnConfig(src *types.SpawnConfig) *types.SpawnConfig {
 	dst := &types.SpawnConfig{
 		Agent:         src.Agent,
+		Adapter:       src.Adapter,
 		Workdir:       src.Workdir,
 		ResumeSession: src.ResumeSession,
+		SpawnArgs:     src.SpawnArgs,
 	}
 	if src.Env != nil {
 		dst.Env = make(map[string]string)
@@ -334,8 +336,10 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 	case types.ExecutorSpawn:
 		if step.Spawn != nil {
 			step.Spawn.Agent = substituteVars(step.Spawn.Agent, vars)
+			step.Spawn.Adapter = substituteVars(step.Spawn.Adapter, vars)
 			step.Spawn.Workdir = substituteVars(step.Spawn.Workdir, vars)
 			step.Spawn.ResumeSession = substituteVars(step.Spawn.ResumeSession, vars)
+			step.Spawn.SpawnArgs = substituteVars(step.Spawn.SpawnArgs, vars)
 			for k, v := range step.Spawn.Env {
 				step.Spawn.Env[k] = substituteVars(v, vars)
 			}

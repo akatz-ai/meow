@@ -244,6 +244,15 @@ func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
 		return fmt.Errorf("substitute agent: %w", err)
 	}
 
+	// Substitute adapter
+	adapter := ts.Adapter
+	if adapter != "" {
+		adapter, err = b.VarContext.Substitute(adapter)
+		if err != nil {
+			return fmt.Errorf("substitute adapter: %w", err)
+		}
+	}
+
 	workdir := ts.Workdir
 	if workdir != "" {
 		workdir, err = b.VarContext.Substitute(workdir)
@@ -273,6 +282,7 @@ func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
 
 	step.Spawn = &types.SpawnConfig{
 		Agent:         agent,
+		Adapter:       adapter,
 		Workdir:       workdir,
 		Env:           env,
 		ResumeSession: ts.ResumeSession,

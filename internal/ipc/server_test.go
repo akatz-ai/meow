@@ -13,21 +13,30 @@ import (
 type mockHandler struct {
 	mu sync.Mutex
 
-	stepDoneCalls     []*StepDoneMessage
-	getSessionIDCalls []*GetSessionIDMessage
-	approvalCalls     []*ApprovalMessage
+	stepDoneCalls      []*StepDoneMessage
+	getSessionIDCalls  []*GetSessionIDMessage
+	approvalCalls      []*ApprovalMessage
+	eventCalls         []*EventMessage
+	awaitEventCalls    []*AwaitEventMessage
+	getStepStatusCalls []*GetStepStatusMessage
 
 	// Configurable responses
-	stepDoneResponse     any
-	getSessionIDResponse any
-	approvalResponse     any
+	stepDoneResponse      any
+	getSessionIDResponse  any
+	approvalResponse      any
+	eventResponse         any
+	awaitEventResponse    any
+	getStepStatusResponse any
 }
 
 func newMockHandler() *mockHandler {
 	return &mockHandler{
-		stepDoneResponse:     &AckMessage{Type: MsgAck, Success: true},
-		getSessionIDResponse: &SessionIDMessage{Type: MsgSessionID, SessionID: "test-session-123"},
-		approvalResponse:     &AckMessage{Type: MsgAck, Success: true},
+		stepDoneResponse:      &AckMessage{Type: MsgAck, Success: true},
+		getSessionIDResponse:  &SessionIDMessage{Type: MsgSessionID, SessionID: "test-session-123"},
+		approvalResponse:      &AckMessage{Type: MsgAck, Success: true},
+		eventResponse:         &AckMessage{Type: MsgAck, Success: true},
+		awaitEventResponse:    &EventMatchMessage{Type: MsgEventMatch, EventType: "test", Data: nil, Timestamp: 0},
+		getStepStatusResponse: &StepStatusMessage{Type: MsgStepStatus, StepID: "step-1", Status: "done"},
 	}
 }
 
@@ -50,6 +59,27 @@ func (h *mockHandler) HandleApproval(ctx context.Context, msg *ApprovalMessage) 
 	defer h.mu.Unlock()
 	h.approvalCalls = append(h.approvalCalls, msg)
 	return h.approvalResponse
+}
+
+func (h *mockHandler) HandleEvent(ctx context.Context, msg *EventMessage) any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.eventCalls = append(h.eventCalls, msg)
+	return h.eventResponse
+}
+
+func (h *mockHandler) HandleAwaitEvent(ctx context.Context, msg *AwaitEventMessage) any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.awaitEventCalls = append(h.awaitEventCalls, msg)
+	return h.awaitEventResponse
+}
+
+func (h *mockHandler) HandleGetStepStatus(ctx context.Context, msg *GetStepStatusMessage) any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.getStepStatusCalls = append(h.getStepStatusCalls, msg)
+	return h.getStepStatusResponse
 }
 
 func TestSocketPath(t *testing.T) {

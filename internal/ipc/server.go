@@ -33,6 +33,18 @@ type Handler interface {
 	// HandleApproval processes a human approval/rejection signal.
 	// Returns an AckMessage or ErrorMessage.
 	HandleApproval(ctx context.Context, msg *ApprovalMessage) any
+
+	// HandleEvent processes an event emitted by an agent.
+	// Returns an AckMessage or ErrorMessage.
+	HandleEvent(ctx context.Context, msg *EventMessage) any
+
+	// HandleAwaitEvent waits for an event matching the given criteria.
+	// Returns an EventMatchMessage or ErrorMessage.
+	HandleAwaitEvent(ctx context.Context, msg *AwaitEventMessage) any
+
+	// HandleGetStepStatus returns the status of a step.
+	// Returns a StepStatusMessage or ErrorMessage.
+	HandleGetStepStatus(ctx context.Context, msg *GetStepStatusMessage) any
 }
 
 // Server listens for IPC messages on a Unix domain socket.
@@ -244,6 +256,18 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) any {
 	case *ApprovalMessage:
 		s.logger.Debug("handling approval", "workflow", m.Workflow, "gate", m.GateID, "approved", m.Approved)
 		return s.handler.HandleApproval(ctx, m)
+
+	case *EventMessage:
+		s.logger.Debug("handling event", "event_type", m.EventType, "agent", m.Agent)
+		return s.handler.HandleEvent(ctx, m)
+
+	case *AwaitEventMessage:
+		s.logger.Debug("handling await_event", "event_type", m.EventType, "timeout", m.Timeout)
+		return s.handler.HandleAwaitEvent(ctx, m)
+
+	case *GetStepStatusMessage:
+		s.logger.Debug("handling get_step_status", "workflow", m.Workflow, "step_id", m.StepID)
+		return s.handler.HandleGetStepStatus(ctx, m)
 
 	default:
 		s.logger.Error("unexpected message type", "type", fmt.Sprintf("%T", msg))
