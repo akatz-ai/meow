@@ -3126,9 +3126,9 @@ command = "echo 'both branches complete'"
 //   3. Multiple steps can chain outputs
 //
 // Timeline:
-//   - Step 1: Generates "hello"
-//   - Step 2: Uses {{step-1.outputs.greeting}}, generates "world"
-//   - Step 3: Uses both outputs to create "hello world"
+//   - Step 1: Generates "hello" and captures to outputs.greeting
+//   - Step 2: Generates "world" and captures to outputs.target
+//   - Step 3: Uses both outputs ({{step-1.outputs.greeting}} and {{step-2.outputs.target}}) to create "hello world"
 func TestE2E_ShellOutputChain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
