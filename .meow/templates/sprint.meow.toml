@@ -63,8 +63,8 @@ description = "Dynamic parallel agent sprint with foreach"
 tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
 target_branch = { default = "main", description = "Target branch for final merge" }
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
-max_agents = { default = "4", description = "Maximum concurrent agents" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
+spawn_args = { default = "", description = "Extra CLI args for spawned agents (e.g., --settings /path/to/hooks.json)" }
 
 # Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
 cleanup_on_success = """
@@ -236,11 +236,11 @@ item_var = "task"
 index_var = "i"
 template = ".agent-track-wrapper"
 parallel = true
-max_concurrent = "{{max_agents}}"
 needs = ["setup-metadata"]
 
 [main.steps.variables]
 spec_file = "{{spec_file}}"
+spawn_args = "{{spawn_args}}"
 
 
 # ============================================================================
@@ -260,6 +260,7 @@ needs = ["agents"]
 
 [main.steps.variables]
 workdir = ".meow/worktrees/sprint-integration-track"
+spawn_args = "{{spawn_args}}"
 
 
 # ============================================================================
@@ -278,6 +279,7 @@ branches = "sprint tasks"
 merge_message = "Merge: Sprint implementation"
 target_branch = "{{target_branch}}"
 skip_merge_to_target = "{{skip_merge_to_target}}"
+spawn_args = "{{spawn_args}}"
 
 
 # ============================================================================
@@ -314,12 +316,14 @@ internal = true
 
 [sprint-integration.variables]
 workdir = { required = true }
+spawn_args = { default = "" }
 
 [[sprint-integration.steps]]
 id = "spawn"
 executor = "spawn"
 agent = "agent-integration"
 workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
 
 [[sprint-integration.steps]]
 id = "work"
@@ -425,6 +429,7 @@ internal = true
 task = { required = true }
 i = { required = true }
 spec_file = { default = "docs/MVP-SPEC-v2.md" }
+spawn_args = { default = "" }
 
 [[agent-track-wrapper.steps]]
 id = "track"
@@ -445,6 +450,7 @@ If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
 """
 # Only include spec_file if it's not "none"
 spec_file = "{{spec_file}}"
+spawn_args = "{{spawn_args}}"
 
 # Done marker that downstream can reference
 [[agent-track-wrapper.steps]]

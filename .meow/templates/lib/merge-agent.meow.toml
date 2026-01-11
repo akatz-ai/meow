@@ -36,6 +36,7 @@ branches = { required = true, description = "Description of branches being merge
 merge_message = { default = "Merge: Multi-agent implementation", description = "Merge commit message" }
 target_branch = { default = "main", description = "Target branch to merge into (main or feature branch)" }
 skip_merge_to_target = { default = "false", description = "If true, skip merging to target - just push integration branch" }
+spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --settings /path/to/hooks.json)" }
 
 # ============================================================================
 # Step 1: Spawn Merge Agent
@@ -46,6 +47,7 @@ id = "spawn"
 executor = "spawn"
 agent = "merge-agent"
 workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
 
 # ============================================================================
 # Step 2: Review All Changes

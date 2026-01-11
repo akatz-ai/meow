@@ -38,6 +38,7 @@ track_name = { required = true, description = "Track name for identification" }
 workdir = { required = true, description = "Working directory path" }
 task_prompt = { required = true, description = "Main task prompt" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first" }
+spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --settings /path/to/hooks.json)" }
 
 # ============================================================================
 # Step 1: Spawn Agent
@@ -48,6 +49,7 @@ id = "spawn"
 executor = "spawn"
 agent = "{{agent_name}}"
 workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
 
 # ============================================================================
 # Step 2: Main Work
