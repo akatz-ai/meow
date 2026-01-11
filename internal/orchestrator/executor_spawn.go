@@ -21,6 +21,7 @@ type AgentStartConfig struct {
 	Workdir       string            // Working directory
 	Env           map[string]string // Additional environment variables
 	ResumeSession string            // Claude session ID to resume (optional)
+	SpawnArgs     string            // Extra CLI args to append to spawn command (optional)
 }
 
 // SpawnResult contains the results of spawning an agent.
@@ -50,6 +51,7 @@ func ExecuteSpawn(ctx context.Context, step *types.Step, workflowID string, star
 		Workdir:       cfg.Workdir,
 		Env:           make(map[string]string),
 		ResumeSession: cfg.ResumeSession,
+		SpawnArgs:     cfg.SpawnArgs,
 	}
 
 	// Copy user-provided env vars

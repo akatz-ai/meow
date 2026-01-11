@@ -108,6 +108,7 @@ type SpawnConfig struct {
 	Workdir       string            `yaml:"workdir,omitempty" toml:"workdir,omitempty"`
 	Env           map[string]string `yaml:"env,omitempty" toml:"env,omitempty"`
 	ResumeSession string            `yaml:"resume_session,omitempty" toml:"resume_session,omitempty"`
+	SpawnArgs     string            `yaml:"spawn_args,omitempty" toml:"spawn_args,omitempty"` // Extra CLI args to append to spawn command
 }
 
 // KillConfig for executor: kill
@@ -257,6 +258,7 @@ type Step struct {
 	// Expansion tracking (for crash recovery)
 	ExpandedFrom string   `yaml:"expanded_from,omitempty"` // Parent expand step ID
 	ExpandedInto []string `yaml:"expanded_into,omitempty"` // Child step IDs (on expand steps)
+	SourceModule string   `yaml:"source_module,omitempty"` // Template file this step came from (for local refs)
 
 	// Data
 	Outputs map[string]any `yaml:"outputs,omitempty"`

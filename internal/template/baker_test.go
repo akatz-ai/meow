@@ -114,6 +114,7 @@ func TestBakeWorkflow_SpawnExecutor(t *testing.T) {
 				Workdir:       "/project",
 				Env:           map[string]string{"MEOW_WORKFLOW": "test"},
 				ResumeSession: "session-123",
+				SpawnArgs:     "--model opus --verbose",
 			},
 		},
 	}
@@ -141,6 +142,9 @@ func TestBakeWorkflow_SpawnExecutor(t *testing.T) {
 	}
 	if step.Spawn.ResumeSession != "session-123" {
 		t.Errorf("expected resume_session 'session-123', got %q", step.Spawn.ResumeSession)
+	}
+	if step.Spawn.SpawnArgs != "--model opus --verbose" {
+		t.Errorf("expected spawn_args '--model opus --verbose', got %q", step.Spawn.SpawnArgs)
 	}
 }
 

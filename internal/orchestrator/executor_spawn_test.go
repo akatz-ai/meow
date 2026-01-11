@@ -233,6 +233,36 @@ func TestExecuteSpawn_WorkflowIDInConfig(t *testing.T) {
 	}
 }
 
+func TestExecuteSpawn_SpawnArgs(t *testing.T) {
+	starter := &mockAgentStarter{}
+	step := &types.Step{
+		ID:       "test-spawn-args",
+		Executor: types.ExecutorSpawn,
+		Spawn: &types.SpawnConfig{
+			Agent:     "worker-1",
+			SpawnArgs: "--model opus --verbose",
+		},
+	}
+
+	result, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	if result == nil {
+		t.Fatal("expected result")
+	}
+
+	if !starter.startCalled {
+		t.Error("expected Start to be called")
+	}
+
+	// Verify SpawnArgs is passed through
+	if starter.lastStartCfg.SpawnArgs != "--model opus --verbose" {
+		t.Errorf("expected SpawnArgs '--model opus --verbose', got %q", starter.lastStartCfg.SpawnArgs)
+	}
+}
+
 func TestBuildTmuxSessionName(t *testing.T) {
 	tests := []struct {
 		workflowID string

@@ -105,6 +105,10 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 		if cfg.ResumeSession != "" {
 			claudeCmd = fmt.Sprintf("claude --dangerously-skip-permissions --resume %s", cfg.ResumeSession)
 		}
+		// Append any extra spawn args
+		if cfg.SpawnArgs != "" {
+			claudeCmd = claudeCmd + " " + cfg.SpawnArgs
+		}
 
 		// Give the session a moment to initialize
 		time.Sleep(100 * time.Millisecond)

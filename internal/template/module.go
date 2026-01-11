@@ -300,6 +300,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	if v, ok := data["resume_session"].(string); ok {
 		s.ResumeSession = v
 	}
+	if v, ok := data["spawn_args"].(string); ok {
+		s.SpawnArgs = v
+	}
 
 	// Parse kill executor fields
 	if v, ok := data["graceful"].(bool); ok {
@@ -619,6 +622,9 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	// Parse spawn executor fields
 	if v, ok := data["resume_session"].(string); ok {
 		step.ResumeSession = v
+	}
+	if v, ok := data["spawn_args"].(string); ok {
+		step.SpawnArgs = v
 	}
 
 	// Parse kill executor fields

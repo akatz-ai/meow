@@ -125,6 +125,7 @@ type Step struct {
 
 	// Spawn executor fields (uses Agent, Workdir, Env)
 	ResumeSession string `toml:"resume_session,omitempty"` // Claude session ID to resume
+	SpawnArgs     string `toml:"spawn_args,omitempty"`     // Extra CLI args to append to spawn command
 
 	// Kill executor fields (uses Agent)
 	Graceful *bool `toml:"graceful,omitempty"` // Send SIGTERM first (default: true)
@@ -253,6 +254,7 @@ func (is *InlineStep) ToStep() *Step {
 		OnError:       is.OnError,
 		ShellOutputs:  is.ShellOutputs,
 		ResumeSession: is.ResumeSession,
+		SpawnArgs:     is.SpawnArgs,
 		Graceful:      is.Graceful,
 		Template:      is.Template,
 		Variables:     is.Variables,
@@ -326,6 +328,7 @@ type InlineStep struct {
 
 	// Spawn executor fields
 	ResumeSession string `toml:"resume_session,omitempty"`
+	SpawnArgs     string `toml:"spawn_args,omitempty"` // Extra CLI args to append to spawn command
 
 	// Kill executor fields
 	Graceful *bool `toml:"graceful,omitempty"`

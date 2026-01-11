@@ -498,6 +498,7 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Ste
 			step.Spawn.Agent = resolve(step.Spawn.Agent)
 			step.Spawn.Workdir = resolve(step.Spawn.Workdir)
 			step.Spawn.ResumeSession = resolve(step.Spawn.ResumeSession)
+			step.Spawn.SpawnArgs = resolve(step.Spawn.SpawnArgs)
 			for k, v := range step.Spawn.Env {
 				step.Spawn.Env[k] = resolve(v)
 			}

@@ -262,11 +262,21 @@ func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
 		env[k] = subV
 	}
 
+	// Substitute spawn_args
+	spawnArgs := ts.SpawnArgs
+	if spawnArgs != "" {
+		spawnArgs, err = b.VarContext.Substitute(spawnArgs)
+		if err != nil {
+			return fmt.Errorf("substitute spawn_args: %w", err)
+		}
+	}
+
 	step.Spawn = &types.SpawnConfig{
 		Agent:         agent,
 		Workdir:       workdir,
 		Env:           env,
 		ResumeSession: ts.ResumeSession,
+		SpawnArgs:     spawnArgs,
 	}
 	return nil
 }
