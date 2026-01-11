@@ -37,6 +37,8 @@ branches = { default = "", description = "Description of merged branches (for lo
 merge_message = { required = true, description = "Commit message for final merge" }
 target_branch = { required = true, description = "Target branch to merge into" }
 skip_merge_to_target = { default = "false", description = "If true, push for PR instead of merging" }
+spawn_args = { default = "", description = "Extra CLI args for claude" }
+merge_model = { default = "opus", description = "Model for merge agent (opus, sonnet, haiku)" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SPAWN: Start the merge agent
@@ -47,6 +49,7 @@ id = "spawn"
 executor = "spawn"
 agent = "merge-agent"
 workdir = "{{workdir}}"
+spawn_args = "--model {{merge_model}} {{spawn_args}}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHECK MODE: Branch on skip_merge_to_target

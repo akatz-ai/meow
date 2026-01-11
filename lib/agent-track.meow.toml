@@ -20,7 +20,7 @@
 #   1. Setting up Claude Code hooks for event emission
 #   2. Spawning the agent in the specified workdir
 #   3. Executing the task with optional spec file context
-#   4. Review step for verification
+#   4. Fresh eyes review (reread changes, catch bugs)
 #   5. Ensuring clean git state before completion
 #   6. Graceful agent shutdown
 #
@@ -41,6 +41,7 @@ track_name = { required = true, description = "Human-readable track name" }
 workdir = { required = true, description = "Working directory for the agent" }
 task_prompt = { required = true, description = "Task instructions for the agent" }
 spec_file = { default = "none", description = "Spec file to read first (or 'none' to skip)" }
+spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --model opus)" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SETUP: Configure event hooks in the worktree
@@ -61,6 +62,7 @@ id = "spawn"
 executor = "spawn"
 agent = "{{agent_name}}"
 workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
 needs = ["setup-hooks"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -86,7 +88,7 @@ template = ".work-no-spec"
 variables = { agent_name = "{{agent_name}}", task_prompt = "{{task_prompt}}" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# REVIEW: Verify the work
+# REVIEW: Fresh eyes code review
 # ═══════════════════════════════════════════════════════════════════════════════
 
 [[main.steps]]
@@ -95,22 +97,20 @@ executor = "agent"
 agent = "{{agent_name}}"
 needs = ["check-spec"]
 prompt = """
-# Review Your Work
+# Fresh Eyes Review
 
-Review what you've done:
+Take a step back and carefully reread the most recent code changes with fresh eyes.
 
-1. **Check build**: `go build ./...`
-2. **Run tests**: `go test -short ./...`
-3. **Check git status**: Make sure all changes are committed
+Look for any obvious bugs, logical errors, or confusing patterns.
 
-If there are issues:
-- Fix them
-- Commit the fixes
-- Run tests again
+Fix anything you spot without waiting for direction.
 
-If everything passes and all changes are committed: `meow done`
+When you're satisfied with the code quality, ensure:
+1. All changes are committed
+2. Tests pass: `go test -short ./...`
+3. Build passes: `go build ./...`
 
-If you get stuck or need help, explain the situation clearly.
+Then: `meow done`
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════

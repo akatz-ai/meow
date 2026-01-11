@@ -198,13 +198,14 @@ description = "Integration agent that merges all task branches"
 
 [integration.variables]
 spawn_args = { default = "", description = "Extra CLI args for claude" }
+merge_model = { default = "opus", description = "Model for integration agent (opus, sonnet, haiku)" }
 
 [[integration.steps]]
 id = "spawn"
 executor = "spawn"
 agent = "agent-integration"
 workdir = ".meow/worktrees/sprint-integration-track"
-spawn_args = "{{spawn_args}}"
+spawn_args = "--model {{merge_model}} {{spawn_args}}"
 
 [[integration.steps]]
 id = "work"
@@ -328,6 +329,7 @@ task = { required = true, description = "Task object with name, prompt, workdir,
 i = { required = true, description = "Task index for agent naming" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first (use 'none' to skip)" }
 spawn_args = { default = "", description = "Extra CLI args for claude" }
+impl_model = { default = "opus", description = "Model for implementation agents (opus, sonnet, haiku)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor" }
 max_nudges = { default = "10", description = "Max nudges before force-completing" }
 enable_context_monitor = { default = "true", description = "Enable context usage auto-compact" }
@@ -352,7 +354,7 @@ If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
 """
 # Only include spec_file if it's not "none"
 spec_file = "{{spec_file}}"
-spawn_args = "{{spawn_args}}"
+spawn_args = "--model {{impl_model}} {{spawn_args}}"
 enable_rw = "{{enable_rw}}"
 max_nudges = "{{max_nudges}}"
 enable_context_monitor = "{{enable_context_monitor}}"

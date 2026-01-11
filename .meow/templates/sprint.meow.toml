@@ -26,6 +26,12 @@
 #     --var skip_merge_to_target=true \
 #     --var parallel=false
 #
+#   # With model selection (defaults: impl_model=opus, merge_model=opus):
+#   meow run sprint \
+#     --var tasks=tasks.json \
+#     --var impl_model=sonnet \
+#     --var merge_model=opus
+#
 # TASK FORMAT:
 #
 #   Each task in the array must have:
@@ -52,6 +58,8 @@ target_branch = { default = "main", description = "Target branch for final merge
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
 spawn_args = { default = "", description = "Extra CLI args for spawned agents (e.g., --settings /path/to/hooks.json)" }
+impl_model = { default = "opus", description = "Model for implementation agents (opus, sonnet, haiku)" }
+merge_model = { default = "opus", description = "Model for integration/merge agents (opus, sonnet, haiku)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
 max_nudges = { default = "10", description = "Max RW nudges before force-completing agent" }
 enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (true/false)" }
@@ -108,6 +116,7 @@ needs = ["setup.done"]
 [main.steps.variables]
 spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
+impl_model = "{{impl_model}}"
 enable_rw = "{{enable_rw}}"
 max_nudges = "{{max_nudges}}"
 enable_context_monitor = "{{enable_context_monitor}}"
@@ -125,6 +134,7 @@ needs = ["agents"]
 
 [main.steps.variables]
 spawn_args = "{{spawn_args}}"
+merge_model = "{{merge_model}}"
 
 # ============================================================================
 # PHASE 4: Final Merge to Target Branch
@@ -143,6 +153,7 @@ merge_message = "Merge: Sprint implementation"
 target_branch = "{{target_branch}}"
 skip_merge_to_target = "{{skip_merge_to_target}}"
 spawn_args = "{{spawn_args}}"
+merge_model = "{{merge_model}}"
 
 # ============================================================================
 # PHASE 5: Done
