@@ -141,6 +141,7 @@ type Step struct {
 
 	// Foreach executor fields
 	Items         string `toml:"items,omitempty"`          // JSON array expression (may contain variable refs)
+	ItemsFile     string `toml:"items_file,omitempty"`     // Path to JSON file (alternative to items)
 	ItemVar       string `toml:"item_var,omitempty"`       // Variable name for current item
 	IndexVar      string `toml:"index_var,omitempty"`      // Variable name for index (optional)
 	Parallel      *bool  `toml:"parallel,omitempty"`       // Run iterations in parallel (default true)
@@ -340,6 +341,7 @@ type InlineStep struct {
 
 	// Foreach executor fields
 	Items         string `toml:"items,omitempty"`
+	ItemsFile     string `toml:"items_file,omitempty"`
 	ItemVar       string `toml:"item_var,omitempty"`
 	IndexVar      string `toml:"index_var,omitempty"`
 	Parallel      *bool  `toml:"parallel,omitempty"`

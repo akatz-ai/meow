@@ -70,14 +70,16 @@ spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agen
 cleanup_on_success = """
 echo "Cleaning up sprint worktrees..."
 
-# Parse task names and remove each worktree
-TASKS='{{tasks}}'
-for name in $(echo "$TASKS" | jq -r '.[].name' 2>/dev/null || echo ""); do
+# Parse task names from enriched file and remove each worktree
+for name in $(jq -r '.[].name' .meow/worktrees/.enriched-tasks.json 2>/dev/null || echo ""); do
   git worktree remove ".meow/worktrees/${name}-track" --force 2>/dev/null || rm -rf ".meow/worktrees/${name}-track"
 done
 
 # Remove integration worktree
 git worktree remove .meow/worktrees/sprint-integration-track --force 2>/dev/null || rm -rf .meow/worktrees/sprint-integration-track
+
+# Clean up temp files
+rm -f .meow/worktrees/.enriched-tasks.json .meow/worktrees/.tasks.json .meow/worktrees/.track-dirs .meow/worktrees/.integration-path
 
 echo "Cleanup complete"
 """
@@ -99,9 +101,13 @@ command = """
 set -e
 mkdir -p .meow/worktrees
 
-# Parse the tasks JSON array
-TASKS='{{tasks}}'
-TASK_COUNT=$(echo "$TASKS" | jq 'length')
+# Write tasks to temp file to avoid shell quoting issues with embedded newlines
+cat > .meow/worktrees/.tasks.json << 'TASKS_EOF'
+{{tasks}}
+TASKS_EOF
+
+# Parse the tasks JSON array from file
+TASK_COUNT=$(jq 'length' .meow/worktrees/.tasks.json)
 
 if [ "$TASK_COUNT" -eq 0 ]; then
   echo "ERROR: No tasks provided" >&2
@@ -115,11 +121,9 @@ ENRICHED='[]'
 TRACK_DIRS=''
 
 for i in $(seq 0 $((TASK_COUNT - 1))); do
-  # Extract task fields
-  TASK=$(echo "$TASKS" | jq -c ".[$i]")
-  NAME=$(echo "$TASK" | jq -r '.name')
-  PROMPT=$(echo "$TASK" | jq -r '.prompt')
-  BEADS=$(echo "$TASK" | jq -r '.beads // ""')
+  # Extract task fields from file (avoid extracting prompt to shell variable - newlines break things)
+  NAME=$(jq -r ".[$i].name" .meow/worktrees/.tasks.json)
+  BEADS=$(jq -r ".[$i].beads // empty" .meow/worktrees/.tasks.json)
 
   # Validate name
   if [ -z "$NAME" ] || [ "$NAME" = "null" ]; then
@@ -141,17 +145,19 @@ for i in $(seq 0 $((TASK_COUNT - 1))); do
   git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
   echo "$BRANCH" > "$WORKTREE/.meow-branch"
 
-  # Add to enriched array
-  ENRICHED=$(echo "$ENRICHED" | jq -c \
+  # Add to enriched array - read prompt directly from file to avoid shell escaping issues
+  # The prompt never goes through a shell variable, staying safely in jq's domain
+  # Note: use printf|jq instead of jq<<<VAR because sh doesn't support here-strings
+  ENRICHED=$(printf '%s' "$ENRICHED" | jq -c \
     --arg name "$NAME" \
-    --arg prompt "$PROMPT" \
     --arg beads "$BEADS" \
     --arg workdir "$WORKTREE" \
     --arg branch "$BRANCH" \
     --argjson index "$i" \
+    --slurpfile tasks .meow/worktrees/.tasks.json \
     '. + [{
       "name": $name,
-      "prompt": $prompt,
+      "prompt": $tasks[0][$index].prompt,
       "beads": $beads,
       "workdir": $workdir,
       "branch": $branch,
@@ -181,31 +187,36 @@ echo "$INT_BRANCH" > "$INT_WORKTREE/.meow-branch"
 
 echo "Setup complete: $TASK_COUNT task worktrees + integration" >&2
 
-# Output the enriched tasks array (this is captured as shell output)
-echo "$ENRICHED"
-"""
-
-[main.steps.shell_outputs]
-enriched_tasks = { source = "stdout" }
-
-# Store additional outputs in files for easy access
-[[main.steps]]
-id = "setup-metadata"
-executor = "shell"
-description = "Write metadata files for downstream steps"
-needs = ["setup"]
-command = """
-set -e
+# Write enriched tasks to file for downstream steps
+printf '%s' "$ENRICHED" > .meow/worktrees/.enriched-tasks.json
 
 # Write track dirs list
-TASKS='{{setup.outputs.enriched_tasks}}'
-TRACK_DIRS=$(echo "$TASKS" | jq -r '[.[].name] | map(. + "-track") | join(", ")')
+TRACK_DIRS=$(printf '%s' "$ENRICHED" | jq -r '[.[].name] | map(. + "-track") | join(", ")')
 echo "$TRACK_DIRS" > .meow/worktrees/.track-dirs
 
 # Write integration worktree path
 echo ".meow/worktrees/sprint-integration-track" > .meow/worktrees/.integration-path
 
-echo "Metadata written"
+echo "Setup complete"
+"""
+
+# Metadata validation step
+[[main.steps]]
+id = "setup-metadata"
+executor = "shell"
+description = "Validate metadata files were created"
+needs = ["setup"]
+command = """
+set -e
+
+# Verify files exist
+test -f .meow/worktrees/.enriched-tasks.json || { echo "ERROR: .enriched-tasks.json not found" >&2; exit 1; }
+test -f .meow/worktrees/.track-dirs || { echo "ERROR: .track-dirs not found" >&2; exit 1; }
+test -f .meow/worktrees/.integration-path || { echo "ERROR: .integration-path not found" >&2; exit 1; }
+
+echo "Metadata validated:"
+echo "  - Enriched tasks: $(jq 'length' .meow/worktrees/.enriched-tasks.json) tasks"
+echo "  - Track dirs: $(cat .meow/worktrees/.track-dirs)"
 """
 
 # ============================================================================
@@ -220,7 +231,7 @@ echo "Metadata written"
 [[main.steps]]
 id = "agents"
 executor = "foreach"
-items = "{{setup.outputs.enriched_tasks}}"
+items_file = ".meow/worktrees/.enriched-tasks.json"
 item_var = "task"
 index_var = "i"
 template = ".agent-track-wrapper"
@@ -283,8 +294,7 @@ echo "  SPRINT COMPLETE"
 echo "=============================================="
 echo ""
 echo "Tasks completed:"
-TASKS='{{setup.outputs.enriched_tasks}}'
-echo "$TASKS" | jq -r '.[] | "  - \(.name): \(.branch)"'
+jq -r '.[] | "  - \\(.name): \\(.branch)"' .meow/worktrees/.enriched-tasks.json
 echo ""
 echo "Target branch: {{target_branch}}"
 echo "Skip merge mode: {{skip_merge_to_target}}"

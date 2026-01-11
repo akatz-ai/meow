@@ -703,8 +703,21 @@ max_concurrent: 5                     # Optional: limit concurrent executions
 join: true                            # Wait for all iterations (default: true)
 ```
 
+**Alternative: Read from File**
+
+When a previous step writes JSON to a file (common when JSON contains multi-line text), use `items_file`:
+
+```yaml
+id: "parallel-workers"
+executor: "foreach"
+items_file: ".meow/worktrees/.tasks.json"  # Read JSON array from file
+item_var: "task"
+template: ".worker-task"
+```
+
 **Fields:**
-- `items` (required): JSON array expression to iterate over
+- `items` (required*): JSON array expression to iterate over
+- `items_file` (required*): Path to JSON file containing array to iterate over
 - `item_var` (required): Variable name that holds the current item in each iteration
 - `index_var` (optional): Variable name for the 0-based iteration index
 - `template` (required): Template reference to expand for each item
@@ -712,6 +725,8 @@ join: true                            # Wait for all iterations (default: true)
 - `parallel` (optional): Run iterations in parallel (default: `true`)
 - `max_concurrent` (optional): Maximum concurrent iterations (only applies when `parallel: true`)
 - `join` (optional): Wait for all iterations to complete before marking foreach as done (default: `true`)
+
+*Exactly one of `items` or `items_file` must be specified. Use `items_file` when the JSON array is written to a file by a previous step—this avoids escaping issues that can occur when passing JSON with embedded newlines through variable substitution.
 
 **Child Step Naming:**
 Child steps are prefixed with the foreach step ID and the iteration index:

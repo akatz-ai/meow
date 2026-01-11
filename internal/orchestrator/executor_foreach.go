@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -84,8 +85,11 @@ func ExecuteForeach(
 	cfg := step.Foreach
 
 	// Validate required fields
-	if cfg.Items == "" {
-		return nil, &types.StepError{Message: "foreach step missing items field"}
+	if cfg.Items == "" && cfg.ItemsFile == "" {
+		return nil, &types.StepError{Message: "foreach step requires either items or items_file"}
+	}
+	if cfg.Items != "" && cfg.ItemsFile != "" {
+		return nil, &types.StepError{Message: "foreach step cannot have both items and items_file"}
 	}
 	if cfg.ItemVar == "" {
 		return nil, &types.StepError{Message: "foreach step missing item_var field"}
@@ -106,11 +110,24 @@ func ExecuteForeach(
 		}
 	}
 
-	// Evaluate items expression to get the array
-	items, err := evaluateItemsExpression(cfg.Items, variables)
-	if err != nil {
-		return nil, &types.StepError{
-			Message: fmt.Sprintf("failed to evaluate items expression: %v", err),
+	// Get items either from expression or file
+	var items []any
+	var err error
+	if cfg.ItemsFile != "" {
+		// Read items from file - bypasses variable substitution escaping issues
+		items, err = readItemsFromFile(cfg.ItemsFile)
+		if err != nil {
+			return nil, &types.StepError{
+				Message: fmt.Sprintf("failed to read items from file %s: %v", cfg.ItemsFile, err),
+			}
+		}
+	} else {
+		// Evaluate items expression
+		items, err = evaluateItemsExpression(cfg.Items, variables)
+		if err != nil {
+			return nil, &types.StepError{
+				Message: fmt.Sprintf("failed to evaluate items expression: %v", err),
+			}
 		}
 	}
 
@@ -230,6 +247,23 @@ func ExecuteForeach(
 	return result, nil
 }
 
+// readItemsFromFile reads a JSON array from a file.
+// This bypasses variable substitution entirely, avoiding escaping issues
+// when JSON contains embedded newlines or special characters.
+func readItemsFromFile(path string) ([]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading file: %w", err)
+	}
+
+	var items []any
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, fmt.Errorf("parsing JSON array: %w", err)
+	}
+
+	return items, nil
+}
+
 // evaluateItemsExpression parses the items expression and returns the array.
 // The expression can be:
 // - A JSON array literal: ["a", "b", "c"]
@@ -342,6 +376,7 @@ func cloneForeachConfig(src *types.ForeachConfig) *types.ForeachConfig {
 
 	dst := &types.ForeachConfig{
 		Items:         src.Items,
+		ItemsFile:     src.ItemsFile,
 		ItemVar:       src.ItemVar,
 		IndexVar:      src.IndexVar,
 		Template:      src.Template,

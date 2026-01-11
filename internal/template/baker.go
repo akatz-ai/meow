@@ -63,10 +63,12 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 		}
 	}
 
-	// Validate required variables
-	for name, v := range workflow.Variables {
-		if v.Required && b.VarContext.Get(name) == "" {
-			return nil, fmt.Errorf("required variable %q not provided", name)
+	// Validate required variables (skip if deferring undefined variables, e.g., in foreach)
+	if !b.VarContext.DeferUndefinedVariables {
+		for name, v := range workflow.Variables {
+			if v.Required && b.VarContext.Get(name) == "" {
+				return nil, fmt.Errorf("required variable %q not provided", name)
+			}
 		}
 	}
 
@@ -314,12 +316,18 @@ func (b *Baker) setExpandConfig(step *types.Step, ts *Step) error {
 
 // setForeachConfig sets ForeachConfig for foreach executor steps.
 func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
+	// Handle items (expression) - apply variable substitution
 	items := ts.Items
 	var err error
-	items, err = b.VarContext.Substitute(items)
-	if err != nil {
-		return fmt.Errorf("substitute items: %w", err)
+	if items != "" {
+		items, err = b.VarContext.Substitute(items)
+		if err != nil {
+			return fmt.Errorf("substitute items: %w", err)
+		}
 	}
+
+	// Handle items_file - no variable substitution (it's a file path)
+	itemsFile := ts.ItemsFile
 
 	itemVar := ts.ItemVar
 	indexVar := ts.IndexVar
@@ -361,6 +369,7 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 
 	step.Foreach = &types.ForeachConfig{
 		Items:         items,
+		ItemsFile:     itemsFile,
 		ItemVar:       itemVar,
 		IndexVar:      indexVar,
 		Template:      template,

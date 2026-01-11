@@ -349,6 +349,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	if v, ok := data["items"].(string); ok {
 		s.Items = v
 	}
+	if v, ok := data["items_file"].(string); ok {
+		s.ItemsFile = v
+	}
 	if v, ok := data["item_var"].(string); ok {
 		s.ItemVar = v
 	}
@@ -665,6 +668,9 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	// Parse foreach executor fields
 	if v, ok := data["items"].(string); ok {
 		step.Items = v
+	}
+	if v, ok := data["items_file"].(string); ok {
+		step.ItemsFile = v
 	}
 	if v, ok := data["item_var"].(string); ok {
 		step.ItemVar = v

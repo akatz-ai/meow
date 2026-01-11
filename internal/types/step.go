@@ -152,7 +152,8 @@ type BranchConfig struct {
 // ForeachConfig for executor: foreach
 // Dynamically expands a template for each item in a list.
 type ForeachConfig struct {
-	Items         string            `yaml:"items" toml:"items"`                                       // JSON array expression to iterate over
+	Items         string            `yaml:"items,omitempty" toml:"items,omitempty"`                   // JSON array expression to iterate over (mutually exclusive with ItemsFile)
+	ItemsFile     string            `yaml:"items_file,omitempty" toml:"items_file,omitempty"`         // Path to JSON file containing array (mutually exclusive with Items)
 	ItemVar       string            `yaml:"item_var" toml:"item_var"`                                 // Variable name for current item
 	IndexVar      string            `yaml:"index_var,omitempty" toml:"index_var,omitempty"`           // Optional variable name for index
 	Template      string            `yaml:"template" toml:"template"`                                 // Template reference to expand
@@ -212,8 +213,14 @@ type AgentConfig struct {
 
 // Validate checks the foreach config has required fields.
 func (f *ForeachConfig) Validate() error {
-	if f.Items == "" {
-		return fmt.Errorf("foreach items is required")
+	// Exactly one of Items or ItemsFile must be set
+	hasItems := f.Items != ""
+	hasItemsFile := f.ItemsFile != ""
+	if !hasItems && !hasItemsFile {
+		return fmt.Errorf("foreach requires either items or items_file")
+	}
+	if hasItems && hasItemsFile {
+		return fmt.Errorf("foreach cannot have both items and items_file (mutually exclusive)")
 	}
 	if f.ItemVar == "" {
 		return fmt.Errorf("foreach item_var is required")
