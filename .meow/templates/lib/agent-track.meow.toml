@@ -3,9 +3,11 @@
 # ============================================================================
 #
 # Complete agent lifecycle: spawn → work → review → verify-clean → kill
+# With Ralph Wiggum persistence monitor running in parallel.
 #
 # This is the battle-tested pattern extracted from dual/quad agent workflows.
 # Each agent works in isolation, self-reviews, ensures clean git state, then exits.
+# The RW monitor ensures agents don't get stuck by re-nudging on unexpected stops.
 #
 # Variables:
 #   agent_name   (required) - Unique agent identifier
@@ -13,6 +15,8 @@
 #   workdir      (required) - Working directory (typically a worktree path)
 #   task_prompt  (required) - The main task prompt for the agent
 #   spec_file    (default: "docs/MVP-SPEC-v2.md") - Spec file to read first
+#   spawn_args   (default: "") - Extra CLI args for claude
+#   max_nudges   (default: "10") - RW safety limit before force-completing
 #
 # Usage:
 #   [[main.steps]]
@@ -39,6 +43,7 @@ workdir = { required = true, description = "Working directory path" }
 task_prompt = { required = true, description = "Main task prompt" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first" }
 spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --settings /path/to/hooks.json)" }
+max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
 
 # ============================================================================
 # Step 1: Spawn Agent
@@ -52,7 +57,35 @@ workdir = "{{workdir}}"
 spawn_args = "{{spawn_args}}"
 
 # ============================================================================
-# Step 2: Main Work
+# Step 2: Ralph Wiggum Persistence Monitor (runs in parallel)
+# ============================================================================
+#
+# Monitors for unexpected agent stops and re-injects nudge prompts.
+# Runs in parallel with work/review/verify-clean steps.
+# Self-terminates when verify-clean completes.
+
+[[main.steps]]
+id = "persistence"
+executor = "expand"
+template = "lib/agent-persistence#monitor"
+needs = ["spawn"]
+
+[main.steps.variables]
+agent = "{{agent_name}}"
+check_step = "verify-clean"
+max_loops = "{{max_nudges}}"
+nudge_prompt = """
+You stopped unexpectedly. Continue with your assigned task for {{track_name}}.
+
+Remember:
+- Complete your current work
+- Run tests to verify
+- Commit your changes
+- When fully done, run: `meow done`
+"""
+
+# ============================================================================
+# Step 3: Main Work
 # ============================================================================
 
 [[main.steps]]
@@ -96,7 +129,7 @@ meow done
 """
 
 # ============================================================================
-# Step 3: Self-Review
+# Step 4: Self-Review
 # ============================================================================
 
 [[main.steps]]
@@ -128,7 +161,7 @@ meow done
 """
 
 # ============================================================================
-# Step 4: Verify Clean Git State
+# Step 5: Verify Clean Git State
 # ============================================================================
 
 [[main.steps]]
@@ -151,7 +184,7 @@ When clean, run: `meow done`
 """
 
 # ============================================================================
-# Step 5: Kill Agent
+# Step 6: Kill Agent
 # ============================================================================
 
 [[main.steps]]
@@ -162,7 +195,7 @@ needs = ["verify-clean"]
 graceful = true
 
 # ============================================================================
-# Step 6: Done Marker (for downstream dependencies)
+# Step 7: Done Marker (for downstream dependencies)
 # ============================================================================
 
 [[main.steps]]
