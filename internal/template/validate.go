@@ -169,14 +169,27 @@ func validateSteps(t *Template, name string, result *ValidationResult) {
 
 func validateDependencies(t *Template, name string, result *ValidationResult) {
 	stepIDs := make(map[string]bool)
+	expandSteps := make(map[string]bool)
 	for _, step := range t.Steps {
 		stepIDs[step.ID] = true
+		if step.Executor == "expand" {
+			expandSteps[step.ID] = true
+		}
 	}
 
 	// Check that all needs references exist
+	// Allow references to children of expand steps (e.g., "expand-step.done")
 	for _, step := range t.Steps {
 		for _, need := range step.Needs {
 			if !stepIDs[need] {
+				// Check if this references a child of an expand step
+				if dotIdx := strings.Index(need, "."); dotIdx > 0 {
+					prefix := need[:dotIdx]
+					if expandSteps[prefix] {
+						// This references a child of an expand step - allowed
+						continue
+					}
+				}
 				suggest := findSimilar(need, stepIDs)
 				result.Add(name, step.ID, "needs",
 					fmt.Sprintf("references unknown step %q", need),

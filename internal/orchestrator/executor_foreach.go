@@ -346,10 +346,23 @@ func prefixForeachNeeds(
 
 	hasInternalDep := false
 	for _, need := range needs {
+		// Check if need is a direct template step ID
 		if templateStepIDs[need] {
 			// Internal dependency - prefix with iteration
 			result = append(result, iterationPrefix+"."+need)
 			hasInternalDep = true
+		} else if firstDot := strings.Index(need, "."); firstDot > 0 {
+			// Check if it's a dotted reference where the first segment is a template step
+			// e.g., "track.done" where "track" is a template step
+			firstSegment := need[:firstDot]
+			if templateStepIDs[firstSegment] {
+				// Internal dependency with sub-reference - prefix with iteration
+				result = append(result, iterationPrefix+"."+need)
+				hasInternalDep = true
+			} else {
+				// External dependency - keep as-is
+				result = append(result, need)
+			}
 		} else {
 			// External dependency - keep as-is
 			result = append(result, need)

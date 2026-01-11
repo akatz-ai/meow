@@ -936,8 +936,9 @@ func validateModuleWorkflow(m *Module, name string, w *Workflow, result *ModuleV
 		return
 	}
 
-	// Check for duplicate step IDs
+	// Check for duplicate step IDs and track expand steps
 	stepIDs := make(map[string]int)
+	expandSteps := make(map[string]bool)
 	for i, step := range w.Steps {
 		if step.ID == "" {
 			result.Add(name, fmt.Sprintf("steps[%d]", i), "id", "step id is required", "")
@@ -951,14 +952,28 @@ func validateModuleWorkflow(m *Module, name string, w *Workflow, result *ModuleV
 		}
 		stepIDs[step.ID] = i
 
+		// Track expand steps for dependency validation
+		if step.Executor == ExecutorExpand || step.Type == "expand" {
+			expandSteps[step.ID] = true
+		}
+
 		// Validate step type
 		validateModuleStepType(name, step, result)
 	}
 
 	// Validate dependencies
+	// Allow references to children of expand steps (e.g., "expand-step.done")
 	for _, step := range w.Steps {
 		for _, need := range step.Needs {
 			if _, exists := stepIDs[need]; !exists {
+				// Check if this references a child of an expand step
+				if dotIdx := strings.Index(need, "."); dotIdx > 0 {
+					prefix := need[:dotIdx]
+					if expandSteps[prefix] {
+						// This references a child of an expand step - allowed
+						continue
+					}
+				}
 				suggest := findSimilarInMap(need, stepIDs)
 				result.Add(name, step.ID, "needs",
 					fmt.Sprintf("references unknown step %q", need),

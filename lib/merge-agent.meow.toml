@@ -1,0 +1,215 @@
+# Merge Agent Library Template
+#
+# Reusable template for merging a work branch to a target branch.
+# Handles the final phase of a sprint or feature workflow.
+#
+# Usage:
+#   [[main.steps]]
+#   id = "final-merge"
+#   executor = "expand"
+#   template = "lib/merge-agent"
+#   variables = {
+#     workdir = ".meow/worktrees/integration-track",
+#     branches = "feature tasks",
+#     merge_message = "Merge: Feature implementation",
+#     target_branch = "main",
+#     skip_merge_to_target = "false"
+#   }
+#
+# Modes:
+#   - skip_merge_to_target = "false": Merge integration to target_branch, push
+#   - skip_merge_to_target = "true": Push integration branch for PR creation
+#
+# Variables:
+#   workdir (required): Working directory containing the integration branch
+#   branches (default=""): Description of what branches were merged (for logging)
+#   merge_message (required): Commit message for the final merge
+#   target_branch (required): Target branch to merge into (e.g., "main")
+#   skip_merge_to_target (default="false"): If "true", push branch for PR instead
+
+[main]
+name = "merge-agent"
+description = "Merge integration branch to target or push for PR"
+
+[main.variables]
+workdir = { required = true, description = "Working directory with integration branch" }
+branches = { default = "", description = "Description of merged branches (for logging)" }
+merge_message = { required = true, description = "Commit message for final merge" }
+target_branch = { required = true, description = "Target branch to merge into" }
+skip_merge_to_target = { default = "false", description = "If true, push for PR instead of merging" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPAWN: Start the merge agent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "merge-agent"
+workdir = "{{workdir}}"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHECK MODE: Branch on skip_merge_to_target
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "check-mode"
+executor = "branch"
+condition = "test '{{skip_merge_to_target}}' = 'true'"
+needs = ["spawn"]
+
+# Skip merge mode - push branch for PR
+[main.steps.on_true]
+template = ".push-for-pr"
+variables = { target_branch = "{{target_branch}}", merge_message = "{{merge_message}}" }
+
+# Normal mode - merge to target
+[main.steps.on_false]
+template = ".merge-to-target"
+variables = { target_branch = "{{target_branch}}", merge_message = "{{merge_message}}" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KILL: Gracefully terminate the agent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "merge-agent"
+graceful = true
+needs = ["check-mode"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DONE: Mark completion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Merge agent completed - target: {{target_branch}}'"
+needs = ["kill"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: Merge to target branch
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[merge-to-target]
+name = "merge-to-target"
+description = "Internal: Merge integration to target branch"
+internal = true
+
+[merge-to-target.variables]
+target_branch = { required = true }
+merge_message = { required = true }
+
+[[merge-to-target.steps]]
+id = "merge"
+executor = "agent"
+agent = "merge-agent"
+prompt = """
+# Final Merge to {{target_branch}}
+
+Your task is to merge this integration branch to {{target_branch}}.
+
+## Steps
+
+1. **Fetch latest from remote**:
+   ```bash
+   git fetch origin {{target_branch}}
+   ```
+
+2. **Check for conflicts**:
+   ```bash
+   git merge-base --is-ancestor origin/{{target_branch}} HEAD || echo "Target has diverged"
+   ```
+
+3. **If target has diverged, rebase or merge**:
+   ```bash
+   # Option A: Rebase (cleaner history)
+   git rebase origin/{{target_branch}}
+
+   # Option B: Merge (if rebase fails)
+   git merge origin/{{target_branch}} --no-edit
+   ```
+
+4. **Run final verification**:
+   ```bash
+   go build ./...
+   go test -short ./...
+   ```
+
+5. **Push to remote**:
+   ```bash
+   git push origin HEAD:{{target_branch}}
+   ```
+
+If the push is rejected (e.g., branch protection), explain what happened.
+
+## Commit Message
+
+Use this message for any merge commits:
+{{merge_message}}
+
+When done: `meow done`
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: Push for PR (skip merge)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[push-for-pr]
+name = "push-for-pr"
+description = "Internal: Push branch for PR creation"
+internal = true
+
+[push-for-pr.variables]
+target_branch = { required = true }
+merge_message = { required = true }
+
+[[push-for-pr.steps]]
+id = "push"
+executor = "agent"
+agent = "merge-agent"
+prompt = """
+# Push Branch for Pull Request
+
+This workflow is configured for PR mode (skip_merge_to_target=true).
+Your task is to push this branch for PR creation.
+
+## Steps
+
+1. **Get the current branch name**:
+   ```bash
+   BRANCH=$(cat .meow-branch 2>/dev/null || git branch --show-current)
+   echo "Current branch: $BRANCH"
+   ```
+
+2. **Run final verification**:
+   ```bash
+   go build ./...
+   go test -short ./...
+   ```
+
+3. **Push to remote**:
+   ```bash
+   git push -u origin "$BRANCH"
+   ```
+
+4. **Create PR using gh CLI** (if available):
+   ```bash
+   gh pr create \
+     --base {{target_branch}} \
+     --title "{{merge_message}}" \
+     --body "Automated PR from MEOW workflow"
+   ```
+
+   If gh is not available, print instructions for manual PR creation.
+
+## Target Branch
+
+The PR should target: {{target_branch}}
+
+When done: `meow done`
+"""

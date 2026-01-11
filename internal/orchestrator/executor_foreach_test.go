@@ -315,7 +315,7 @@ func TestExecuteForeach_MissingRequiredFields(t *testing.T) {
 		{
 			name:    "missing items",
 			config:  &types.ForeachConfig{ItemVar: "x", Template: ".t"},
-			wantErr: "missing items",
+			wantErr: "requires either items or items_file",
 		},
 		{
 			name:    "missing item_var",

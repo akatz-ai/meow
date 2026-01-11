@@ -1,6 +1,7 @@
 package template
 
 import (
+	"os"
 	"testing"
 )
 
@@ -16,6 +17,11 @@ func TestParseFile_RealTemplates(t *testing.T) {
 
 	for _, path := range templates {
 		t.Run(path, func(t *testing.T) {
+			// Skip if file doesn't exist (example files may not be present)
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Skipf("Example template not found: %s", path)
+			}
+
 			tmpl, err := ParseFile(path)
 			if err != nil {
 				t.Fatalf("ParseFile failed: %v", err)

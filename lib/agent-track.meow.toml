@@ -1,0 +1,230 @@
+# Agent Track Library Template
+#
+# Reusable template for running a single agent through a complete work cycle:
+#   setup-hooks → spawn → work → review → verify → kill → done
+#
+# Usage:
+#   [[main.steps]]
+#   id = "task-track"
+#   executor = "expand"
+#   template = "lib/agent-track"
+#   variables = {
+#     agent_name = "worker-1",
+#     track_name = "feature-implementation",
+#     workdir = ".meow/worktrees/feature-track",
+#     task_prompt = "Implement the feature described in...",
+#     spec_file = "docs/SPEC.md"  # Optional, use "none" to skip
+#   }
+#
+# The template handles:
+#   1. Setting up Claude Code hooks for event emission
+#   2. Spawning the agent in the specified workdir
+#   3. Executing the task with optional spec file context
+#   4. Review step for verification
+#   5. Ensuring clean git state before completion
+#   6. Graceful agent shutdown
+#
+# Variables:
+#   agent_name (required): Unique identifier for this agent instance
+#   track_name (required): Human-readable name for logging/display
+#   workdir (required): Working directory path for the agent
+#   task_prompt (required): The task instructions for the agent
+#   spec_file (default="none"): Path to spec file to read first, or "none" to skip
+
+[main]
+name = "agent-track"
+description = "Complete agent work cycle: spawn → work → review → verify → kill"
+
+[main.variables]
+agent_name = { required = true, description = "Unique agent identifier" }
+track_name = { required = true, description = "Human-readable track name" }
+workdir = { required = true, description = "Working directory for the agent" }
+task_prompt = { required = true, description = "Task instructions for the agent" }
+spec_file = { default = "none", description = "Spec file to read first (or 'none' to skip)" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP: Configure event hooks in the worktree
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "setup-hooks"
+executor = "expand"
+template = "lib/claude-events#setup-stop-hook"
+variables = { worktree = "{{workdir}}" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPAWN: Start the agent session
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent_name}}"
+workdir = "{{workdir}}"
+needs = ["setup-hooks"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORK: Execute the main task
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Uses branch to conditionally include spec file reading based on spec_file value.
+
+[[main.steps]]
+id = "check-spec"
+executor = "branch"
+condition = "test '{{spec_file}}' != 'none' && test -f '{{spec_file}}'"
+needs = ["spawn"]
+
+# Spec file exists - include it in the prompt
+[main.steps.on_true]
+template = ".work-with-spec"
+variables = { agent_name = "{{agent_name}}", task_prompt = "{{task_prompt}}", spec_file = "{{spec_file}}" }
+
+# No spec file - work without it
+[main.steps.on_false]
+template = ".work-no-spec"
+variables = { agent_name = "{{agent_name}}", task_prompt = "{{task_prompt}}" }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REVIEW: Verify the work
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "review"
+executor = "agent"
+agent = "{{agent_name}}"
+needs = ["check-spec"]
+prompt = """
+# Review Your Work
+
+Review what you've done:
+
+1. **Check build**: `go build ./...`
+2. **Run tests**: `go test -short ./...`
+3. **Check git status**: Make sure all changes are committed
+
+If there are issues:
+- Fix them
+- Commit the fixes
+- Run tests again
+
+If everything passes and all changes are committed: `meow done`
+
+If you get stuck or need help, explain the situation clearly.
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VERIFY: Ensure clean git state
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "verify-clean"
+executor = "shell"
+needs = ["review"]
+command = """
+cd "{{workdir}}"
+
+# Check for uncommitted changes
+if [ -n "$(git status --porcelain)" ]; then
+    echo "ERROR: Uncommitted changes in {{track_name}} track!" >&2
+    git status >&2
+    exit 1
+fi
+
+echo "Track {{track_name}} is clean - all changes committed"
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KILL: Gracefully terminate the agent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "{{agent_name}}"
+graceful = true
+needs = ["verify-clean"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DONE: Mark track completion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Agent track {{track_name}} completed successfully'"
+needs = ["kill"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERNAL: Work step variants
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[work-with-spec]
+name = "work-with-spec"
+description = "Internal: Work step that includes spec file reading"
+internal = true
+
+[work-with-spec.variables]
+agent_name = { required = true }
+task_prompt = { required = true }
+spec_file = { required = true }
+
+[[work-with-spec.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
+prompt = """
+# Your Task
+
+Before starting, read the project specification for context:
+
+```
+@{{spec_file}}
+```
+
+---
+
+{{task_prompt}}
+
+---
+
+## Important Guidelines
+
+1. **Work incrementally**: Commit your changes as you make them
+2. **Run tests**: After making changes, run `go test -short ./...`
+3. **Verify build**: Run `go build ./...` to catch compile errors
+4. **When done**: Run `meow done` to signal completion
+
+If you encounter blockers or need clarification, describe the situation clearly.
+"""
+
+[work-no-spec]
+name = "work-no-spec"
+description = "Internal: Work step without spec file"
+internal = true
+
+[work-no-spec.variables]
+agent_name = { required = true }
+task_prompt = { required = true }
+
+[[work-no-spec.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
+prompt = """
+# Your Task
+
+{{task_prompt}}
+
+---
+
+## Important Guidelines
+
+1. **Work incrementally**: Commit your changes as you make them
+2. **Run tests**: After making changes, run `go test -short ./...`
+3. **Verify build**: Run `go build ./...` to catch compile errors
+4. **When done**: Run `meow done` to signal completion
+
+If you encounter blockers or need clarification, describe the situation clearly.
+"""
