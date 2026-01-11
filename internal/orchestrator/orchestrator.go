@@ -522,8 +522,6 @@ func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
 	switch m := msg.(type) {
 	case *ipc.StepDoneMessage:
 		return o.HandleStepDone(ctx, m)
-	case *ipc.GetPromptMessage:
-		return o.handleGetPrompt(ctx, m)
 	case *ipc.ApprovalMessage:
 		return o.HandleApproval(ctx, m)
 	default:
@@ -603,33 +601,6 @@ func (o *Orchestrator) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 
 	o.logger.Info("step completed", "step", step.ID, "workflow", wf.ID)
 	return o.store.Save(ctx, wf)
-}
-
-// handleGetPrompt processes a meow prime request (stop hook).
-func (o *Orchestrator) handleGetPrompt(ctx context.Context, msg *ipc.GetPromptMessage) error {
-	// Find workflows with work for this agent
-	workflows, err := o.store.GetByAgent(ctx, msg.Agent)
-	if err != nil {
-		return fmt.Errorf("getting workflows for agent %s: %w", msg.Agent, err)
-	}
-
-	for _, wf := range workflows {
-		// Check for running step (completing state)
-		step := wf.GetRunningStepForAgent(msg.Agent)
-		if step != nil && step.Status == types.StepStatusCompleting {
-			// Step is transitioning - return empty (stay idle)
-			return nil
-		}
-
-		// Check for next ready step
-		nextStep := wf.GetNextReadyStepForAgent(msg.Agent)
-		if nextStep != nil {
-			// There's work - orchestrator will inject prompt on next tick
-			return nil
-		}
-	}
-
-	return nil
 }
 
 // HandleApproval processes a gate approval/rejection.
@@ -1090,9 +1061,7 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 				} else {
 					// Agent still alive - keep running
 					// Don't immediately re-inject prompt!
-					// Wait for either:
-					// - Agent to call meow done (normal completion)
-					// - Stop hook to fire (calls meow prime, gets current prompt)
+					// Wait for agent to call meow done (normal completion)
 					// This avoids injecting duplicate prompts
 					o.logger.Info("keeping step running with live agent",
 						"step", step.ID,

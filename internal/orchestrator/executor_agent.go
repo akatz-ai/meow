@@ -271,50 +271,6 @@ func validateFilePath(path, workdir string) string {
 	return ""
 }
 
-// GetPromptForStopHook returns the prompt for the stop hook based on step state.
-// This is called when Claude's stop hook fires to determine what to inject.
-//
-// Returns:
-// - Empty string: Agent should wait (interactive/fire_forget mode or step completing)
-// - Prompt string: Inject this prompt (autonomous mode, nudge agent to continue)
-func GetPromptForStopHook(step *types.Step) string {
-	if step == nil || step.Agent == nil {
-		return ""
-	}
-
-	cfg := step.Agent
-
-	switch step.Status {
-	case types.StepStatusCompleting:
-		// Transition in progress - don't interfere
-		return ""
-
-	case types.StepStatusRunning:
-		// Check mode
-		mode := AgentMode(cfg.Mode)
-		if mode == "" {
-			mode = AgentModeAutonomous // Default
-		}
-
-		if mode == AgentModeInteractive {
-			// Interactive mode - allow human conversation
-			return ""
-		}
-
-		if mode == AgentModeFireForget {
-			// Fire-forget step should already be done; if somehow running, don't re-inject
-			return ""
-		}
-
-		// Autonomous mode - re-inject prompt as nudge
-		return buildAgentPrompt(cfg)
-
-	default:
-		// Not running/completing - agent is idle or done
-		return ""
-	}
-}
-
 // ParseAgentMode converts a string to AgentMode.
 func ParseAgentMode(s string) AgentMode {
 	switch strings.ToLower(s) {

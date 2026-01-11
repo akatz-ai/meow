@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/ipc"
-	"github.com/meow-stack/meow-machine/internal/types"
 )
 
 // IPCHandler implements ipc.Handler for the orchestrator.
@@ -60,69 +59,6 @@ func (h *IPCHandler) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessag
 	return &ipc.AckMessage{
 		Type:    ipc.MsgAck,
 		Success: true,
-	}
-}
-
-// HandleGetPrompt returns the current prompt for an agent.
-func (h *IPCHandler) HandleGetPrompt(ctx context.Context, msg *ipc.GetPromptMessage) any {
-	h.logger.Debug("handling get_prompt", "agent", msg.Agent)
-
-	// Find workflows with work for this agent
-	workflows, err := h.store.GetByAgent(ctx, msg.Agent)
-	if err != nil {
-		h.logger.Error("failed to get workflows", "error", err)
-		return &ipc.PromptMessage{
-			Type:    ipc.MsgPrompt,
-			Content: "",
-		}
-	}
-
-	for _, wf := range workflows {
-		// Check for running step
-		step := wf.GetRunningStepForAgent(msg.Agent)
-		if step != nil {
-			// Check if step is completing
-			if step.Status == types.StepStatusCompleting {
-				// Step is transitioning - return empty
-				return &ipc.PromptMessage{
-					Type:    ipc.MsgPrompt,
-					Content: "",
-				}
-			}
-
-			// Check mode
-			if step.Agent != nil && step.Agent.Mode == "interactive" {
-				// Interactive mode - return empty to allow conversation
-				return &ipc.PromptMessage{
-					Type:    ipc.MsgPrompt,
-					Content: "",
-				}
-			}
-
-			// Autonomous mode - return prompt as nudge
-			prompt := GetPromptForStopHook(step)
-			return &ipc.PromptMessage{
-				Type:    ipc.MsgPrompt,
-				Content: prompt,
-			}
-		}
-
-		// Check for next ready step
-		nextStep := wf.GetNextReadyStepForAgent(msg.Agent)
-		if nextStep != nil {
-			// There's work pending - orchestrator will inject on next tick
-			// Return empty to avoid duplicate injection
-			return &ipc.PromptMessage{
-				Type:    ipc.MsgPrompt,
-				Content: "",
-			}
-		}
-	}
-
-	// No work - agent should idle
-	return &ipc.PromptMessage{
-		Type:    ipc.MsgPrompt,
-		Content: "",
 	}
 }
 

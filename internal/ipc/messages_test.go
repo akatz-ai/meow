@@ -12,7 +12,6 @@ func TestMessageType_Valid(t *testing.T) {
 		want bool
 	}{
 		{MsgStepDone, true},
-		{MsgGetPrompt, true},
 		{MsgGetSessionID, true},
 		{MsgApproval, true},
 		{MsgEvent, true},
@@ -20,7 +19,6 @@ func TestMessageType_Valid(t *testing.T) {
 		{MsgGetStepStatus, true},
 		{MsgAck, true},
 		{MsgError, true},
-		{MsgPrompt, true},
 		{MsgSessionID, true},
 		{MsgEventMatch, true},
 		{MsgStepStatus, true},
@@ -36,8 +34,8 @@ func TestMessageType_Valid(t *testing.T) {
 }
 
 func TestMessageType_IsRequest(t *testing.T) {
-	requests := []MessageType{MsgStepDone, MsgGetPrompt, MsgGetSessionID, MsgApproval, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
-	responses := []MessageType{MsgAck, MsgError, MsgPrompt, MsgSessionID, MsgEventMatch, MsgStepStatus}
+	requests := []MessageType{MsgStepDone, MsgGetSessionID, MsgApproval, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
+	responses := []MessageType{MsgAck, MsgError, MsgSessionID, MsgEventMatch, MsgStepStatus}
 
 	for _, mt := range requests {
 		if !mt.IsRequest() {
@@ -100,32 +98,6 @@ func TestStepDoneMessage_Marshal(t *testing.T) {
 	}
 	if got.Notes != msg.Notes {
 		t.Errorf("Notes = %q, want %q", got.Notes, msg.Notes)
-	}
-}
-
-func TestGetPromptMessage_Marshal(t *testing.T) {
-	msg := GetPromptMessage{
-		Type:  MsgGetPrompt,
-		Agent: "worker-1",
-	}
-
-	data, err := Marshal(msg)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-
-	parsed, err := ParseMessage(data)
-	if err != nil {
-		t.Fatalf("ParseMessage() error = %v", err)
-	}
-
-	got, ok := parsed.(*GetPromptMessage)
-	if !ok {
-		t.Fatalf("ParseMessage() returned %T, want *GetPromptMessage", parsed)
-	}
-
-	if got.Agent != msg.Agent {
-		t.Errorf("Agent = %q, want %q", got.Agent, msg.Agent)
 	}
 }
 
@@ -261,55 +233,6 @@ func TestErrorMessage_Marshal(t *testing.T) {
 
 	if got.Message != msg.Message {
 		t.Errorf("Message = %q, want %q", got.Message, msg.Message)
-	}
-}
-
-func TestPromptMessage_Marshal(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{
-			name:    "with content",
-			content: "## Write Tests\n\nWrite failing tests for the feature.",
-		},
-		{
-			name:    "empty (stay idle)",
-			content: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := PromptMessage{
-				Type:    MsgPrompt,
-				Content: tt.content,
-			}
-
-			data, err := Marshal(msg)
-			if err != nil {
-				t.Fatalf("Marshal() error = %v", err)
-			}
-
-			// Verify embedded newlines are escaped
-			if strings.Count(string(data), "\n") > 0 {
-				t.Errorf("Marshal() produced multi-line output")
-			}
-
-			parsed, err := ParseMessage(data)
-			if err != nil {
-				t.Fatalf("ParseMessage() error = %v", err)
-			}
-
-			got, ok := parsed.(*PromptMessage)
-			if !ok {
-				t.Fatalf("ParseMessage() returned %T, want *PromptMessage", parsed)
-			}
-
-			if got.Content != msg.Content {
-				t.Errorf("Content = %q, want %q", got.Content, msg.Content)
-			}
-		})
 	}
 }
 

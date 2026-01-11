@@ -89,29 +89,6 @@ func (c *Client) SendStepDone(workflow, agent, step string, outputs map[string]a
 	return c.Send(msg)
 }
 
-// GetPrompt requests the current prompt for an agent.
-// Returns the prompt content (empty string means "stay idle").
-func (c *Client) GetPrompt(agent string) (string, error) {
-	msg := &GetPromptMessage{
-		Type:  MsgGetPrompt,
-		Agent: agent,
-	}
-
-	response, err := c.Send(msg)
-	if err != nil {
-		return "", err
-	}
-
-	switch r := response.(type) {
-	case *PromptMessage:
-		return r.Content, nil
-	case *ErrorMessage:
-		return "", fmt.Errorf("server error: %s", r.Message)
-	default:
-		return "", fmt.Errorf("unexpected response type: %T", response)
-	}
-}
-
 // GetSessionID requests the Claude session ID for an agent.
 func (c *Client) GetSessionID(agent string) (string, error) {
 	msg := &GetSessionIDMessage{
