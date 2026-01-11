@@ -65,6 +65,8 @@ target_branch = { default = "main", description = "Target branch for final merge
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
 spawn_args = { default = "", description = "Extra CLI args for spawned agents (e.g., --settings /path/to/hooks.json)" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
+max_nudges = { default = "10", description = "Max RW nudges before force-completing agent" }
 
 # Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
 cleanup_on_success = """
@@ -241,6 +243,8 @@ needs = ["setup-metadata"]
 [main.steps.variables]
 spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
 
 
 # ============================================================================
@@ -430,6 +434,8 @@ task = { required = true }
 i = { required = true }
 spec_file = { default = "docs/MVP-SPEC-v2.md" }
 spawn_args = { default = "" }
+enable_rw = { default = "true" }
+max_nudges = { default = "10" }
 
 [[agent-track-wrapper.steps]]
 id = "track"
@@ -451,6 +457,8 @@ If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
 # Only include spec_file if it's not "none"
 spec_file = "{{spec_file}}"
 spawn_args = "{{spawn_args}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
 
 # Done marker that downstream can reference
 [[agent-track-wrapper.steps]]

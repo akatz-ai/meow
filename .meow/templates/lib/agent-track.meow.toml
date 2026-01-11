@@ -16,6 +16,7 @@
 #   task_prompt  (required) - The main task prompt for the agent
 #   spec_file    (default: "docs/MVP-SPEC-v2.md") - Spec file to read first
 #   spawn_args   (default: "") - Extra CLI args for claude
+#   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor
 #   max_nudges   (default: "10") - RW safety limit before force-completing
 #
 # Usage:
@@ -43,6 +44,7 @@ workdir = { required = true, description = "Working directory path" }
 task_prompt = { required = true, description = "Main task prompt" }
 spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file to read first" }
 spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --settings /path/to/hooks.json)" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
 max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
 
 # ============================================================================
@@ -57,32 +59,28 @@ workdir = "{{workdir}}"
 spawn_args = "{{spawn_args}}"
 
 # ============================================================================
-# Step 2: Ralph Wiggum Persistence Monitor (runs in parallel)
+# Step 2: Ralph Wiggum Persistence Monitor (runs in parallel, optional)
 # ============================================================================
 #
 # Monitors for unexpected agent stops and re-injects nudge prompts.
 # Runs in parallel with work/review/verify-clean steps.
 # Self-terminates when verify-clean completes.
+# Disable with enable_rw = "false"
 
 [[main.steps]]
 id = "persistence"
-executor = "expand"
-template = "lib/agent-persistence#monitor"
+executor = "branch"
+condition = "test '{{enable_rw}}' = 'true'"
 needs = ["spawn"]
 
-[main.steps.variables]
-agent = "{{agent_name}}"
-check_step = "verify-clean"
-max_loops = "{{max_nudges}}"
-nudge_prompt = """
-You stopped unexpectedly. Continue with your assigned task for {{track_name}}.
+[main.steps.on_true]
+template = "lib/agent-persistence#monitor"
+variables = { agent = "{{agent_name}}", check_step = "verify-clean", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`" }
 
-Remember:
-- Complete your current work
-- Run tests to verify
-- Commit your changes
-- When fully done, run: `meow done`
-"""
+[main.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Ralph Wiggum monitor disabled (enable_rw=false)'" }
+]
 
 # ============================================================================
 # Step 3: Main Work
