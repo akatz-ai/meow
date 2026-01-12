@@ -12,10 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/adapter"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
 // TmuxAgentManager implements AgentManager using tmux sessions.
+// It uses the adapter system to remain agent-agnostic - all agent-specific
+// behavior (spawn command, prompt injection, graceful stop) comes from adapters.
 type TmuxAgentManager struct {
 	logger *slog.Logger
 
@@ -23,6 +26,7 @@ type TmuxAgentManager struct {
 	agents     map[string]*agentState // agentID -> state
 	workdir    string                 // Base working directory
 	tmuxSocket string                 // Custom tmux socket path (empty = default)
+	registry   *adapter.Registry      // Adapter registry for agent configs
 }
 
 type agentState struct {
@@ -30,20 +34,34 @@ type agentState struct {
 	workflowID    string
 	currentStepID string
 	workdir       string
+	adapterName   string // Which adapter this agent uses (for stop/inject)
 }
 
 // NewTmuxAgentManager creates a new TmuxAgentManager.
 // If MEOW_TMUX_SOCKET environment variable is set, uses that socket path.
-func NewTmuxAgentManager(workdir string, logger *slog.Logger) *TmuxAgentManager {
+// The registry parameter provides adapter configs; if nil, a default registry is created.
+func NewTmuxAgentManager(workdir string, registry *adapter.Registry, logger *slog.Logger) *TmuxAgentManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	tmuxSocket := os.Getenv("MEOW_TMUX_SOCKET")
+
+	// Create default registry if not provided
+	if registry == nil {
+		var err error
+		registry, err = adapter.NewDefaultRegistry(workdir)
+		if err != nil {
+			logger.Warn("failed to create adapter registry, using empty", "error", err)
+			registry = adapter.NewRegistry("", "")
+		}
+	}
+
 	return &TmuxAgentManager{
 		logger:     logger.With("component", "agent-manager"),
 		agents:     make(map[string]*agentState),
 		workdir:    workdir,
 		tmuxSocket: tmuxSocket,
+		registry:   registry,
 	}
 }
 
@@ -53,7 +71,8 @@ func (m *TmuxAgentManager) SetTmuxSocket(socket string) {
 	m.tmuxSocket = socket
 }
 
-// Start spawns an agent in a tmux session with Claude Code.
+// Start spawns an agent in a tmux session using the configured adapter.
+// The adapter determines the spawn command, environment, and startup timing.
 func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	if step.Spawn == nil {
 		return fmt.Errorf("spawn step missing config")
@@ -61,6 +80,15 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 
 	cfg := step.Spawn
 	agentID := cfg.Agent
+
+	// Resolve which adapter to use (step > workflow > project > global > "claude")
+	adapterName := m.registry.Resolve(cfg.Adapter, "", "", "")
+	adapterCfg, err := m.registry.Load(adapterName)
+	if err != nil {
+		return fmt.Errorf("loading adapter %q: %w", adapterName, err)
+	}
+
+	m.logger.Debug("using adapter", "adapter", adapterName, "agent", agentID)
 
 	// Build tmux session name
 	sessionName := BuildTmuxSessionName(wf.ID, agentID)
@@ -74,45 +102,45 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 		workdir = filepath.Join(m.workdir, workdir)
 	}
 
-	m.logger.Info("spawning agent", "agent", agentID, "session", sessionName, "workdir", workdir)
+	m.logger.Info("spawning agent", "agent", agentID, "adapter", adapterName, "session", sessionName, "workdir", workdir)
 
 	// Check if session already exists
 	if m.sessionExists(sessionName) {
 		m.logger.Warn("tmux session already exists", "session", sessionName)
 		// Attach to existing session instead of creating new
 	} else {
-		// Build environment variables
+		// Build environment variables from multiple sources
+		// Priority: orchestrator-injected > step config > adapter defaults
 		env := make(map[string]string)
+
+		// Start with adapter environment
+		for k, v := range adapterCfg.Environment {
+			env[k] = v
+		}
+		// Add step-level environment (overrides adapter)
 		for k, v := range cfg.Env {
 			env[k] = v
 		}
-		// Orchestrator-injected vars (reserved, override user values)
+		// Orchestrator-injected vars (reserved, always override)
 		env["MEOW_AGENT"] = agentID
 		env["MEOW_WORKFLOW"] = wf.ID
 		env["MEOW_ORCH_SOCK"] = fmt.Sprintf("/tmp/meow-%s.sock", wf.ID)
-		// Prevent Claude from detecting it's in an outer tmux session
-		// This avoids potential interactions with the parent tmux server
-		env["TMUX"] = ""
 
-		// Create tmux session with bash - we'll start claude via send-keys
+		// Create tmux session with bash - we'll start agent via send-keys
 		// This ensures the session stays alive and we can inject prompts
 		if err := m.createSession(ctx, sessionName, workdir, env, "bash"); err != nil {
 			return fmt.Errorf("creating tmux session: %w", err)
 		}
 
-		// Build and start agent command via send-keys
-		// MEOW_AGENT_COMMAND env var allows overriding for tests (e.g., to use simulator)
-		// Default: claude --dangerously-skip-permissions
-		baseCmd := os.Getenv("MEOW_AGENT_COMMAND")
-		if baseCmd == "" {
-			baseCmd = "claude --dangerously-skip-permissions"
+		// Build agent command from adapter config
+		var agentCmd string
+		if cfg.ResumeSession != "" && adapterCfg.Spawn.ResumeCommand != "" {
+			// Use resume command with session ID substitution
+			agentCmd = strings.ReplaceAll(adapterCfg.Spawn.ResumeCommand, "{{session_id}}", cfg.ResumeSession)
+		} else {
+			agentCmd = adapterCfg.Spawn.Command
 		}
-
-		agentCmd := baseCmd
-		if cfg.ResumeSession != "" {
-			agentCmd = fmt.Sprintf("%s --resume %s", baseCmd, cfg.ResumeSession)
-		}
-		// Append any extra spawn args
+		// Append any extra spawn args from step config
 		if cfg.SpawnArgs != "" {
 			agentCmd = agentCmd + " " + cfg.SpawnArgs
 		}
@@ -129,24 +157,19 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 		}
 
 		// Wait for agent to fully start up before returning
-		// This ensures it's ready to receive prompts
-		// MEOW_AGENT_STARTUP_DELAY env var allows overriding for tests (simulator starts faster)
-		startupDelay := 3 * time.Second
-		if delayStr := os.Getenv("MEOW_AGENT_STARTUP_DELAY"); delayStr != "" {
-			if d, err := time.ParseDuration(delayStr); err == nil {
-				startupDelay = d
-			}
-		}
+		// Uses the adapter's configured startup delay
+		startupDelay := adapterCfg.GetStartupDelay()
 		m.logger.Info("waiting for agent to start", "agent", agentID, "delay", startupDelay)
 		time.Sleep(startupDelay)
 	}
 
-	// Register agent state
+	// Register agent state (including which adapter to use for stop/inject)
 	m.mu.Lock()
 	m.agents[agentID] = &agentState{
 		tmuxSession: sessionName,
 		workflowID:  wf.ID,
 		workdir:     workdir,
+		adapterName: adapterName,
 	}
 	m.mu.Unlock()
 
@@ -160,7 +183,8 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 	return nil
 }
 
-// Stop kills an agent's tmux session.
+// Stop kills an agent's tmux session using the configured adapter.
+// The adapter determines the graceful stop keys and wait duration.
 func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *types.Step) error {
 	if step.Kill == nil {
 		return fmt.Errorf("kill step missing config")
@@ -182,12 +206,25 @@ func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *t
 	m.logger.Info("stopping agent", "agent", agentID, "session", sessionName, "graceful", graceful)
 
 	if graceful {
-		// Send C-c first to allow Claude to exit cleanly
-		if err := m.sendKeys(ctx, sessionName, "C-c"); err != nil {
-			m.logger.Warn("failed to send C-c", "error", err)
+		// Load adapter config for graceful stop settings
+		adapterCfg, err := m.registry.Load(state.adapterName)
+		if err != nil {
+			m.logger.Warn("failed to load adapter for graceful stop, using defaults", "adapter", state.adapterName, "error", err)
+			// Fall back to reasonable defaults
+			if err := m.sendKeys(ctx, sessionName, "C-c"); err != nil {
+				m.logger.Warn("failed to send C-c", "error", err)
+			}
+			time.Sleep(2 * time.Second)
+		} else {
+			// Send graceful stop keys from adapter config
+			for _, key := range adapterCfg.GracefulStop.Keys {
+				if err := m.sendKeys(ctx, sessionName, key); err != nil {
+					m.logger.Warn("failed to send graceful stop key", "key", key, "error", err)
+				}
+			}
+			// Wait for graceful shutdown using adapter's configured duration
+			time.Sleep(adapterCfg.GetGracefulStopWait())
 		}
-		// Wait for graceful shutdown
-		time.Sleep(2 * time.Second)
 	}
 
 	// Kill the session
@@ -217,9 +254,8 @@ func (m *TmuxAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 	return m.sessionExists(state.tmuxSession), nil
 }
 
-// InjectPrompt sends a prompt to an agent's tmux session.
-// Uses the "nudge" pattern from gastown: literal mode + delay + Enter with retry.
-// This is tested and reliable for Claude Code sessions.
+// InjectPrompt sends a prompt to an agent's tmux session using the configured adapter.
+// The adapter determines the injection method, pre/post keys, and timing.
 func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string) error {
 	m.mu.RLock()
 	state, ok := m.agents[agentID]
@@ -232,42 +268,66 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	sessionName := state.tmuxSession
 	m.logger.Info("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
 
-	// Cancel any copy mode first - this prevents "not in a mode" errors
-	// when the agent has scrolled back to read output
-	m.cancelCopyMode(ctx, sessionName)
-
-	// Wait for Claude to be ready (check for prompt indicator)
-	if err := m.waitForClaudeReady(ctx, sessionName, 10*time.Second); err != nil {
-		m.logger.Warn("Claude may not be ready", "error", err)
-		// Continue anyway - it might still work
+	// Load adapter config for prompt injection settings
+	adapterCfg, err := m.registry.Load(state.adapterName)
+	if err != nil {
+		return fmt.Errorf("loading adapter %q for prompt injection: %w", state.adapterName, err)
 	}
 
-	// Cancel copy mode again in case Claude entered it while we were waiting
-	m.cancelCopyMode(ctx, sessionName)
+	injection := adapterCfg.PromptInjection
 
-	// Send text in literal mode (-l flag handles special chars and newlines)
-	if err := m.sendKeysLiteral(ctx, sessionName, prompt); err != nil {
-		return fmt.Errorf("sending prompt: %w", err)
+	// Send pre-keys (e.g., Escape to exit copy mode)
+	for _, key := range injection.PreKeys {
+		if err := m.sendKeys(ctx, sessionName, key); err != nil {
+			m.logger.Debug("pre-key failed", "key", key, "error", err)
+			// Continue anyway - often not critical
+		}
 	}
 
-	// Wait 500ms for paste to complete (tested, required for Claude Code)
-	time.Sleep(500 * time.Millisecond)
+	// Wait pre-delay
+	if injection.PreDelay > 0 {
+		time.Sleep(injection.PreDelay.Duration())
+	}
 
-	// Send Enter with retry (critical for message submission)
+	// Send prompt using the configured method
+	method := adapterCfg.GetPromptInjectionMethod()
+	if method == "literal" {
+		if err := m.sendKeysLiteral(ctx, sessionName, prompt); err != nil {
+			return fmt.Errorf("sending prompt (literal): %w", err)
+		}
+	} else {
+		if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
+			return fmt.Errorf("sending prompt (keys): %w", err)
+		}
+	}
+
+	// Wait post-delay before sending post-keys
+	if injection.PostDelay > 0 {
+		time.Sleep(injection.PostDelay.Duration())
+	}
+
+	// Send post-keys (e.g., Enter to submit) with retry
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			m.logger.Debug("retrying Enter", "attempt", attempt+1)
-			time.Sleep(200 * time.Millisecond)
+	for _, key := range injection.PostKeys {
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				m.logger.Debug("retrying post-key", "key", key, "attempt", attempt+1)
+				time.Sleep(200 * time.Millisecond)
+			}
+			if err := m.sendKeys(ctx, sessionName, key); err != nil {
+				lastErr = err
+				m.logger.Debug("post-key attempt failed", "key", key, "attempt", attempt+1, "error", err)
+				continue
+			}
+			lastErr = nil
+			break
 		}
-		if err := m.sendKeys(ctx, sessionName, "Enter"); err != nil {
-			lastErr = err
-			m.logger.Debug("Enter attempt failed", "attempt", attempt+1, "error", err)
-			continue
+		if lastErr != nil {
+			return fmt.Errorf("failed to send post-key %q after 3 attempts: %w", key, lastErr)
 		}
-		return nil
 	}
-	return fmt.Errorf("failed to send Enter after 3 attempts: %w", lastErr)
+
+	return nil
 }
 
 // SetCurrentStep updates the current step for an agent.
@@ -444,65 +504,7 @@ func (m *TmuxAgentManager) sendKeysLiteral(ctx context.Context, session string, 
 	return nil
 }
 
-// waitForClaudeReady polls until Claude's prompt indicator appears in the pane.
-// Claude is ready when we see the input prompt area (indicated by "> " or "❯").
-// This helps ensure we don't send input before Claude is ready to receive it.
-func (m *TmuxAgentManager) waitForClaudeReady(ctx context.Context, session string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Capture last few lines of the pane
-		lines, err := m.capturePane(ctx, session, 15)
-		if err != nil {
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-
-		// Look for Claude's prompt indicators
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			// Claude Code shows "> " or "❯" at the start of input line
-			if strings.HasPrefix(trimmed, "> ") || strings.HasPrefix(trimmed, "❯") || trimmed == ">" {
-				return nil
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("timeout waiting for Claude prompt")
-}
-
-// capturePane captures the last N lines of a tmux pane.
-func (m *TmuxAgentManager) capturePane(ctx context.Context, session string, lines int) ([]string, error) {
-	args := m.tmuxArgs("capture-pane", "-p", "-t", session, "-S", fmt.Sprintf("-%d", lines))
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("tmux capture-pane failed: %w (stderr: %s)", err, stderr.String())
-	}
-	output := strings.TrimSpace(stdout.String())
-	if output == "" {
-		return nil, nil
-	}
-	return strings.Split(output, "\n"), nil
-}
-
-// cancelCopyMode cancels any active copy mode in the tmux pane.
-// This is needed before sending keys because tmux will reject send-keys -l
-// with "not in a mode" error if the pane is in copy mode (scrollback).
-func (m *TmuxAgentManager) cancelCopyMode(ctx context.Context, session string) {
-	// Send escape to exit any mode, followed by q to exit copy mode
-	// These are no-ops if not in copy mode
-	args := m.tmuxArgs("send-keys", "-t", session, "Escape")
-	exec.CommandContext(ctx, "tmux", args...).Run()
-	time.Sleep(50 * time.Millisecond)
-	args = m.tmuxArgs("send-keys", "-t", session, "q")
-	exec.CommandContext(ctx, "tmux", args...).Run()
-	time.Sleep(50 * time.Millisecond)
-}
+// Note: Agent-specific prompt detection (like waitForClaudeReady) has been removed.
+// Adapters now handle this via startup_delay configuration - the orchestrator
+// waits for the configured delay after spawning before sending prompts.
+// This keeps the agent manager agent-agnostic.

@@ -72,12 +72,43 @@ func NewHarness(t *testing.T) *Harness {
 		h.StateDir,
 		h.TemplateDir,
 		h.AdapterDir,
-		filepath.Join(h.AdapterDir, "simulator"),
+		filepath.Join(h.AdapterDir, "claude"), // Override built-in claude with simulator
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatalf("failed to create directory %s: %v", dir, err)
 		}
+	}
+
+	// Write a "claude" adapter that uses the simulator binary
+	// This overrides the built-in Claude adapter for testing
+	simulatorAdapter := `# Test adapter - uses simulator instead of real Claude
+[adapter]
+name = "claude"
+description = "Simulator for E2E testing (overrides built-in claude)"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+resume_command = "/tmp/meow-agent-sim-e2e --resume {{session_id}}"
+startup_delay = "200ms"
+
+[environment]
+TMUX = ""
+
+[prompt_injection]
+pre_keys = ["Escape"]
+pre_delay = "50ms"
+method = "literal"
+post_keys = ["Enter"]
+post_delay = "10ms"
+
+[graceful_stop]
+keys = ["C-c"]
+wait = "200ms"
+`
+	adapterPath := filepath.Join(h.AdapterDir, "claude", "adapter.toml")
+	if err := os.WriteFile(adapterPath, []byte(simulatorAdapter), 0644); err != nil {
+		t.Fatalf("failed to write simulator adapter: %v", err)
 	}
 
 	// Create default config
@@ -158,6 +189,8 @@ func (h *Harness) WriteAdapterConfig(name, content string) error {
 }
 
 // Env returns environment variables for subprocess execution.
+// The adapter system handles agent spawning - we just need to ensure
+// the project adapter directory is used (contains simulator override).
 func (h *Harness) Env() []string {
 	env := os.Environ()
 	env = append(env,
@@ -167,10 +200,6 @@ func (h *Harness) Env() []string {
 		fmt.Sprintf("MEOW_SIM_CONFIG=%s", h.SimConfigPath),
 		fmt.Sprintf("TMUX_TMPDIR=%s", h.TempDir),
 		fmt.Sprintf("MEOW_TMUX_SOCKET=%s", h.TmuxSocket),
-		// Use simulator instead of real Claude for E2E tests
-		"MEOW_AGENT_COMMAND=/tmp/meow-agent-sim-e2e",
-		// Simulator starts much faster than real Claude
-		"MEOW_AGENT_STARTUP_DELAY=200ms",
 	)
 	return env
 }

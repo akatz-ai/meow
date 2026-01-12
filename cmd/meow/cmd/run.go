@@ -187,7 +187,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 	shellRunner := orchestrator.NewDefaultShellRunner()
 
 	// Create agent manager for tmux sessions
-	agentManager := orchestrator.NewTmuxAgentManager(dir, logger)
+	// Passing nil registry uses the default (project + global + built-in adapters)
+	agentManager := orchestrator.NewTmuxAgentManager(dir, nil, logger)
 
 	// Create template expander
 	expander := orchestrator.NewTemplateExpanderAdapter(dir)
