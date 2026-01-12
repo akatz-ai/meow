@@ -3443,3 +3443,317 @@ graceful = true
 		t.Logf("✓ Agent stop hook event routing verified in %.2fs", elapsed.Seconds())
 	}
 }
+
+// ===========================================================================
+// Step Output Reference Tests
+// ===========================================================================
+
+// TestE2E_ShellOutputFilePathWithStepOutputRef tests that shell_outputs with
+// file: source paths containing step output references ({{step.outputs.field}})
+// are correctly resolved at runtime.
+//
+// This covers a bug where deferred step output references in shell_outputs
+// source paths were not being substituted at runtime, causing file read failures.
+//
+// Scenario:
+//   1. Step A outputs a directory path
+//   2. Step B writes a file to that directory and captures it via file:{{A.outputs.dir}}/file.txt
+//   3. Step C verifies it received the captured content
+func TestE2E_ShellOutputFilePathWithStepOutputRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	template := `
+[main]
+name = "file-output-step-ref"
+
+[[main.steps]]
+id = "create-dir"
+executor = "shell"
+description = "Create a temp directory and output its path"
+command = """
+DIR=$(mktemp -d)
+echo "$DIR"
+"""
+[main.steps.shell_outputs]
+dir = { source = "stdout" }
+
+[[main.steps]]
+id = "write-file"
+executor = "shell"
+description = "Write content to a file in the directory from previous step"
+needs = ["create-dir"]
+command = """
+echo "captured-content-12345" > "{{create-dir.outputs.dir}}/data.txt"
+echo "wrote file"
+"""
+[main.steps.shell_outputs]
+# This is the key test: file path contains a step output reference
+content = { source = "file:{{create-dir.outputs.dir}}/data.txt" }
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+description = "Verify we got the captured content"
+needs = ["write-file"]
+command = "test '{{write-file.outputs.content}}' = 'captured-content-12345' && echo 'VERIFIED'"
+`
+	if err := h.WriteTemplate("file-output-step-ref.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "file-output-step-ref.toml"))
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Verify no output capture failures
+	if strings.Contains(stderr, "output capture failed") {
+		t.Errorf("unexpected output capture failure - step output ref in file path not resolved\nstderr: %s", stderr)
+	}
+
+	// Verify verify step ran (proves the whole chain worked)
+	if !strings.Contains(stderr, "dispatching step\" id=verify") {
+		t.Errorf("expected verify step to be dispatched\nstderr: %s", stderr)
+	}
+
+	t.Logf("✓ Shell output file path with step output reference works correctly")
+}
+
+// TestE2E_ExpandedStepOutputRefInFilePath tests that shell_outputs with file:
+// paths containing expanded step output references ({{parent.child.outputs.field}})
+// are correctly resolved at runtime.
+//
+// This is the core regression test for the bug where dotted step IDs
+// (from expand prefixing) weren't recognized as output references.
+//
+// The test creates an expanded step that outputs a directory path, then
+// verifies we can capture file content using that path in shell_outputs.
+func TestE2E_ExpandedStepOutputRefInFilePath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Library template that creates a temp directory and writes a marker file
+	libTemplate := `
+[main]
+name = "dir-maker"
+
+[[main.steps]]
+id = "create"
+executor = "shell"
+command = """
+set -e
+DIR=$(mktemp -d)
+echo "marker-from-lib-$$" > "$DIR/marker.txt"
+echo "$DIR"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+`
+	// Write library template in lib/ subdirectory
+	libDir := filepath.Join(h.TemplateDir, "lib")
+	if err := os.MkdirAll(libDir, 0755); err != nil {
+		t.Fatalf("failed to create lib dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(libDir, "dir-maker.meow.toml"), []byte(libTemplate), 0644); err != nil {
+		t.Fatalf("failed to write lib template: %v", err)
+	}
+
+	// Main template that expands the library and captures file content using dotted step ID
+	mainTemplate := `
+[main]
+name = "expanded-step-output-ref"
+
+[[main.steps]]
+id = "make-dir"
+executor = "expand"
+template = "lib/dir-maker"
+
+[[main.steps]]
+id = "read-marker"
+executor = "shell"
+description = "Read the marker file using expanded step output path"
+needs = ["make-dir.create"]
+command = "cat '{{make-dir.create.outputs.path}}/marker.txt'"
+[main.steps.shell_outputs]
+# Key test: file path uses dotted step ID from expansion
+content = { source = "file:{{make-dir.create.outputs.path}}/marker.txt" }
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["read-marker"]
+command = """
+set -e
+CONTENT='{{read-marker.outputs.content}}'
+echo "Got content: $CONTENT"
+test -n "$CONTENT"
+echo "$CONTENT" | grep -q "marker-from-lib"
+echo 'VERIFIED'
+"""
+`
+	if err := h.WriteTemplate("expanded-step-output-ref.toml", mainTemplate); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "expanded-step-output-ref.toml"))
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Verify no output capture failures - this was the original bug
+	if strings.Contains(stderr, "output capture failed") {
+		t.Errorf("unexpected output capture failure - expanded step output ref not resolved\nstderr: %s", stderr)
+	}
+
+	// Verify the expanded step ran
+	if !strings.Contains(stderr, "dispatching step\" id=make-dir.create") {
+		t.Errorf("expected make-dir.create step to be dispatched\nstderr: %s", stderr)
+	}
+
+	// Verify verify step ran
+	if !strings.Contains(stderr, "dispatching step\" id=verify") {
+		t.Errorf("expected verify step to be dispatched\nstderr: %s", stderr)
+	}
+
+	t.Logf("✓ Expanded step output reference in file path works correctly")
+}
+
+// TestE2E_NestedStepOutputInExpandVariable tests the scenario where a step
+// output reference flows through an expand step's variables into a child
+// template's shell_outputs file path.
+//
+// This tests the full pipeline:
+//   1. Step A produces output (a unique directory path)
+//   2. Expand step passes {{A.outputs.path}} as a variable to child template
+//   3. Child template uses that variable in shell_outputs file path
+//   4. Runtime correctly resolves the nested reference
+//
+// This is the exact bug case from the opencode-sprint template where
+// track_name = "{{load-task.outputs.track_name}}" flowed into worktree template.
+func TestE2E_NestedStepOutputInExpandVariable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Child template that uses a variable in shell_outputs file path
+	// The variable will contain a step output reference at bake time
+	childTemplate := `
+[main]
+name = "file-creator"
+
+[main.variables]
+base_path = { required = true }
+
+[[main.steps]]
+id = "create"
+executor = "shell"
+command = """
+set -e
+echo "created-by-child-$$" > "{{base_path}}/child-output.txt"
+echo "{{base_path}}"
+"""
+[main.steps.shell_outputs]
+dir = { source = "stdout" }
+# Key: file path uses variable that came from a step output ref
+child_content = { source = "file:{{base_path}}/child-output.txt" }
+`
+	libDir := filepath.Join(h.TemplateDir, "lib")
+	if err := os.MkdirAll(libDir, 0755); err != nil {
+		t.Fatalf("failed to create lib dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(libDir, "file-creator.meow.toml"), []byte(childTemplate), 0644); err != nil {
+		t.Fatalf("failed to write child template: %v", err)
+	}
+
+	mainTemplate := `
+[main]
+name = "nested-step-output-in-expand"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+description = "Create a temp directory and output its path"
+command = """
+set -e
+DIR=$(mktemp -d)
+echo "$DIR"
+"""
+[main.steps.shell_outputs]
+path = { source = "stdout" }
+
+[[main.steps]]
+id = "child-step"
+executor = "expand"
+template = "lib/file-creator"
+needs = ["setup"]
+[main.steps.variables]
+# Pass step output ref as variable - at bake time this is deferred,
+# then substituted when child template is baked at runtime
+base_path = "{{setup.outputs.path}}"
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["child-step.create"]
+command = """
+set -e
+CONTENT='{{child-step.create.outputs.child_content}}'
+echo "Got content: $CONTENT"
+test -n "$CONTENT"
+echo "$CONTENT" | grep -q "created-by-child"
+echo 'VERIFIED'
+"""
+`
+	if err := h.WriteTemplate("nested-step-output-expand.toml", mainTemplate); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "nested-step-output-expand.toml"))
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Verify no output capture failures
+	if strings.Contains(stderr, "output capture failed") {
+		t.Errorf("unexpected output capture failure - nested step output in expand var not resolved\nstderr: %s", stderr)
+	}
+
+	// Verify expanded step ran
+	if !strings.Contains(stderr, "dispatching step\" id=child-step.create") {
+		t.Errorf("expected child-step.create step to be dispatched\nstderr: %s", stderr)
+	}
+
+	// Verify verify step ran
+	if !strings.Contains(stderr, "dispatching step\" id=verify") {
+		t.Errorf("expected verify step to be dispatched\nstderr: %s", stderr)
+	}
+
+	t.Logf("✓ Nested step output in expand variable works correctly")
+}

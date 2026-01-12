@@ -17,6 +17,7 @@ import (
 
 	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/ipc"
+	"github.com/meow-stack/meow-machine/internal/template"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -453,7 +454,9 @@ func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *t
 }
 
 // stepOutputRefPattern matches {{step-id.outputs.field}} references
-var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_-]+)\.outputs\.([a-zA-Z0-9_]+)\}\}`)
+// Step IDs can contain dots (e.g., "parent.child" from expansion prefixes), so we match
+// everything before ".outputs." as the step ID.
+var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_.-]+)\.outputs\.([a-zA-Z0-9_]+)\}\}`)
 
 // resolveStepOutputRefs substitutes {{step.outputs.field}} references with actual values
 // from completed steps in the workflow.
@@ -1353,9 +1356,27 @@ func (o *Orchestrator) completeBranchCondition(
 	}
 
 	// Capture defined outputs (stdout, stderr, file:path)
+	// Create a source substitution function that resolves step output references
+	substituteSource := func(source string) (string, error) {
+		vc := template.NewVarContext()
+		// Set up step lookup from the workflow
+		vc.SetStepLookup(func(lookupStepID string) (*template.StepInfo, error) {
+			s, ok := wf.GetStep(lookupStepID)
+			if !ok {
+				return nil, nil // Not found
+			}
+			return &template.StepInfo{
+				ID:      s.ID,
+				Status:  string(s.Status),
+				Outputs: s.Outputs,
+			}, nil
+		})
+		return vc.Substitute(source)
+	}
+
 	if cfg.Outputs != nil {
 		for name, source := range cfg.Outputs {
-			value, err := captureOutput(source.Source, result)
+			value, err := captureOutput(source.Source, result, substituteSource)
 			if err != nil {
 				o.logger.Warn("output capture failed", "name", name, "error", err)
 				outputs[name] = nil

@@ -86,9 +86,10 @@ func runShellCommand(ctx context.Context, cfg *types.ShellConfig) (*ShellResult,
 	}
 
 	// Capture outputs based on config
+	// Note: This standalone executor doesn't have workflow context for step output substitution
 	if cfg.Outputs != nil {
 		for name, source := range cfg.Outputs {
-			value, captureErr := captureOutput(source.Source, result)
+			value, captureErr := captureOutput(source.Source, result, nil)
 			if captureErr != nil {
 				// Log but don't fail on capture errors
 				result.Outputs[name] = nil
@@ -104,8 +105,14 @@ func runShellCommand(ctx context.Context, cfg *types.ShellConfig) (*ShellResult,
 	return result, err
 }
 
+// SourceSubstituteFunc substitutes variables in a source path at runtime.
+// Used to resolve step output references like {{step.outputs.field}} in output paths.
+type SourceSubstituteFunc func(source string) (string, error)
+
 // captureOutput extracts a value based on the source specification.
-func captureOutput(source string, result *ShellResult) (any, error) {
+// If substituteSource is provided, it will be called to substitute any remaining
+// variable references in file paths before reading.
+func captureOutput(source string, result *ShellResult, substituteSource SourceSubstituteFunc) (any, error) {
 	switch source {
 	case "stdout":
 		return result.Stdout, nil
@@ -117,6 +124,14 @@ func captureOutput(source string, result *ShellResult) (any, error) {
 		// Check for file: prefix
 		if strings.HasPrefix(source, "file:") {
 			filePath := strings.TrimPrefix(source, "file:")
+			// Substitute any remaining variable references (e.g., step outputs)
+			if substituteSource != nil && strings.Contains(filePath, "{{") {
+				substituted, err := substituteSource(filePath)
+				if err != nil {
+					return nil, fmt.Errorf("substituting output path: %w", err)
+				}
+				filePath = substituted
+			}
 			content, err := os.ReadFile(filePath)
 			if err != nil {
 				return nil, fmt.Errorf("reading output file %s: %w", filePath, err)
