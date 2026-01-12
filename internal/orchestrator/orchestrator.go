@@ -334,13 +334,15 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 
 	// Process ALL ready steps (enables parallel agent execution)
 	for _, step := range readySteps {
-		// For agent steps, only dispatch if agent is idle
+		// For agent steps, check idleness unless it's fire_forget mode
 		if step.Executor == types.ExecutorAgent {
 			if step.Agent == nil {
 				o.logger.Error("agent step missing config", "step", step.ID)
 				continue
 			}
-			if !wf.AgentIsIdle(step.Agent.Agent) {
+			// fire_forget mode injects prompts without waiting for agent to be idle
+			// This is used for nudge prompts in the Ralph Wiggum persistence pattern
+			if step.Agent.Mode != "fire_forget" && !wf.AgentIsIdle(step.Agent.Agent) {
 				continue
 			}
 		}
