@@ -279,7 +279,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	o.checkForeachCompletion(wf)
 
 	// Check for branch steps waiting for their expanded children to complete
-	o.checkBranchCompletion(wf)
+	branchModified := o.checkBranchCompletion(wf)
 
 	readySteps := wf.GetReadySteps()
 	if len(readySteps) == 0 {
@@ -315,7 +315,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 			return o.store.Save(ctx, wf)
 		}
 		// Save if timeout handling or blocked step detection modified state
-		if timeoutModified || blockedModified {
+		if timeoutModified || blockedModified || branchModified {
 			return o.store.Save(ctx, wf)
 		}
 		return nil // Waiting for external completion
@@ -877,7 +877,9 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
 // checkBranchCompletion checks for branch steps that are waiting for their expanded
 // children to complete. When all children are done, the branch step is marked done.
 // This is analogous to checkForeachCompletion for foreach steps.
-func (o *Orchestrator) checkBranchCompletion(wf *types.Workflow) {
+// Returns true if any step was modified.
+func (o *Orchestrator) checkBranchCompletion(wf *types.Workflow) bool {
+	modified := false
 	for _, step := range wf.Steps {
 		// Only check running branch steps with expanded children
 		if step.Status != types.StepStatusRunning {
@@ -914,8 +916,10 @@ func (o *Orchestrator) checkBranchCompletion(wf *types.Workflow) {
 						"error", err)
 				}
 			}
+			modified = true
 		}
 	}
+	return modified
 }
 
 // IsBranchComplete checks if all children of a branch step are done.
