@@ -3290,3 +3290,147 @@ command = "echo 'event routing verified'"
 		t.Logf("✓ Event routing verified in %.2fs", elapsed.Seconds())
 	}
 }
+
+// TestE2E_EventRouting_AgentStopped tests the "Ralph Wiggum" pattern:
+// an agent's stop hook emits the agent-stopped event which triggers a waiting branch.
+//
+// This is the canonical test for async branch + agent parallel execution:
+//   1. spawn starts the agent
+//   2. monitor (branch) and work (agent) both start in parallel after spawn
+//   3. work completes via meow done
+//   4. Simulator's stop hook fires agent-stopped event
+//   5. monitor receives the event and expands on_true
+//   6. Workflow completes successfully
+//
+// This validates:
+//   - Branch and agent steps run in parallel (async branch)
+//   - Simulator stop hook fires agent-stopped event after meow done
+//   - EventRouter delivers event to waiting await-event
+//   - Workflow completes via event-driven coordination (not timeout)
+func TestE2E_EventRouting_AgentStopped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Configure simulator with stop hook enabled (fires agent-stopped event)
+	simConfig := e2e.NewSimConfigBuilder().
+		WithStopHook(true). // Default, but explicit for clarity
+		WithDefaultAction(e2e.ActionComplete).
+		WithStartupDelay(50 * time.Millisecond).
+		WithDelay(50 * time.Millisecond). // Fast completion
+		WithLogLevel("debug").             // Enable debug logging to see stop hook
+		Build()
+
+	if err := h.WriteSimConfig(simConfig); err != nil {
+		t.Fatalf("failed to write sim config: %v", err)
+	}
+
+	// Write simulator adapter config
+	adapterConfig := `
+[adapter]
+name = "simulator"
+
+[spawn]
+command = "/tmp/meow-agent-sim-e2e"
+args = []
+
+[timing]
+startup_delay = "100ms"
+`
+	if err := h.WriteAdapterConfig("simulator", adapterConfig); err != nil {
+		t.Fatalf("failed to write adapter config: %v", err)
+	}
+
+	template := `
+[main]
+name = "event-routing-agent-stopped"
+
+# Step 1: Spawn the agent
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "worker"
+
+# Step 2a: Monitor waits for agent-stopped event (runs in parallel with work)
+[[main.steps]]
+id = "monitor"
+executor = "branch"
+needs = ["spawn"]
+condition = "meow await-event agent-stopped --timeout 30s"
+timeout = "35s"
+
+[main.steps.on_true]
+inline = [
+  { id = "got-event", executor = "shell", command = "echo 'EVENT_RECEIVED'" }
+]
+
+[main.steps.on_timeout]
+inline = [
+  { id = "timed-out", executor = "shell", command = "echo 'TIMEOUT_NO_EVENT'" }
+]
+
+# Step 2b: Agent does work (runs in parallel with monitor)
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "worker"
+needs = ["spawn"]
+prompt = "Do some work and complete"
+
+# Step 3: Final step runs after both complete
+[[main.steps]]
+id = "final"
+executor = "shell"
+needs = ["monitor", "work"]
+command = "echo 'BOTH_COMPLETE'"
+
+# Step 4: Clean up
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "worker"
+needs = ["final"]
+graceful = true
+`
+	if err := h.WriteTemplate("event-routing-agent-stopped.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "event-routing-agent-stopped.toml"))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Verify agent-stopped event was matched (proves event routing works)
+	if !strings.Contains(stderr, "event_type=agent-stopped matched=true") {
+		t.Errorf("expected agent-stopped event to be matched\nstderr: %s", stderr)
+	}
+
+	// Verify the on_true branch was expanded (monitor.got-event step dispatched)
+	if !strings.Contains(stderr, "dispatching step\" id=monitor.got-event") {
+		t.Errorf("expected monitor.got-event step to be dispatched (on_true expansion)\nstderr: %s", stderr)
+	}
+
+	// Verify final step ran (proves both monitor and work completed)
+	if !strings.Contains(stderr, "dispatching step\" id=final") {
+		t.Errorf("expected final step to be dispatched\nstderr: %s", stderr)
+	}
+
+	// Should complete quickly - parallel execution means event arrives soon after agent completes
+	// Allow up to 20s for test environment overhead (agent startup, tmux delays, etc.)
+	if elapsed > 20*time.Second {
+		t.Errorf("workflow took too long (%.2fs) - event routing may have failed (expected <20s)", elapsed.Seconds())
+	} else {
+		t.Logf("✓ Agent stop hook event routing verified in %.2fs", elapsed.Seconds())
+	}
+}

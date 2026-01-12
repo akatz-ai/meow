@@ -100,32 +100,45 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 			return fmt.Errorf("creating tmux session: %w", err)
 		}
 
-		// Build and start claude command via send-keys
-		// Use --dangerously-skip-permissions to bypass trust dialog in automated context
-		claudeCmd := "claude --dangerously-skip-permissions"
+		// Build and start agent command via send-keys
+		// MEOW_AGENT_COMMAND env var allows overriding for tests (e.g., to use simulator)
+		// Default: claude --dangerously-skip-permissions
+		baseCmd := os.Getenv("MEOW_AGENT_COMMAND")
+		if baseCmd == "" {
+			baseCmd = "claude --dangerously-skip-permissions"
+		}
+
+		agentCmd := baseCmd
 		if cfg.ResumeSession != "" {
-			claudeCmd = fmt.Sprintf("claude --dangerously-skip-permissions --resume %s", cfg.ResumeSession)
+			agentCmd = fmt.Sprintf("%s --resume %s", baseCmd, cfg.ResumeSession)
 		}
 		// Append any extra spawn args
 		if cfg.SpawnArgs != "" {
-			claudeCmd = claudeCmd + " " + cfg.SpawnArgs
+			agentCmd = agentCmd + " " + cfg.SpawnArgs
 		}
 
 		// Give the session a moment to initialize
 		time.Sleep(100 * time.Millisecond)
 
-		// Start claude in the session
-		if err := m.sendKeys(ctx, sessionName, claudeCmd); err != nil {
-			return fmt.Errorf("sending claude command: %w", err)
+		// Start agent in the session
+		if err := m.sendKeys(ctx, sessionName, agentCmd); err != nil {
+			return fmt.Errorf("sending agent command: %w", err)
 		}
 		if err := m.sendKeys(ctx, sessionName, "Enter"); err != nil {
 			return fmt.Errorf("sending Enter: %w", err)
 		}
 
-		// Wait for Claude to fully start up before returning
+		// Wait for agent to fully start up before returning
 		// This ensures it's ready to receive prompts
-		m.logger.Info("waiting for Claude to start", "agent", agentID)
-		time.Sleep(3 * time.Second)
+		// MEOW_AGENT_STARTUP_DELAY env var allows overriding for tests (simulator starts faster)
+		startupDelay := 3 * time.Second
+		if delayStr := os.Getenv("MEOW_AGENT_STARTUP_DELAY"); delayStr != "" {
+			if d, err := time.ParseDuration(delayStr); err == nil {
+				startupDelay = d
+			}
+		}
+		m.logger.Info("waiting for agent to start", "agent", agentID, "delay", startupDelay)
+		time.Sleep(startupDelay)
 	}
 
 	// Register agent state

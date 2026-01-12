@@ -167,6 +167,10 @@ func (h *Harness) Env() []string {
 		fmt.Sprintf("MEOW_SIM_CONFIG=%s", h.SimConfigPath),
 		fmt.Sprintf("TMUX_TMPDIR=%s", h.TempDir),
 		fmt.Sprintf("MEOW_TMUX_SOCKET=%s", h.TmuxSocket),
+		// Use simulator instead of real Claude for E2E tests
+		"MEOW_AGENT_COMMAND=/tmp/meow-agent-sim-e2e",
+		// Simulator starts much faster than real Claude
+		"MEOW_AGENT_STARTUP_DELAY=200ms",
 	)
 	return env
 }
