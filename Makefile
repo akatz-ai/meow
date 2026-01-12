@@ -85,10 +85,20 @@ clean:
 	rm -rf $(BIN_DIR)
 	rm -f coverage.out coverage.html
 
-## run: Build and run meow with arguments
+## run: Build and run meow with arguments (e.g., make run ARGS="--help")
 .PHONY: run
 run: build
 	./$(BIN_DIR)/$(BINARY) $(ARGS)
+
+## dev: Build and install to GOPATH/bin for development
+.PHONY: dev
+dev: install
+	@echo "meow installed to $(shell go env GOPATH)/bin/meow"
+
+## workflow: Build and run a workflow (e.g., make workflow FILE=path/to/workflow.toml)
+.PHONY: workflow
+workflow: install
+	meow run $(FILE)
 
 ## version: Show version info
 .PHONY: version
