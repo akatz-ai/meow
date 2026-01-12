@@ -100,10 +100,6 @@ func runAgents(cmd *cobra.Command, args []string) error {
 			fmt.Printf("    Tmux:   %s\n", a.TmuxSession)
 		}
 
-		if a.CurrentBead != "" {
-			fmt.Printf("    Bead:   %s\n", a.CurrentBead)
-		}
-
 		if a.Worktree != "" {
 			fmt.Printf("    Tree:   %s\n", a.Worktree)
 		}

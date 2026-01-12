@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/agent"
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/types"
 	"github.com/spf13/cobra"
 )
@@ -23,9 +22,8 @@ This is used when the agent is approaching context limits. The orchestrator
 will save the session ID, stop the agent, and restart with --resume.
 
 The command:
-1. Updates the current bead with handoff notes (if --notes provided)
-2. Creates a handoff signal file for the orchestrator
-3. The orchestrator will stop the agent and restart with --resume`,
+1. Creates a handoff signal file for the orchestrator
+2. The orchestrator will stop the agent and restart with --resume`,
 	RunE: runHandoff,
 }
 
@@ -42,11 +40,10 @@ func init() {
 
 // HandoffSignal represents a handoff request from an agent.
 type HandoffSignal struct {
-	AgentID     string    `json:"agent_id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Notes       string    `json:"notes,omitempty"`
-	CurrentBead string    `json:"current_bead,omitempty"`
-	Reason      string    `json:"reason"`
+	AgentID   string    `json:"agent_id"`
+	Timestamp time.Time `json:"timestamp"`
+	Notes     string    `json:"notes,omitempty"`
+	Reason    string    `json:"reason"`
 }
 
 func runHandoff(cmd *cobra.Command, args []string) error {
@@ -71,7 +68,7 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("agent ID required: use --agent flag or set MEOW_AGENT environment variable")
 	}
 
-	// Load agent store to find current bead
+	// Load agent store
 	agentStore := agent.NewStore(filepath.Join(dir, ".meow"))
 	if err := agentStore.Load(ctx); err != nil {
 		// Agent store may not exist in simple setups
@@ -80,51 +77,15 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get current bead from agent record
-	var currentBeadID string
-	agentInfo, err := agentStore.Get(ctx, agentID)
-	if err == nil && agentInfo != nil {
-		currentBeadID = agentInfo.CurrentBead
-	}
-
-	// If we have notes and a current bead, update the bead
-	if handoffNotes != "" && currentBeadID != "" {
-		beadsDir := filepath.Join(dir, ".beads")
-		beadStore := orchestrator.NewFileBeadStore(beadsDir)
-		if err := beadStore.Load(ctx); err != nil {
-			return fmt.Errorf("loading beads: %w", err)
-		}
-
-		bead, err := beadStore.Get(ctx, currentBeadID)
-		if err != nil {
-			return fmt.Errorf("getting current bead: %w", err)
-		}
-		if bead != nil {
-			// Append handoff notes to bead notes
-			handoffHeader := fmt.Sprintf("\n\n=== HANDOFF NOTES (%s) ===\n", time.Now().Format(time.RFC3339))
-			if bead.Notes != "" {
-				bead.Notes = bead.Notes + handoffHeader + handoffNotes
-			} else {
-				bead.Notes = handoffHeader + handoffNotes
-			}
-
-			if err := beadStore.Update(ctx, bead); err != nil {
-				return fmt.Errorf("updating bead with handoff notes: %w", err)
-			}
-
-			if verbose {
-				fmt.Printf("Updated bead %s with handoff notes\n", currentBeadID)
-			}
-		}
-	}
+	// Get agent info
+	agentInfo, _ := agentStore.Get(ctx, agentID)
 
 	// Create handoff signal for orchestrator
 	signal := HandoffSignal{
-		AgentID:     agentID,
-		Timestamp:   time.Now(),
-		Notes:       handoffNotes,
-		CurrentBead: currentBeadID,
-		Reason:      "context_refresh",
+		AgentID:   agentID,
+		Timestamp: time.Now(),
+		Notes:     handoffNotes,
+		Reason:    "context_refresh",
 	}
 
 	// Write handoff signal file
@@ -160,9 +121,6 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 
 	// Output confirmation
 	fmt.Printf("Handoff requested for agent: %s\n", agentID)
-	if currentBeadID != "" {
-		fmt.Printf("Current bead: %s\n", currentBeadID)
-	}
 	if handoffNotes != "" {
 		fmt.Println("Notes saved for next session.")
 	}

@@ -43,9 +43,6 @@ type Agent struct {
 	// Environment variables set for this agent
 	Env map[string]string `json:"env,omitempty" toml:"env,omitempty"`
 
-	// Current assignment
-	CurrentBead string `json:"current_bead,omitempty" toml:"current_bead,omitempty"`
-
 	// Timestamps
 	CreatedAt *time.Time `json:"created_at,omitempty" toml:"created_at,omitempty"`
 	StoppedAt *time.Time `json:"stopped_at,omitempty" toml:"stopped_at,omitempty"`
@@ -94,7 +91,6 @@ func (a *Agent) Stop() error {
 	a.Status = AgentStatusStopped
 	now := time.Now()
 	a.StoppedAt = &now
-	a.CurrentBead = ""
 	return nil
 }
 

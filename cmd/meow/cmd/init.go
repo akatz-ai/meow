@@ -7,9 +7,21 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/meow-stack/meow-machine/internal/agent"
 	"github.com/spf13/cobra"
 )
+
+// meowHooksJSON is the Claude Code settings.json content that configures
+// the Stop hook to emit meow events for the Ralph Wiggum persistence loop.
+const meowHooksJSON = `{
+  "hooks": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "meow event agent-stopped"
+      }
+    ]
+  }
+}`
 
 //go:embed templates/*.toml
 var embeddedTemplates embed.FS
@@ -176,8 +188,8 @@ func setupClaudeHooks(dir string) (bool, error) {
 		return false, fmt.Errorf("creating .claude directory: %w", err)
 	}
 
-	// Create settings with hooks (using shared constant from agent package)
-	if err := os.WriteFile(settingsPath, []byte(agent.MeowHooksJSON), 0644); err != nil {
+	// Create settings with hooks
+	if err := os.WriteFile(settingsPath, []byte(meowHooksJSON), 0644); err != nil {
 		return false, fmt.Errorf("writing settings: %w", err)
 	}
 

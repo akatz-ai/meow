@@ -36,7 +36,6 @@ func TestAgent_JSONRoundTrip(t *testing.T) {
 		TmuxSession: "meow-claude-1",
 		Workdir:     "/path/to/project",
 		Env:         map[string]string{"MEOW_AGENT": "claude-1"},
-		CurrentBead: "bd-task-001",
 		CreatedAt:   &now,
 	}
 
@@ -166,9 +165,6 @@ func TestAgent_StartStop(t *testing.T) {
 	}
 	if agent.StoppedAt == nil {
 		t.Error("StoppedAt should be set")
-	}
-	if agent.CurrentBead != "" {
-		t.Errorf("CurrentBead should be cleared, got %s", agent.CurrentBead)
 	}
 
 	// Try to stop again
