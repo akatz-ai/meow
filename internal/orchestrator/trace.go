@@ -13,17 +13,17 @@ import (
 type TraceAction string
 
 const (
-	TraceActionStart        TraceAction = "start"         // Orchestrator start
-	TraceActionBake         TraceAction = "bake"          // Template baked into beads
-	TraceActionSpawn        TraceAction = "spawn"         // Agent spawned
-	TraceActionDispatch     TraceAction = "dispatch"      // Bead dispatched
+	TraceActionStart         TraceAction = "start"          // Orchestrator start
+	TraceActionBake          TraceAction = "bake"           // Template baked into steps
+	TraceActionSpawn         TraceAction = "spawn"          // Agent spawned
+	TraceActionDispatch      TraceAction = "dispatch"       // Step dispatched
 	TraceActionConditionEval TraceAction = "condition_eval" // Condition evaluated
-	TraceActionExpand       TraceAction = "expand"        // Template expanded
-	TraceActionClose        TraceAction = "close"         // Bead closed
-	TraceActionStop         TraceAction = "stop"          // Agent stopped
-	TraceActionShutdown     TraceAction = "shutdown"      // Orchestrator shutdown
-	TraceActionError        TraceAction = "error"         // Error occurred
-	TraceActionResume       TraceAction = "resume"        // Orchestrator resumed
+	TraceActionExpand        TraceAction = "expand"         // Template expanded
+	TraceActionClose         TraceAction = "close"          // Step closed
+	TraceActionStop          TraceAction = "stop"           // Agent stopped
+	TraceActionShutdown      TraceAction = "shutdown"       // Orchestrator shutdown
+	TraceActionError         TraceAction = "error"          // Error occurred
+	TraceActionResume        TraceAction = "resume"         // Orchestrator resumed
 )
 
 // TraceEntry represents a single trace log entry.
@@ -31,8 +31,8 @@ type TraceEntry struct {
 	Timestamp  time.Time      `json:"ts"`
 	Action     TraceAction    `json:"action"`
 	WorkflowID string         `json:"workflow_id,omitempty"`
-	BeadID     string         `json:"bead_id,omitempty"`
-	BeadType   string         `json:"bead_type,omitempty"`
+	StepID     string         `json:"step_id,omitempty"`
+	StepType   string         `json:"step_type,omitempty"`
 	AgentID    string         `json:"agent_id,omitempty"`
 	Template   string         `json:"template,omitempty"`
 	Details    map[string]any `json:"details,omitempty"`
@@ -44,15 +44,15 @@ type TracerInterface interface {
 	Log(entry TraceEntry) error
 	LogStart(template string) error
 	LogResume(tickCount int) error
-	LogBake(template string, beadCount int) error
+	LogBake(template string, stepCount int) error
 	LogSpawn(agentID string, details map[string]any) error
-	LogDispatch(beadID, beadType string, details map[string]any) error
-	LogConditionEval(beadID string, result bool, details map[string]any) error
-	LogExpand(beadID, template string, childCount int) error
-	LogClose(beadID, beadType string, outputs map[string]any) error
+	LogDispatch(stepID, stepType string, details map[string]any) error
+	LogConditionEval(stepID string, result bool, details map[string]any) error
+	LogExpand(stepID, template string, childCount int) error
+	LogClose(stepID, stepType string, outputs map[string]any) error
 	LogStop(agentID string, graceful bool) error
 	LogShutdown(reason string) error
-	LogError(beadID string, err error) error
+	LogError(stepID string, err error) error
 	Close() error
 	Path() string
 }
@@ -140,11 +140,11 @@ func (t *Tracer) LogResume(tickCount int) error {
 }
 
 // LogBake traces template baking.
-func (t *Tracer) LogBake(template string, beadCount int) error {
+func (t *Tracer) LogBake(template string, stepCount int) error {
 	return t.Log(TraceEntry{
 		Action:   TraceActionBake,
 		Template: template,
-		Details:  map[string]any{"bead_count": beadCount},
+		Details:  map[string]any{"step_count": stepCount},
 	})
 }
 
@@ -157,18 +157,18 @@ func (t *Tracer) LogSpawn(agentID string, details map[string]any) error {
 	})
 }
 
-// LogDispatch traces bead dispatch.
-func (t *Tracer) LogDispatch(beadID, beadType string, details map[string]any) error {
+// LogDispatch traces step dispatch.
+func (t *Tracer) LogDispatch(stepID, stepType string, details map[string]any) error {
 	return t.Log(TraceEntry{
 		Action:   TraceActionDispatch,
-		BeadID:   beadID,
-		BeadType: beadType,
+		StepID:   stepID,
+		StepType: stepType,
 		Details:  details,
 	})
 }
 
 // LogConditionEval traces condition evaluation.
-func (t *Tracer) LogConditionEval(beadID string, result bool, details map[string]any) error {
+func (t *Tracer) LogConditionEval(stepID string, result bool, details map[string]any) error {
 	// Copy details to avoid mutating the input
 	merged := make(map[string]any)
 	for k, v := range details {
@@ -177,28 +177,28 @@ func (t *Tracer) LogConditionEval(beadID string, result bool, details map[string
 	merged["result"] = result
 	return t.Log(TraceEntry{
 		Action:   TraceActionConditionEval,
-		BeadID:   beadID,
-		BeadType: "condition",
+		StepID:   stepID,
+		StepType: "condition",
 		Details:  merged,
 	})
 }
 
 // LogExpand traces template expansion.
-func (t *Tracer) LogExpand(beadID, template string, childCount int) error {
+func (t *Tracer) LogExpand(stepID, template string, childCount int) error {
 	return t.Log(TraceEntry{
 		Action:   TraceActionExpand,
-		BeadID:   beadID,
+		StepID:   stepID,
 		Template: template,
 		Details:  map[string]any{"child_count": childCount},
 	})
 }
 
-// LogClose traces bead close.
-func (t *Tracer) LogClose(beadID, beadType string, outputs map[string]any) error {
+// LogClose traces step close.
+func (t *Tracer) LogClose(stepID, stepType string, outputs map[string]any) error {
 	return t.Log(TraceEntry{
 		Action:   TraceActionClose,
-		BeadID:   beadID,
-		BeadType: beadType,
+		StepID:   stepID,
+		StepType: stepType,
 		Details:  map[string]any{"outputs": outputs},
 	})
 }
@@ -221,10 +221,10 @@ func (t *Tracer) LogShutdown(reason string) error {
 }
 
 // LogError traces an error.
-func (t *Tracer) LogError(beadID string, err error) error {
+func (t *Tracer) LogError(stepID string, err error) error {
 	return t.Log(TraceEntry{
 		Action: TraceActionError,
-		BeadID: beadID,
+		StepID: stepID,
 		Error:  err.Error(),
 	})
 }
@@ -238,17 +238,17 @@ var (
 // NullTracer is a tracer that discards all entries.
 type NullTracer struct{}
 
-func (n *NullTracer) Log(_ TraceEntry) error               { return nil }
-func (n *NullTracer) LogStart(_ string) error              { return nil }
-func (n *NullTracer) LogResume(_ int) error                { return nil }
-func (n *NullTracer) LogBake(_ string, _ int) error        { return nil }
-func (n *NullTracer) LogSpawn(_ string, _ map[string]any) error { return nil }
-func (n *NullTracer) LogDispatch(_ string, _ string, _ map[string]any) error { return nil }
+func (n *NullTracer) Log(_ TraceEntry) error                                    { return nil }
+func (n *NullTracer) LogStart(_ string) error                                   { return nil }
+func (n *NullTracer) LogResume(_ int) error                                     { return nil }
+func (n *NullTracer) LogBake(_ string, _ int) error                             { return nil }
+func (n *NullTracer) LogSpawn(_ string, _ map[string]any) error                 { return nil }
+func (n *NullTracer) LogDispatch(_ string, _ string, _ map[string]any) error    { return nil }
 func (n *NullTracer) LogConditionEval(_ string, _ bool, _ map[string]any) error { return nil }
-func (n *NullTracer) LogExpand(_ string, _ string, _ int) error { return nil }
-func (n *NullTracer) LogClose(_ string, _ string, _ map[string]any) error { return nil }
-func (n *NullTracer) LogStop(_ string, _ bool) error       { return nil }
-func (n *NullTracer) LogShutdown(_ string) error           { return nil }
-func (n *NullTracer) LogError(_ string, _ error) error     { return nil }
-func (n *NullTracer) Close() error                         { return nil }
-func (n *NullTracer) Path() string                         { return "" }
+func (n *NullTracer) LogExpand(_ string, _ string, _ int) error                 { return nil }
+func (n *NullTracer) LogClose(_ string, _ string, _ map[string]any) error       { return nil }
+func (n *NullTracer) LogStop(_ string, _ bool) error                            { return nil }
+func (n *NullTracer) LogShutdown(_ string) error                                { return nil }
+func (n *NullTracer) LogError(_ string, _ error) error                          { return nil }
+func (n *NullTracer) Close() error                                              { return nil }
+func (n *NullTracer) Path() string                                              { return "" }

@@ -40,8 +40,8 @@ func TestTracer_Log(t *testing.T) {
 
 	entry := TraceEntry{
 		Action:   TraceActionDispatch,
-		BeadID:   "bd-123",
-		BeadType: "task",
+		StepID:   "step-123",
+		StepType: "task",
 		Details:  map[string]any{"key": "value"},
 	}
 
@@ -59,8 +59,8 @@ func TestTracer_Log(t *testing.T) {
 	if e.Action != TraceActionDispatch {
 		t.Errorf("Action = %s, want dispatch", e.Action)
 	}
-	if e.BeadID != "bd-123" {
-		t.Errorf("BeadID = %s, want bd-123", e.BeadID)
+	if e.StepID != "step-123" {
+		t.Errorf("StepID = %s, want step-123", e.StepID)
 	}
 	if e.WorkflowID != "wf-001" {
 		t.Errorf("WorkflowID = %s, want wf-001", e.WorkflowID)
@@ -124,7 +124,7 @@ func TestTracer_LogDispatch(t *testing.T) {
 	}
 	defer tracer.Close()
 
-	if err := tracer.LogDispatch("bd-001", "task", map[string]any{"agent": "claude-1"}); err != nil {
+	if err := tracer.LogDispatch("step-001", "task", map[string]any{"agent": "claude-1"}); err != nil {
 		t.Fatalf("LogDispatch failed: %v", err)
 	}
 
@@ -132,11 +132,11 @@ func TestTracer_LogDispatch(t *testing.T) {
 	if entries[0].Action != TraceActionDispatch {
 		t.Errorf("Action = %s, want dispatch", entries[0].Action)
 	}
-	if entries[0].BeadID != "bd-001" {
-		t.Errorf("BeadID = %s, want bd-001", entries[0].BeadID)
+	if entries[0].StepID != "step-001" {
+		t.Errorf("StepID = %s, want step-001", entries[0].StepID)
 	}
-	if entries[0].BeadType != "task" {
-		t.Errorf("BeadType = %s, want task", entries[0].BeadType)
+	if entries[0].StepType != "task" {
+		t.Errorf("StepType = %s, want task", entries[0].StepType)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestTracer_LogConditionEval(t *testing.T) {
 	}
 	defer tracer.Close()
 
-	if err := tracer.LogConditionEval("bd-cond", true, map[string]any{"shell": "test -f foo"}); err != nil {
+	if err := tracer.LogConditionEval("step-cond", true, map[string]any{"shell": "test -f foo"}); err != nil {
 		t.Fatalf("LogConditionEval failed: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestTracer_LogExpand(t *testing.T) {
 	}
 	defer tracer.Close()
 
-	if err := tracer.LogExpand("bd-expand", "child-template", 5); err != nil {
+	if err := tracer.LogExpand("step-expand", "child-template", 5); err != nil {
 		t.Fatalf("LogExpand failed: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestTracer_LogClose(t *testing.T) {
 	defer tracer.Close()
 
 	outputs := map[string]any{"result": "success"}
-	if err := tracer.LogClose("bd-001", "task", outputs); err != nil {
+	if err := tracer.LogClose("step-001", "task", outputs); err != nil {
 		t.Fatalf("LogClose failed: %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestTracer_LogError(t *testing.T) {
 	}
 	defer tracer.Close()
 
-	if err := tracer.LogError("bd-001", errors.New("test error")); err != nil {
+	if err := tracer.LogError("step-001", errors.New("test error")); err != nil {
 		t.Fatalf("LogError failed: %v", err)
 	}
 
@@ -232,8 +232,8 @@ func TestTracer_MultipleEntries(t *testing.T) {
 
 	// Log multiple entries
 	_ = tracer.LogStart("template")
-	_ = tracer.LogDispatch("bd-1", "task", nil)
-	_ = tracer.LogClose("bd-1", "task", nil)
+	_ = tracer.LogDispatch("step-1", "task", nil)
+	_ = tracer.LogClose("step-1", "task", nil)
 	_ = tracer.LogShutdown("completed")
 
 	entries := readTraceFile(t, tracer.Path())
@@ -257,10 +257,10 @@ func TestNullTracer(t *testing.T) {
 	if err := tracer.LogStart("test"); err != nil {
 		t.Errorf("LogStart failed: %v", err)
 	}
-	if err := tracer.LogDispatch("bd", "task", nil); err != nil {
+	if err := tracer.LogDispatch("step", "task", nil); err != nil {
 		t.Errorf("LogDispatch failed: %v", err)
 	}
-	if err := tracer.LogClose("bd", "task", nil); err != nil {
+	if err := tracer.LogClose("step", "task", nil); err != nil {
 		t.Errorf("LogClose failed: %v", err)
 	}
 	if err := tracer.Close(); err != nil {

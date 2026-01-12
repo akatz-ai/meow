@@ -16,7 +16,7 @@ var traceCmd = &cobra.Command{
 	Short: "Show execution trace",
 	Long: `Display the execution trace of the current workflow.
 
-Shows the sequence of bead executions with timestamps, durations,
+Shows the sequence of step executions with timestamps, durations,
 and outcomes. Useful for debugging workflow issues.`,
 	RunE: runTrace,
 }
@@ -146,30 +146,30 @@ func formatTraceEntry(entry orchestrator.TraceEntry) {
 		if entry.Template != "" {
 			parts = append(parts, fmt.Sprintf("template=%s", entry.Template))
 		}
-		if count, ok := entry.Details["bead_count"]; ok {
-			parts = append(parts, fmt.Sprintf("beads=%v", count))
+		if count, ok := entry.Details["step_count"]; ok {
+			parts = append(parts, fmt.Sprintf("steps=%v", count))
 		}
 	case orchestrator.TraceActionSpawn:
 		if entry.AgentID != "" {
 			parts = append(parts, fmt.Sprintf("agent=%s", entry.AgentID))
 		}
 	case orchestrator.TraceActionDispatch:
-		if entry.BeadID != "" {
-			parts = append(parts, fmt.Sprintf("bead=%s", entry.BeadID))
+		if entry.StepID != "" {
+			parts = append(parts, fmt.Sprintf("step=%s", entry.StepID))
 		}
-		if entry.BeadType != "" {
-			parts = append(parts, fmt.Sprintf("type=%s", entry.BeadType))
+		if entry.StepType != "" {
+			parts = append(parts, fmt.Sprintf("type=%s", entry.StepType))
 		}
 	case orchestrator.TraceActionConditionEval:
-		if entry.BeadID != "" {
-			parts = append(parts, fmt.Sprintf("bead=%s", entry.BeadID))
+		if entry.StepID != "" {
+			parts = append(parts, fmt.Sprintf("step=%s", entry.StepID))
 		}
 		if result, ok := entry.Details["result"]; ok {
 			parts = append(parts, fmt.Sprintf("result=%v", result))
 		}
 	case orchestrator.TraceActionExpand:
-		if entry.BeadID != "" {
-			parts = append(parts, fmt.Sprintf("bead=%s", entry.BeadID))
+		if entry.StepID != "" {
+			parts = append(parts, fmt.Sprintf("step=%s", entry.StepID))
 		}
 		if entry.Template != "" {
 			parts = append(parts, fmt.Sprintf("template=%s", entry.Template))
@@ -178,11 +178,11 @@ func formatTraceEntry(entry orchestrator.TraceEntry) {
 			parts = append(parts, fmt.Sprintf("children=%v", count))
 		}
 	case orchestrator.TraceActionClose:
-		if entry.BeadID != "" {
-			parts = append(parts, fmt.Sprintf("bead=%s", entry.BeadID))
+		if entry.StepID != "" {
+			parts = append(parts, fmt.Sprintf("step=%s", entry.StepID))
 		}
-		if entry.BeadType != "" {
-			parts = append(parts, fmt.Sprintf("type=%s", entry.BeadType))
+		if entry.StepType != "" {
+			parts = append(parts, fmt.Sprintf("type=%s", entry.StepType))
 		}
 	case orchestrator.TraceActionStop:
 		if entry.AgentID != "" {
@@ -196,8 +196,8 @@ func formatTraceEntry(entry orchestrator.TraceEntry) {
 			parts = append(parts, fmt.Sprintf("reason=%v", reason))
 		}
 	case orchestrator.TraceActionError:
-		if entry.BeadID != "" {
-			parts = append(parts, fmt.Sprintf("bead=%s", entry.BeadID))
+		if entry.StepID != "" {
+			parts = append(parts, fmt.Sprintf("step=%s", entry.StepID))
 		}
 		if entry.Error != "" {
 			parts = append(parts, fmt.Sprintf("error=%q", truncate(entry.Error, 50)))
