@@ -1,0 +1,33 @@
+#!/bin/bash
+# meow-dev: Development wrapper that rebuilds meow before running
+#
+# Usage: meow-dev [args...]
+#   Same as: go build && meow [args...]
+#
+# Install:
+#   ln -sf /data/projects/meow-machine/scripts/meow-dev ~/go/bin/meow-dev
+
+set -e
+
+MEOW_ROOT="/data/projects/meow-machine"
+MEOW_BIN="$HOME/go/bin/meow"
+
+# Rebuild if source is newer than binary
+NEEDS_BUILD=0
+
+if [ ! -f "$MEOW_BIN" ]; then
+    NEEDS_BUILD=1
+else
+    # Check if any .go file is newer than the binary
+    if find "$MEOW_ROOT" -name "*.go" -newer "$MEOW_BIN" 2>/dev/null | grep -q .; then
+        NEEDS_BUILD=1
+    fi
+fi
+
+if [ "$NEEDS_BUILD" = "1" ]; then
+    echo "[meow-dev] Rebuilding..." >&2
+    (cd "$MEOW_ROOT" && go build -o "$MEOW_BIN" ./cmd/meow/)
+    echo "[meow-dev] Build complete" >&2
+fi
+
+exec "$MEOW_BIN" "$@"
