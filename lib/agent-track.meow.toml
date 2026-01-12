@@ -1,51 +1,60 @@
-# Agent Track Library Template
+# ============================================================================
+# MEOW Library: Agent Track Lifecycle
+# ============================================================================
 #
-# Reusable template for running a single agent through a complete work cycle:
-#   setup-hooks → spawn → work → review → verify → kill → done
+# Complete agent lifecycle: spawn → work → review → verify-clean → kill
+# With Ralph Wiggum persistence monitor and context monitor running in parallel.
+#
+# This is the battle-tested pattern extracted from dual/quad agent workflows.
+# Each agent works in isolation, self-reviews, ensures clean git state, then exits.
+# The RW monitor ensures agents don't get stuck by re-nudging on unexpected stops.
+# The context monitor auto-compacts when context usage is high.
+#
+# Variables:
+#   agent_name   (required) - Unique agent identifier
+#   track_name   (required) - Track name for logging/identification
+#   workdir      (required) - Working directory (typically a worktree path)
+#   task_prompt  (required) - The main task prompt for the agent
+#   spec_file    (default: "none") - Spec file to read first, or "none" to skip
+#   spawn_args   (default: "") - Extra CLI args for claude
+#   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor
+#   max_nudges   (default: "10") - RW safety limit before force-completing
+#   enable_context_monitor (default: "true") - Enable context usage auto-compact
+#   context_threshold (default: "70") - Context % to trigger /compact
 #
 # Usage:
 #   [[main.steps]]
-#   id = "task-track"
+#   id = "worker-1"
 #   executor = "expand"
 #   template = "lib/agent-track"
 #   variables = {
-#     agent_name = "worker-1",
-#     track_name = "feature-implementation",
-#     workdir = ".meow/worktrees/feature-track",
-#     task_prompt = "Implement the feature described in...",
-#     spec_file = "docs/SPEC.md"  # Optional, use "none" to skip
+#     agent_name = "agent-1",
+#     track_name = "feature-x",
+#     workdir = "{{setup-worktree.create.outputs.path}}",
+#     task_prompt = "Implement feature X..."
 #   }
 #
-# The template handles:
-#   1. Setting up Claude Code hooks for event emission
-#   2. Spawning the agent in the specified workdir
-#   3. Executing the task with optional spec file context
-#   4. Fresh eyes review (reread changes, catch bugs)
-#   5. Ensuring clean git state before completion
-#   6. Graceful agent shutdown
-#
-# Variables:
-#   agent_name (required): Unique identifier for this agent instance
-#   track_name (required): Human-readable name for logging/display
-#   workdir (required): Working directory path for the agent
-#   task_prompt (required): The task instructions for the agent
-#   spec_file (default="none"): Path to spec file to read first, or "none" to skip
+# ============================================================================
 
 [main]
 name = "agent-track"
-description = "Complete agent work cycle: spawn → work → review → verify → kill"
+description = "Complete agent lifecycle with work, review, cleanup, and parallel monitors"
 
 [main.variables]
 agent_name = { required = true, description = "Unique agent identifier" }
-track_name = { required = true, description = "Human-readable track name" }
-workdir = { required = true, description = "Working directory for the agent" }
-task_prompt = { required = true, description = "Task instructions for the agent" }
-spec_file = { default = "none", description = "Spec file to read first (or 'none' to skip)" }
+track_name = { required = true, description = "Track name for identification" }
+workdir = { required = true, description = "Working directory path" }
+task_prompt = { required = true, description = "Main task prompt" }
+spec_file = { default = "none", description = "Spec file to read first (or 'none' to skip - task prompts should be self-contained)" }
 spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --model opus)" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
+max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
+enable_context_monitor = { default = "true", description = "Enable context usage monitor with auto-compact (true/false)" }
+context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SETUP: Configure event hooks in the worktree
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 1: Setup Hooks (for agent-stopped events)
+# ============================================================================
 
 [[main.steps]]
 id = "setup-hooks"
@@ -53,9 +62,9 @@ executor = "expand"
 template = "lib/claude-events#setup-stop-hook"
 variables = { worktree = "{{workdir}}" }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SPAWN: Start the agent session
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 2: Spawn Agent
+# ============================================================================
 
 [[main.steps]]
 id = "spawn"
@@ -65,9 +74,57 @@ workdir = "{{workdir}}"
 spawn_args = "{{spawn_args}}"
 needs = ["setup-hooks"]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# WORK: Execute the main task
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 3: Ralph Wiggum Persistence Monitor (runs in parallel, optional)
+# ============================================================================
+#
+# Monitors for unexpected agent stops and re-injects nudge prompts.
+# Runs in parallel with work/review/verify-clean steps.
+# Self-terminates when verify-clean completes.
+# Disable with enable_rw = "false"
+
+[[main.steps]]
+id = "persistence"
+executor = "branch"
+condition = "test '{{enable_rw}}' = 'true'"
+needs = ["spawn"]
+
+[main.steps.on_true]
+template = "lib/agent-persistence#monitor"
+variables = { agent = "{{agent_name}}", check_step = "verify-clean", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`" }
+
+[main.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Ralph Wiggum monitor disabled (enable_rw=false)'" }
+]
+
+# ============================================================================
+# Step 4: Context Monitor (runs in parallel, optional)
+# ============================================================================
+#
+# Monitors agent context usage and auto-compacts when above threshold.
+# Runs in parallel with work/review/verify-clean steps.
+# Self-terminates when agent tmux session is killed.
+# Disable with enable_context_monitor = "false"
+
+[[main.steps]]
+id = "context-monitor"
+executor = "branch"
+condition = "test '{{enable_context_monitor}}' = 'true'"
+needs = ["spawn"]
+
+[main.steps.on_true]
+template = "lib/claude-utils#context-monitor"
+variables = { agent = "{{agent_name}}", threshold = "{{context_threshold}}" }
+
+[main.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Context monitor disabled (enable_context_monitor=false)'" }
+]
+
+# ============================================================================
+# Step 5: Main Work (with optional spec file)
+# ============================================================================
 #
 # Uses branch to conditionally include spec file reading based on spec_file value.
 
@@ -80,16 +137,16 @@ needs = ["spawn"]
 # Spec file exists - include it in the prompt
 [main.steps.on_true]
 template = ".work-with-spec"
-variables = { agent_name = "{{agent_name}}", task_prompt = "{{task_prompt}}", spec_file = "{{spec_file}}" }
+variables = { agent_name = "{{agent_name}}", track_name = "{{track_name}}", task_prompt = "{{task_prompt}}", spec_file = "{{spec_file}}" }
 
 # No spec file - work without it
 [main.steps.on_false]
 template = ".work-no-spec"
-variables = { agent_name = "{{agent_name}}", task_prompt = "{{task_prompt}}" }
+variables = { agent_name = "{{agent_name}}", track_name = "{{track_name}}", task_prompt = "{{task_prompt}}" }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# REVIEW: Fresh eyes code review
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 6: Self-Review
+# ============================================================================
 
 [[main.steps]]
 id = "review"
@@ -97,25 +154,31 @@ executor = "agent"
 agent = "{{agent_name}}"
 needs = ["check-spec"]
 prompt = """
-# Fresh Eyes Review
+# Self-Review: {{track_name}} Track
 
-Take a step back and carefully reread the most recent code changes with fresh eyes.
+Take a step back and carefully reread your most recent code changes with fresh eyes.
 
-Look for any obvious bugs, logical errors, or confusing patterns.
+## Review Checklist
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Verify test coverage** - do tests actually test the important behavior?
+5. **Check imports** - any unused imports? Missing imports that will cause build failures?
+6. **Run tests** - `go test -short ./...`
 
-Fix anything you spot without waiting for direction.
+## Actions
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
 
-When you're satisfied with the code quality, ensure:
-1. All changes are committed
-2. Tests pass: `go test -short ./...`
-3. Build passes: `go build ./...`
-
-Then: `meow done`
+## When Done
+```
+meow done
+```
 """
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VERIFY: Ensure clean git state
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 7: Verify Clean Git State
+# ============================================================================
 
 [[main.steps]]
 id = "verify-clean"
@@ -135,31 +198,31 @@ fi
 echo "Track {{track_name}} is clean - all changes committed"
 """
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# KILL: Gracefully terminate the agent
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 8: Kill Agent
+# ============================================================================
 
 [[main.steps]]
 id = "kill"
 executor = "kill"
 agent = "{{agent_name}}"
-graceful = true
 needs = ["verify-clean"]
+graceful = true
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# DONE: Mark track completion
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# Step 9: Done Marker (for downstream dependencies)
+# ============================================================================
 
 [[main.steps]]
 id = "done"
 executor = "shell"
-command = "echo 'Agent track {{track_name}} completed successfully'"
+command = "echo '{{track_name}} track complete'"
 needs = ["kill"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
 # INTERNAL: Work step variants
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
 
 [work-with-spec]
 name = "work-with-spec"
@@ -168,6 +231,7 @@ internal = true
 
 [work-with-spec.variables]
 agent_name = { required = true }
+track_name = { required = true }
 task_prompt = { required = true }
 spec_file = { required = true }
 
@@ -176,13 +240,14 @@ id = "work"
 executor = "agent"
 agent = "{{agent_name}}"
 prompt = """
-# Your Task
+# {{track_name}} Agent Task
 
-Before starting, read the project specification for context:
+## FIRST: Read the Specification
+Before doing ANY work, read the complete specification:
 
-```
 @{{spec_file}}
-```
+
+This is REQUIRED. The spec defines all types, patterns, and constraints you must follow.
 
 ---
 
@@ -190,15 +255,27 @@ Before starting, read the project specification for context:
 
 ---
 
-## Important Guidelines
+## IMPORTANT CONSTRAINTS
+- **ONLY** implement the work described above
+- Do NOT work on unrelated beads or issues you might see
+- Do NOT modify files outside your assignment scope
+- If you discover related work needed, note it but do NOT implement it
 
-1. **Work incrementally**: Commit your changes as you make them
-2. **Run tests**: After making changes, run `go test -short ./...`
-3. **Verify build**: Run `go build ./...` to catch compile errors
-4. **When done**: Run `meow done` to signal completion
+## Workflow
+1. If beads are referenced, run `bd show <bead-id>` for full requirements
+2. Write tests first (TDD approach) when implementing code
+3. Implement the minimum code to pass tests
+4. Commit after each logical unit with a clear message
+5. If beads are referenced, close them as you complete: `bd close <bead-id>`
 
-If you encounter blockers or need clarification, describe the situation clearly.
+## When Done
+After ALL your assigned work is complete, run:
+
+```
+meow done
+```
 """
+
 
 [work-no-spec]
 name = "work-no-spec"
@@ -207,6 +284,7 @@ internal = true
 
 [work-no-spec.variables]
 agent_name = { required = true }
+track_name = { required = true }
 task_prompt = { required = true }
 
 [[work-no-spec.steps]]
@@ -214,18 +292,29 @@ id = "work"
 executor = "agent"
 agent = "{{agent_name}}"
 prompt = """
-# Your Task
+# {{track_name}} Agent Task
 
 {{task_prompt}}
 
 ---
 
-## Important Guidelines
+## IMPORTANT CONSTRAINTS
+- **ONLY** implement the work described above
+- Do NOT work on unrelated beads or issues you might see
+- Do NOT modify files outside your assignment scope
+- If you discover related work needed, note it but do NOT implement it
 
-1. **Work incrementally**: Commit your changes as you make them
-2. **Run tests**: After making changes, run `go test -short ./...`
-3. **Verify build**: Run `go build ./...` to catch compile errors
-4. **When done**: Run `meow done` to signal completion
+## Workflow
+1. If beads are referenced, run `bd show <bead-id>` for full requirements
+2. Write tests first (TDD approach) when implementing code
+3. Implement the minimum code to pass tests
+4. Commit after each logical unit with a clear message
+5. If beads are referenced, close them as you complete: `bd close <bead-id>`
 
-If you encounter blockers or need clarification, describe the situation clearly.
+## When Done
+After ALL your assigned work is complete, run:
+
+```
+meow done
+```
 """
