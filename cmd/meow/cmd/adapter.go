@@ -12,12 +12,11 @@ var adapterCmd = &cobra.Command{
 Adapters encapsulate agent-specific runtime behavior, allowing MEOW to orchestrate
 different types of agents (Claude Code, Aider, etc.) through a common interface.
 
-Adapters can come from three locations (in priority order):
+Adapters can come from two locations (in priority order):
   1. Project-local: .meow/adapters/<name>/adapter.toml
   2. Global:        ~/.meow/adapters/<name>/adapter.toml
-  3. Built-in:      Compiled into the MEOW binary
 
-Project adapters override global ones, which override built-in ones.`,
+Project adapters override global ones.`,
 }
 
 func init() {

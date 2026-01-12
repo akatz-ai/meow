@@ -5,21 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/meow-stack/meow-machine/internal/adapter/builtin"
 )
-
-func TestAdapterRemoveBuiltinRejectsRemoval(t *testing.T) {
-	for _, name := range builtin.BuiltinAdapterNames() {
-		err := runAdapterRemove(adapterRemoveCmd, []string{name})
-		if err == nil {
-			t.Errorf("expected error when removing built-in adapter %q", name)
-		}
-		if !strings.Contains(err.Error(), "cannot remove built-in adapter") {
-			t.Errorf("expected 'cannot remove built-in adapter' error, got: %v", err)
-		}
-	}
-}
 
 func TestAdapterRemoveMutuallyExclusiveFlags(t *testing.T) {
 	// Save and restore flag values

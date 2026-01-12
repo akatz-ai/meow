@@ -46,6 +46,12 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Load config (defaults + global + project)
+	cfg, err := config.LoadFromDir(dir)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	// Determine workflows directory - check MEOW_STATE_DIR env var first (used by E2E tests),
 	// then fall back to default .meow/workflows
 	workflowsDir := os.Getenv("MEOW_STATE_DIR")
@@ -83,10 +89,14 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workflow %s is already %s, cannot resume", workflowID, wf.Status)
 	}
 
-	fmt.Printf("Resuming workflow %s (status: %s)\n", workflowID, wf.Status)
+	if wf.DefaultAdapter == "" && cfg.Agent.DefaultAdapter != "" {
+		wf.DefaultAdapter = cfg.Agent.DefaultAdapter
+		if err := store.Save(ctx, wf); err != nil {
+			return fmt.Errorf("saving workflow defaults: %w", err)
+		}
+	}
 
-	// Create config with defaults
-	cfg := config.Default()
+	fmt.Printf("Resuming workflow %s (status: %s)\n", workflowID, wf.Status)
 
 	// Create logger
 	logLevel := slog.LevelInfo
@@ -101,7 +111,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 	shellRunner := orchestrator.NewDefaultShellRunner()
 
 	// Create agent manager for tmux sessions
-	// Passing nil registry uses the default (project + global + built-in adapters)
+	// Passing nil registry uses the default (project + global adapters)
 	agentManager := orchestrator.NewTmuxAgentManager(dir, nil, logger)
 
 	// Create template expander

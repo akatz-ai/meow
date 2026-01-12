@@ -39,7 +39,7 @@ const (
 // AgentConfig holds agent-related settings.
 type AgentConfig struct {
 	// DefaultAdapter specifies the default adapter to use when spawning agents.
-	// Resolution order: step-level > workflow-level > project-level > global-level > built-in default ("claude").
+	// Resolution order: step-level > workflow-level > project-level > global-level.
 	DefaultAdapter string `toml:"default_adapter"`
 
 	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks
@@ -118,8 +118,8 @@ func Default() *Config {
 			File:   ".meow/state/meow.log",
 		},
 		Agent: AgentConfig{
-			DefaultAdapter: "claude",  // Built-in default adapter
-			SetupHooks:     true,      // Enable Ralph Wiggum loop by default for agents
+			DefaultAdapter: "",
+			SetupHooks:     true, // Enable Ralph Wiggum loop by default for agents
 		},
 	}
 }

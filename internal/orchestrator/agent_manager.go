@@ -81,8 +81,11 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 	cfg := step.Spawn
 	agentID := cfg.Agent
 
-	// Resolve which adapter to use (step > workflow > project > global > "claude")
-	adapterName := m.registry.Resolve(cfg.Adapter, "", "", "")
+	// Resolve which adapter to use (step > workflow > project > global)
+	adapterName := m.registry.Resolve(cfg.Adapter, wf.DefaultAdapter, "", "")
+	if adapterName == "" {
+		return fmt.Errorf("no adapter specified for agent %q", agentID)
+	}
 	adapterCfg, err := m.registry.Load(adapterName)
 	if err != nil {
 		return fmt.Errorf("loading adapter %q: %w", adapterName, err)

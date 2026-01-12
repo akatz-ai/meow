@@ -53,6 +53,12 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Load config (defaults + global + project)
+	cfg, err := config.LoadFromDir(dir)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	// Ensure .meow/workflows directory exists
 	workflowsDir := filepath.Join(dir, ".meow", "workflows")
 	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
@@ -123,6 +129,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Create a Workflow object
 	wf := types.NewWorkflow(workflowID, templatePath, vars)
+	if wf.DefaultAdapter == "" && cfg.Agent.DefaultAdapter != "" {
+		wf.DefaultAdapter = cfg.Agent.DefaultAdapter
+	}
 
 	// Copy conditional cleanup scripts from template (opt-in cleanup)
 	wf.CleanupOnSuccess = templateWorkflow.CleanupOnSuccess
@@ -171,9 +180,6 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("starting workflow: %w", err)
 	}
 
-	// Create config with defaults
-	cfg := config.Default()
-
 	// Create logger
 	logLevel := slog.LevelInfo
 	if verbose {
@@ -187,7 +193,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	shellRunner := orchestrator.NewDefaultShellRunner()
 
 	// Create agent manager for tmux sessions
-	// Passing nil registry uses the default (project + global + built-in adapters)
+	// Passing nil registry uses the default (project + global adapters)
 	agentManager := orchestrator.NewTmuxAgentManager(dir, nil, logger)
 
 	// Create template expander

@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/meow-stack/meow-machine/internal/types"
 )
 
 func TestRegistry_LoadFromProject(t *testing.T) {
@@ -134,31 +132,6 @@ command = "global-agent"
 	}
 }
 
-func TestRegistry_LoadBuiltin(t *testing.T) {
-	registry := NewRegistry("", "")
-
-	// Register a built-in adapter
-	builtinConfig := &types.AdapterConfig{
-		Adapter: types.AdapterMeta{
-			Name:        "builtin-agent",
-			Description: "A built-in adapter",
-		},
-		Spawn: types.AdapterSpawnConfig{
-			Command: "builtin-command",
-		},
-	}
-	registry.RegisterBuiltin("builtin-agent", builtinConfig)
-
-	config, err := registry.Load("builtin-agent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if config.Adapter.Name != "builtin-agent" {
-		t.Errorf("expected name 'builtin-agent', got %q", config.Adapter.Name)
-	}
-}
-
 func TestRegistry_NotFound(t *testing.T) {
 	registry := NewRegistry("", "")
 
@@ -284,12 +257,12 @@ func TestRegistry_Resolve(t *testing.T) {
 			expected:        "global-adapter",
 		},
 		{
-			name:            "builtin default when nothing set",
+			name:            "empty when nothing set",
 			stepAdapter:     "",
 			workflowDefault: "",
 			projectDefault:  "",
 			globalDefault:   "",
-			expected:        "claude",
+			expected:        "",
 		},
 	}
 
@@ -338,12 +311,6 @@ command = "cmd"
 
 	registry := NewRegistry(globalDir, projectDir)
 
-	// Register a built-in
-	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
-		Adapter: types.AdapterMeta{Name: "builtin"},
-		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
-	})
-
 	names, err := registry.List()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -352,7 +319,6 @@ command = "cmd"
 	expected := map[string]bool{
 		"project-only": true,
 		"global-only":  true,
-		"builtin":      true,
 	}
 
 	if len(names) != len(expected) {
@@ -393,16 +359,6 @@ command = "cmd"
 	}
 	if path != adapterDir {
 		t.Errorf("expected %s, got %s", adapterDir, path)
-	}
-
-	// Built-in adapter
-	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
-		Adapter: types.AdapterMeta{Name: "builtin"},
-		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
-	})
-	_, err = registry.GetPath("builtin")
-	if !IsBuiltinPath(err) {
-		t.Errorf("expected BuiltinPathError, got %T: %v", err, err)
 	}
 
 	// Non-existent
@@ -478,19 +434,13 @@ command = "cmd"
 
 	registry := NewRegistry(globalDir, projectDir)
 
-	// Register a built-in
-	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
-		Adapter: types.AdapterMeta{Name: "builtin", Description: "Built-in adapter"},
-		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
-	})
-
 	infos, err := registry.ListWithInfo()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(infos) != 3 {
-		t.Errorf("expected 3 adapters, got %d", len(infos))
+	if len(infos) != 2 {
+		t.Errorf("expected 2 adapters, got %d", len(infos))
 	}
 
 	// Check that we have all sources represented
@@ -507,9 +457,6 @@ command = "cmd"
 	}
 	if !sources[SourceGlobal] {
 		t.Error("missing global adapter")
-	}
-	if !sources[SourceBuiltin] {
-		t.Error("missing built-in adapter")
 	}
 }
 
@@ -607,68 +554,9 @@ command = "cmd"
 		t.Errorf("expected path %q, got %q", adapterDir, info.Path)
 	}
 
-	// Built-in adapter
-	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
-		Adapter: types.AdapterMeta{Name: "builtin", Description: "Built-in"},
-		Spawn:   types.AdapterSpawnConfig{Command: "cmd"},
-	})
-	info, err = registry.GetInfo("builtin")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info.Source != SourceBuiltin {
-		t.Errorf("expected source %q, got %q", SourceBuiltin, info.Source)
-	}
-	if info.Path != "" {
-		t.Errorf("expected empty path for built-in, got %q", info.Path)
-	}
-
 	// Non-existent
 	_, err = registry.GetInfo("nonexistent")
 	if !IsNotFound(err) {
 		t.Errorf("expected NotFoundError, got %T: %v", err, err)
-	}
-}
-
-func TestRegistry_GetInfo_OverrideBuiltin(t *testing.T) {
-	tempDir := t.TempDir()
-	globalDir := filepath.Join(tempDir, "global")
-
-	// Create global adapter that overrides built-in
-	adapterDir := filepath.Join(globalDir, "builtin")
-	if err := os.MkdirAll(adapterDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(adapterDir, "adapter.toml"), []byte(`
-[adapter]
-name = "builtin"
-description = "Custom version"
-[spawn]
-command = "custom-cmd"
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	registry := NewRegistry(globalDir, "")
-	registry.RegisterBuiltin("builtin", &types.AdapterConfig{
-		Adapter: types.AdapterMeta{Name: "builtin", Description: "Original built-in"},
-		Spawn:   types.AdapterSpawnConfig{Command: "builtin-cmd"},
-	})
-
-	info, err := registry.GetInfo("builtin")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if info.Source != SourceGlobal {
-		t.Errorf("expected source %q, got %q", SourceGlobal, info.Source)
-	}
-	if info.Description != "Custom version" {
-		t.Errorf("expected custom description, got %q", info.Description)
-	}
-	if info.Overrides == nil {
-		t.Error("expected override info")
-	} else if info.Overrides.Source != SourceBuiltin {
-		t.Errorf("expected override source %q, got %q", SourceBuiltin, info.Overrides.Source)
 	}
 }

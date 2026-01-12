@@ -32,23 +32,6 @@ func TestDefaultCacheDir(t *testing.T) {
 	}
 }
 
-func TestNewRegistryWithBuiltins(t *testing.T) {
-	registry, err := NewRegistryWithBuiltins("", "")
-	if err != nil {
-		t.Fatalf("failed to create registry: %v", err)
-	}
-
-	// Should be able to load claude without any filesystem adapters
-	config, err := registry.Load("claude")
-	if err != nil {
-		t.Fatalf("failed to load claude: %v", err)
-	}
-
-	if config.Adapter.Name != "claude" {
-		t.Errorf("expected name 'claude', got %q", config.Adapter.Name)
-	}
-}
-
 func TestNewDefaultRegistry(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -57,13 +40,8 @@ func TestNewDefaultRegistry(t *testing.T) {
 		t.Fatalf("failed to create registry: %v", err)
 	}
 
-	// Should have claude built-in
-	config, err := registry.Load("claude")
-	if err != nil {
-		t.Fatalf("failed to load claude: %v", err)
-	}
-
-	if config.Adapter.Name != "claude" {
-		t.Errorf("expected name 'claude', got %q", config.Adapter.Name)
+	// No filesystem adapters yet; registry should still be created
+	if registry == nil {
+		t.Fatal("expected registry")
 	}
 }

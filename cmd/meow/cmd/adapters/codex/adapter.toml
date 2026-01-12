@@ -1,0 +1,35 @@
+# Codex CLI adapter for MEOW
+
+[adapter]
+name = "codex"
+description = "Codex CLI agent"
+
+[spawn]
+# Command to start Codex
+command = "codex"
+# Time to wait for Codex to fully start up before sending prompts
+startup_delay = "3s"
+
+[environment]
+# Avoid tmux nesting issues when running inside MEOW
+TMUX = ""
+
+[prompt_injection]
+# Keys to send before the prompt to ensure clean state
+pre_keys = ["Escape"]
+# Small delay after pre_keys for the state change to take effect
+pre_delay = "100ms"
+# How to send the prompt text:
+# - "literal": tmux send-keys -l (handles special chars and newlines)
+# - "keys": tmux send-keys without -l (interprets key names)
+method = "literal"
+# Keys to send after the prompt to submit it
+post_keys = ["Enter"]
+# Time to wait between sending prompt and sending post_keys
+post_delay = "500ms"
+
+[graceful_stop]
+# Keys to send to initiate graceful shutdown
+keys = ["C-c"]
+# Time to wait for graceful shutdown before force killing
+wait = "2s"

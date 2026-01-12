@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/adapter"
@@ -23,7 +24,7 @@ Shows all adapter settings including:
   - Graceful stop configuration
 
 If the adapter overrides another (e.g., a project adapter with the same name
-as a built-in), the override information is also displayed.`,
+as a global adapter), the override information is also displayed.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAdapterShow,
 }
@@ -60,7 +61,7 @@ func runAdapterShow(cmd *cobra.Command, args []string) error {
 		return outputAdapterShowJSON(info)
 	}
 
-	return outputAdapterShowText(info, dir)
+	return outputAdapterShowText(info)
 }
 
 func outputAdapterShowJSON(info *adapter.AdapterInfo) error {
@@ -72,7 +73,7 @@ func outputAdapterShowJSON(info *adapter.AdapterInfo) error {
 	return nil
 }
 
-func outputAdapterShowText(info *adapter.AdapterInfo, workdir string) error {
+func outputAdapterShowText(info *adapter.AdapterInfo) error {
 	cfg := info.Config
 
 	// Header
@@ -80,7 +81,7 @@ func outputAdapterShowText(info *adapter.AdapterInfo, workdir string) error {
 	if info.Description != "" {
 		fmt.Printf("Description: %s\n", info.Description)
 	}
-	fmt.Printf("Location: %s\n", formatLocation(*info, workdir))
+	fmt.Printf("Location: %s\n", formatLocation(*info))
 
 	// Override info
 	if info.Overrides != nil {
@@ -149,8 +150,6 @@ func formatKeys(keys []string) string {
 // formatOverrideLocation formats the override source for display.
 func formatOverrideLocation(override *adapter.AdapterOverrideInfo) string {
 	switch override.Source {
-	case adapter.SourceBuiltin:
-		return "(built-in)"
 	case adapter.SourceGlobal:
 		home, _ := os.UserHomeDir()
 		if home != "" && len(override.Path) > len(home) && override.Path[:len(home)] == home {
@@ -158,7 +157,7 @@ func formatOverrideLocation(override *adapter.AdapterOverrideInfo) string {
 		}
 		return override.Path
 	case adapter.SourceProject:
-		return ".meow/adapters/" + override.Path
+		return ".meow/adapters/" + filepath.Base(override.Path)
 	default:
 		return override.Path
 	}

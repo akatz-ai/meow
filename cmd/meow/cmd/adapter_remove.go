@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/adapter"
-	"github.com/meow-stack/meow-machine/internal/adapter/builtin"
 	"github.com/spf13/cobra"
 )
 
@@ -19,8 +18,6 @@ var adapterRemoveCmd = &cobra.Command{
 
 By default, removes the project-local adapter if it exists, otherwise removes
 the global adapter. Use --project or --global to specify which to remove.
-
-Built-in adapters cannot be removed (they are compiled into the binary).
 
 Examples:
   meow adapter remove aider           # Remove project-local first, then global
@@ -46,13 +43,6 @@ func init() {
 
 func runAdapterRemove(cmd *cobra.Command, args []string) error {
 	name := args[0]
-
-	// Check if it's a built-in adapter
-	for _, builtinName := range builtin.BuiltinAdapterNames() {
-		if name == builtinName {
-			return fmt.Errorf("cannot remove built-in adapter %q (it is compiled into the binary)", name)
-		}
-	}
 
 	// Validate mutually exclusive flags
 	if adapterRemoveProject && adapterRemoveGlobal {

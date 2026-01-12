@@ -32,8 +32,8 @@ func TestDefault(t *testing.T) {
 		t.Errorf("Logging.Level = %s, want info", cfg.Logging.Level)
 	}
 	// Verify default adapter
-	if cfg.Agent.DefaultAdapter != "claude" {
-		t.Errorf("Agent.DefaultAdapter = %s, want claude", cfg.Agent.DefaultAdapter)
+	if cfg.Agent.DefaultAdapter != "" {
+		t.Errorf("Agent.DefaultAdapter = %s, want empty", cfg.Agent.DefaultAdapter)
 	}
 	if cfg.Agent.SetupHooks != true {
 		t.Errorf("Agent.SetupHooks = %v, want true", cfg.Agent.SetupHooks)
@@ -329,8 +329,8 @@ default_adapter = "aider"
 			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 
-		if cfg.Agent.DefaultAdapter != "claude" {
-			t.Errorf("Agent.DefaultAdapter = %s, want claude (default)", cfg.Agent.DefaultAdapter)
+		if cfg.Agent.DefaultAdapter != "" {
+			t.Errorf("Agent.DefaultAdapter = %s, want empty (default)", cfg.Agent.DefaultAdapter)
 		}
 	})
 }

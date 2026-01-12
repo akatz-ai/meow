@@ -25,9 +25,6 @@ type Registry struct {
 
 	// cache stores loaded adapters by name
 	cache map[string]*types.AdapterConfig
-
-	// builtins stores embedded adapters
-	builtins map[string]*types.AdapterConfig
 }
 
 // NewRegistry creates a new adapter registry.
@@ -38,16 +35,7 @@ func NewRegistry(globalDir, projectDir string) *Registry {
 		globalDir:  globalDir,
 		projectDir: projectDir,
 		cache:      make(map[string]*types.AdapterConfig),
-		builtins:   make(map[string]*types.AdapterConfig),
 	}
-}
-
-// RegisterBuiltin registers a built-in adapter.
-// Built-in adapters are used when no file-based adapter is found.
-func (r *Registry) RegisterBuiltin(name string, config *types.AdapterConfig) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.builtins[name] = config
 }
 
 // Load returns an adapter by name.
@@ -55,7 +43,6 @@ func (r *Registry) RegisterBuiltin(name string, config *types.AdapterConfig) {
 // 1. Cache (if already loaded)
 // 2. Project directory (.meow/adapters/<name>/adapter.toml)
 // 3. Global directory (~/.meow/adapters/<name>/adapter.toml)
-// 4. Built-in adapters
 //
 // Project adapters override global ones with the same name.
 func (r *Registry) Load(name string) (*types.AdapterConfig, error) {
@@ -87,14 +74,6 @@ func (r *Registry) Load(name string) (*types.AdapterConfig, error) {
 		r.mu.Unlock()
 		return config, nil
 	}
-
-	// Check built-in adapters
-	r.mu.RLock()
-	if builtin, ok := r.builtins[name]; ok {
-		r.mu.RUnlock()
-		return builtin, nil
-	}
-	r.mu.RUnlock()
 
 	return nil, &NotFoundError{Name: name}
 }
@@ -154,7 +133,6 @@ func (r *Registry) resolveRelativePaths(config *types.AdapterConfig, adapterDir 
 // 2. Workflow-level default (workflowDefault)
 // 3. Project config (projectDefault)
 // 4. Global config (globalDefault)
-// 5. Built-in default: "claude"
 func (r *Registry) Resolve(stepAdapter, workflowDefault, projectDefault, globalDefault string) string {
 	if stepAdapter != "" {
 		return stepAdapter
@@ -168,11 +146,11 @@ func (r *Registry) Resolve(stepAdapter, workflowDefault, projectDefault, globalD
 	if globalDefault != "" {
 		return globalDefault
 	}
-	return "claude" // Built-in default
+	return ""
 }
 
 // List returns the names of all available adapters.
-// This includes adapters from project directory, global directory, and built-ins.
+// This includes adapters from project directory and global directory.
 func (r *Registry) List() ([]string, error) {
 	seen := make(map[string]bool)
 	var names []string
@@ -204,16 +182,6 @@ func (r *Registry) List() ([]string, error) {
 			}
 		}
 	}
-
-	// Add built-ins
-	r.mu.RLock()
-	for name := range r.builtins {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	r.mu.RUnlock()
 
 	return names, nil
 }
@@ -261,14 +229,6 @@ func (r *Registry) GetPath(name string) (string, error) {
 		}
 	}
 
-	// For built-ins, we don't have a path (they're embedded)
-	r.mu.RLock()
-	_, isBuiltin := r.builtins[name]
-	r.mu.RUnlock()
-	if isBuiltin {
-		return "", &BuiltinPathError{Name: name}
-	}
-
 	return "", &NotFoundError{Name: name}
 }
 
@@ -295,27 +255,10 @@ func IsNotFound(err error) bool {
 	return ok
 }
 
-// BuiltinPathError is returned when trying to get the path of a built-in adapter.
-type BuiltinPathError struct {
-	Name string
-}
-
-func (e *BuiltinPathError) Error() string {
-	return fmt.Sprintf("adapter %q is built-in and has no filesystem path", e.Name)
-}
-
-// IsBuiltinPath returns true if the error is a BuiltinPathError.
-func IsBuiltinPath(err error) bool {
-	_, ok := err.(*BuiltinPathError)
-	return ok
-}
-
 // AdapterSource represents where an adapter was loaded from.
 type AdapterSource string
 
 const (
-	// SourceBuiltin indicates a built-in adapter.
-	SourceBuiltin AdapterSource = "built-in"
 	// SourceGlobal indicates an adapter from ~/.meow/adapters/.
 	SourceGlobal AdapterSource = "global"
 	// SourceProject indicates an adapter from .meow/adapters/.
@@ -327,7 +270,7 @@ type AdapterInfo struct {
 	Name        string                `json:"name"`
 	Description string                `json:"description"`
 	Source      AdapterSource         `json:"source"`
-	Path        string                `json:"path,omitempty"` // Empty for built-in
+	Path        string                `json:"path,omitempty"`
 	Config      *types.AdapterConfig  `json:"config"`
 	Overrides   *AdapterOverrideInfo  `json:"overrides,omitempty"` // What this adapter is overriding
 }
@@ -347,7 +290,7 @@ func (r *Registry) ListWithInfo() ([]AdapterInfo, error) {
 		path   string
 	}
 
-	// Collect all adapter locations (project, global, built-in)
+	// Collect all adapter locations (project, global)
 	var locations []adapterLocation
 
 	// Project adapters
@@ -380,18 +323,7 @@ func (r *Registry) ListWithInfo() ([]AdapterInfo, error) {
 		}
 	}
 
-	// Built-in adapters
-	r.mu.RLock()
-	for name := range r.builtins {
-		locations = append(locations, adapterLocation{
-			name:   name,
-			source: SourceBuiltin,
-			path:   "",
-		})
-	}
-	r.mu.RUnlock()
-
-	// Build result map - first occurrence wins (project > global > built-in)
+	// Build result map - first occurrence wins (project > global)
 	seen := make(map[string]bool)
 	overrides := make(map[string][]adapterLocation) // Track what each name overrides
 
@@ -472,17 +404,6 @@ func (r *Registry) GetInfo(name string) (*AdapterInfo, error) {
 					}
 				}
 			}
-			// Check if it overrides built-in
-			if overrides == nil {
-				r.mu.RLock()
-				_, isBuiltin := r.builtins[name]
-				r.mu.RUnlock()
-				if isBuiltin {
-					overrides = &AdapterOverrideInfo{
-						Source: SourceBuiltin,
-					}
-				}
-			}
 		}
 	}
 
@@ -493,21 +414,10 @@ func (r *Registry) GetInfo(name string) (*AdapterInfo, error) {
 			source = SourceGlobal
 			path = filepath.Join(r.globalDir, name)
 
-			// Check if it overrides built-in
-			r.mu.RLock()
-			_, isBuiltin := r.builtins[name]
-			r.mu.RUnlock()
-			if isBuiltin {
-				overrides = &AdapterOverrideInfo{
-					Source: SourceBuiltin,
-				}
-			}
 		}
 	}
-
-	// Must be built-in
 	if source == "" {
-		source = SourceBuiltin
+		return nil, &NotFoundError{Name: name}
 	}
 
 	return &AdapterInfo{

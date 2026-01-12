@@ -14,7 +14,7 @@ import (
 var adapterListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List available adapters",
-	Long: `List all available agent adapters from project, global, and built-in sources.
+	Long: `List all available agent adapters from project and global sources.
 
 The output shows:
   - NAME:        Adapter identifier
@@ -22,7 +22,6 @@ The output shows:
   - LOCATION:    Where the adapter is defined
 
 Location values:
-  - (built-in):  Compiled into the MEOW binary
   - ~/.meow/...: Global adapter from home directory
   - .meow/...:   Project-local adapter (relative path shown)
 
@@ -63,7 +62,7 @@ func runAdapterList(cmd *cobra.Command, args []string) error {
 		return outputAdapterListJSON(adapters)
 	}
 
-	return outputAdapterListText(adapters, dir)
+	return outputAdapterListText(adapters)
 }
 
 // adapterListEntry is a simplified struct for JSON output
@@ -93,7 +92,7 @@ func outputAdapterListJSON(adapters []adapter.AdapterInfo) error {
 	return nil
 }
 
-func outputAdapterListText(adapters []adapter.AdapterInfo, workdir string) error {
+func outputAdapterListText(adapters []adapter.AdapterInfo) error {
 	if len(adapters) == 0 {
 		fmt.Println("No adapters found.")
 		return nil
@@ -103,7 +102,7 @@ func outputAdapterListText(adapters []adapter.AdapterInfo, workdir string) error
 	fmt.Fprintln(w, "NAME\tDESCRIPTION\tLOCATION")
 
 	for _, a := range adapters {
-		location := formatLocation(a, workdir)
+		location := formatLocation(a)
 		description := a.Description
 		if description == "" {
 			description = "-"
@@ -115,10 +114,8 @@ func outputAdapterListText(adapters []adapter.AdapterInfo, workdir string) error
 }
 
 // formatLocation returns a human-readable location string for an adapter.
-func formatLocation(a adapter.AdapterInfo, workdir string) string {
+func formatLocation(a adapter.AdapterInfo) string {
 	switch a.Source {
-	case adapter.SourceBuiltin:
-		return "(built-in)"
 	case adapter.SourceProject:
 		// Show relative path for project adapters
 		return ".meow/adapters/" + a.Name

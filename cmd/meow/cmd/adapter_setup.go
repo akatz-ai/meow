@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/meow-stack/meow-machine/internal/adapter"
-	"github.com/meow-stack/meow-machine/internal/adapter/builtin"
 	"github.com/spf13/cobra"
 )
 
@@ -117,28 +116,10 @@ func runAdapterSetup(cmd *cobra.Command, args []string) error {
 }
 
 // getAdapterDir returns the filesystem path to an adapter's directory.
-// For built-in adapters, it extracts them to the cache directory first.
 func getAdapterDir(registry *adapter.Registry, name string) (string, error) {
-	// Try to get path from registry first (works for file-based adapters)
 	path, err := registry.GetPath(name)
 	if err == nil {
 		return path, nil
-	}
-
-	// If it's a built-in adapter, extract it to cache
-	if adapter.IsBuiltinPath(err) {
-		cacheDir := adapter.DefaultCacheDir()
-		if cacheDir == "" {
-			return "", fmt.Errorf("could not determine cache directory")
-		}
-
-		// Extract built-in adapter to cache
-		extractedDir, err := builtin.EnsureExtracted(name, cacheDir)
-		if err != nil {
-			return "", fmt.Errorf("extracting built-in adapter: %w", err)
-		}
-
-		return extractedDir, nil
 	}
 
 	return "", err

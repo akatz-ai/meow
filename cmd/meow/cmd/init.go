@@ -26,6 +26,9 @@ const meowHooksJSON = `{
 //go:embed templates/*.toml
 var embeddedTemplates embed.FS
 
+//go:embed adapters/*/adapter.toml
+var embeddedAdapters embed.FS
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a MEOW project",
@@ -62,6 +65,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	dirs := []string{
 		filepath.Join(meowDir, "templates"),
 		filepath.Join(meowDir, "state"),
+		filepath.Join(meowDir, "adapters"),
 	}
 
 	for _, d := range dirs {
@@ -101,6 +105,9 @@ file = ".meow/state/meow.log"
 # When true (default), agents run the Ralph Wiggum loop for autonomous operation.
 # Set to false to disable automatic hook injection for all agents.
 setup_hooks = true
+# default_adapter controls which adapter spawn steps use when none is specified.
+# Change this if you prefer a different default adapter.
+default_adapter = "claude"
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("writing config: %w", err)
@@ -111,6 +118,11 @@ setup_hooks = true
 		if err := copyEmbeddedTemplates(filepath.Join(meowDir, "templates")); err != nil {
 			return fmt.Errorf("copying templates: %w", err)
 		}
+	}
+
+	// Copy default adapters
+	if err := copyEmbeddedAdapters(filepath.Join(meowDir, "adapters")); err != nil {
+		return fmt.Errorf("copying adapters: %w", err)
 	}
 
 	// Ensure .beads directory exists
@@ -133,6 +145,7 @@ setup_hooks = true
 	fmt.Println("\nCreated:")
 	fmt.Println("  .meow/config.toml    - configuration")
 	fmt.Println("  .meow/templates/     - workflow templates")
+	fmt.Println("  .meow/adapters/      - adapter configs")
 	fmt.Println("  .meow/state/         - runtime state")
 	fmt.Println("  .beads/              - bead storage")
 	if hooksCreated {
@@ -164,6 +177,40 @@ func copyEmbeddedTemplates(destDir string) error {
 
 		// Write to destination
 		destPath := filepath.Join(destDir, filepath.Base(path))
+		if err := os.WriteFile(destPath, content, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", destPath, err)
+		}
+
+		return nil
+	})
+}
+
+// copyEmbeddedAdapters copies adapter configs from the embedded filesystem.
+func copyEmbeddedAdapters(destDir string) error {
+	return fs.WalkDir(embeddedAdapters, "adapters", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		// Read embedded file
+		content, err := embeddedAdapters.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading embedded %s: %w", path, err)
+		}
+
+		relPath, err := filepath.Rel("adapters", path)
+		if err != nil {
+			return fmt.Errorf("resolving adapter path %s: %w", path, err)
+		}
+		destPath := filepath.Join(destDir, relPath)
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return fmt.Errorf("creating adapter dir %s: %w", filepath.Dir(destPath), err)
+		}
+
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
 		}

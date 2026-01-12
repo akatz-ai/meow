@@ -72,7 +72,7 @@ func NewHarness(t *testing.T) *Harness {
 		h.StateDir,
 		h.TemplateDir,
 		h.AdapterDir,
-		filepath.Join(h.AdapterDir, "claude"), // Override built-in claude with simulator
+		filepath.Join(h.AdapterDir, "claude"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -81,11 +81,10 @@ func NewHarness(t *testing.T) *Harness {
 	}
 
 	// Write a "claude" adapter that uses the simulator binary
-	// This overrides the built-in Claude adapter for testing
 	simulatorAdapter := `# Test adapter - uses simulator instead of real Claude
 [adapter]
 name = "claude"
-description = "Simulator for E2E testing (overrides built-in claude)"
+description = "Simulator for E2E testing"
 
 [spawn]
 command = "/tmp/meow-agent-sim-e2e"
@@ -111,6 +110,22 @@ wait = "200ms"
 		t.Fatalf("failed to write simulator adapter: %v", err)
 	}
 
+	// Write a minimal config with default adapter for CLI runs
+	configContent := `version = "1"
+
+[paths]
+template_dir = ".meow/templates"
+beads_dir = ".beads"
+state_dir = ".meow/state"
+
+[agent]
+default_adapter = "claude"
+`
+	configPath := filepath.Join(tempDir, ".meow", "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
 	// Create default config
 	h.Config = h.createConfig()
 
@@ -125,6 +140,7 @@ func (h *Harness) createConfig() *config.Config {
 	cfg := config.Default()
 	cfg.Paths.TemplateDir = h.TemplateDir
 	cfg.Paths.StateDir = h.StateDir
+	cfg.Agent.DefaultAdapter = "claude"
 	cfg.Logging.Level = config.LogLevelDebug
 	return cfg
 }
