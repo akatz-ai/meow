@@ -7,16 +7,37 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sync"
 	"time"
 )
+
+// syncBuffer is a thread-safe wrapper around bytes.Buffer.
+type syncBuffer struct {
+	mu  sync.RWMutex
+	buf bytes.Buffer
+}
+
+// Write implements io.Writer with mutex protection.
+func (b *syncBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// String returns the buffer contents as a string.
+func (b *syncBuffer) String() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.buf.String()
+}
 
 // OrchestratorProcess represents a running orchestrator process.
 // It provides methods to control and observe the orchestrator for crash testing.
 type OrchestratorProcess struct {
 	cmd    *exec.Cmd
 	pid    int
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+	stdout *syncBuffer
+	stderr *syncBuffer
 
 	// done receives the exit error when the process completes.
 	done chan error
@@ -137,9 +158,10 @@ func (h *Harness) StartOrchestrator(args ...string) (*OrchestratorProcess, error
 	cmd.Dir = h.TempDir
 	cmd.Env = h.Env()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &syncBuffer{}
+	stderr := &syncBuffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting orchestrator: %w", err)
@@ -148,8 +170,8 @@ func (h *Harness) StartOrchestrator(args ...string) (*OrchestratorProcess, error
 	proc := &OrchestratorProcess{
 		cmd:     cmd,
 		pid:     cmd.Process.Pid,
-		stdout:  &stdout,
-		stderr:  &stderr,
+		stdout:  stdout,
+		stderr:  stderr,
 		done:    make(chan error, 1),
 		exited:  make(chan struct{}),
 		harness: h,
