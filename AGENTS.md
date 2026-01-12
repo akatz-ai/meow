@@ -1,6 +1,6 @@
-# MEOW Stack - Claude Instructions
+# MEOW Stack - Agents Instructions
 
-This document provides instructions for Claude Code when working with the MEOW Stack system.
+This document provides instructions for agent systems working with the MEOW Stack.
 
 ## Documentation Structure
 
@@ -29,7 +29,7 @@ MEOW (Meow Executors Orchestrate Work) is a coordination language for AI agent o
 
 **Core principle: Dumb orchestrator, smart templates.**
 
-The orchestrator is generic—it knows nothing about Claude, hooks, or what events mean. All agent-specific logic lives in templates.
+The orchestrator is generic - it knows nothing about specific agents, hooks, or what events mean. All agent-specific logic lives in templates.
 
 ## Project Status: Pre-Customer MVP
 
@@ -53,13 +53,13 @@ Delete old code rather than maintaining parallel paths.
 | `expand` | Orchestrator | Template steps inserted |
 | `branch` | Orchestrator | Condition evaluated, branch expanded |
 | `foreach` | Orchestrator | All iterations complete (implicit join) |
-| `agent` | Agent (Claude) | Agent calls `meow done` |
+| `agent` | Agent | Agent calls `meow done` |
 
 **Gate is NOT an executor.** Human approval is implemented as: `branch` with `condition = "meow await-approval <gate-id>"`.
 
 ## Async Command Execution
 
-Both **branch** and **shell** execute commands **asynchronously** in goroutines. Shell is syntactic sugar over branch—`handleShell()` converts the config and delegates to `handleBranch()`.
+Both **branch** and **shell** execute commands **asynchronously** in goroutines. Shell is syntactic sugar over branch - `handleShell()` converts the config and delegates to `handleBranch()`.
 
 This is critical for enabling parallel execution patterns:
 
@@ -111,7 +111,7 @@ Agents are kept on task via **events**, not orchestrator logic:
 3. On event, monitor injects a nudge prompt via `fire_forget` mode
 4. Monitor checks if main task is done; loops if not
 
-This is implemented entirely in `lib/agent-persistence.meow.toml`. The orchestrator just routes events—it doesn't know what "agent-stopped" means.
+This is implemented entirely in `lib/agent-persistence.meow.toml`. The orchestrator just routes events - it doesn't know what "agent-stopped" means.
 
 ## Working on Beads
 
@@ -232,7 +232,7 @@ go test -count=1 ./...                  # Disable test cache
 ### 1. Dumb Orchestrator
 
 The orchestrator should NOT know about:
-- Claude or any specific agent
+- Specific agents
 - What events mean or how to respond
 - Stop hooks or persistence patterns
 
@@ -256,7 +256,7 @@ All workflow state mutations go through the orchestrator's mutex-protected metho
 
 ### 6. Events, Not Hooks
 
-Agent hook systems (Claude's Stop hook) translate to generic events. The orchestrator routes events; templates implement responses.
+Agent hook systems translate to generic events. The orchestrator routes events; templates implement responses.
 
 ## Error Handling
 
