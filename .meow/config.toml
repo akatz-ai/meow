@@ -21,3 +21,6 @@ ephemeral = "on_complete"
 level = "info"
 format = "json"
 file = ".meow/state/meow.log"
+
+[agent]
+default_adapter = "claude"
