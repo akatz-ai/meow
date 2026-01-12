@@ -297,6 +297,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 	}
 
 	// Parse spawn executor fields
+	if v, ok := data["adapter"].(string); ok {
+		s.Adapter = v
+	}
 	if v, ok := data["resume_session"].(string); ok {
 		s.ResumeSession = v
 	}
@@ -623,6 +626,9 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 	}
 
 	// Parse spawn executor fields
+	if v, ok := data["adapter"].(string); ok {
+		step.Adapter = v
+	}
 	if v, ok := data["resume_session"].(string); ok {
 		step.ResumeSession = v
 	}
