@@ -159,15 +159,22 @@ func (c *VarContext) resolve(path string) (any, error) {
 	root := parts[0]
 
 	// Check for output reference: step_id.outputs.field
-	if len(parts) >= 3 && parts[1] == "outputs" {
-		stepID := parts[0]
-		field := strings.Join(parts[2:], ".")
-		return c.resolveOutput(stepID, field)
+	// Step IDs can contain dots (e.g., "expand-step.child-step" from expansion prefixes)
+	// so we search for "outputs" anywhere in the path
+	for i, part := range parts {
+		if part == "outputs" && i > 0 && i < len(parts)-1 {
+			stepID := strings.Join(parts[:i], ".")
+			field := strings.Join(parts[i+1:], ".")
+			return c.resolveOutput(stepID, field)
+		}
 	}
 
 	// Check for special prefixes
 	if root == "output" && len(parts) >= 3 {
-		// output.step.field format
+		// output.step.field format (step ID here could also contain dots)
+		// Find "outputs" is not present, so this is legacy format: output.stepID.field
+		// where stepID might have dots. We take everything between "output" and the last part as stepID.
+		// Actually, this format is ambiguous with dotted step IDs. Keep simple: output.step.field
 		stepID := parts[1]
 		field := strings.Join(parts[2:], ".")
 		return c.resolveOutput(stepID, field)

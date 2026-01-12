@@ -320,7 +320,19 @@ func checkVarRefs(text, name, stepID, field string, defined map[string]bool, t *
 		root := parts[0]
 
 		// Skip output references - they're validated at runtime
-		if root == "output" || (len(parts) >= 2 && parts[1] == "outputs") {
+		// Check for "output" prefix (legacy format) or "outputs" anywhere in path
+		// (step IDs can contain dots from expansion prefixes, e.g., "expand-step.child.outputs.field")
+		if root == "output" {
+			continue
+		}
+		isOutputRef := false
+		for _, part := range parts {
+			if part == "outputs" {
+				isOutputRef = true
+				break
+			}
+		}
+		if isOutputRef {
 			continue
 		}
 

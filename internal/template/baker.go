@@ -211,12 +211,20 @@ func (b *Baker) setShellConfig(step *types.Step, ts *Step) error {
 		env[k] = subV
 	}
 
-	// Convert shell outputs to types format
+	// Convert shell outputs to types format, substituting variables in source paths
 	var outputs map[string]types.OutputSource
 	if len(ts.ShellOutputs) > 0 {
 		outputs = make(map[string]types.OutputSource)
 		for k, v := range ts.ShellOutputs {
-			outputs[k] = types.OutputSource{Source: v.Source}
+			source := v.Source
+			// Substitute variables in file paths (e.g., "file:.meow/worktrees/{{track_name}}-track/.meow-branch")
+			if source != "" {
+				source, err = b.VarContext.Substitute(source)
+				if err != nil {
+					return fmt.Errorf("substitute shell_outputs.%s.source: %w", k, err)
+				}
+			}
+			outputs[k] = types.OutputSource{Source: source}
 		}
 	}
 
@@ -471,12 +479,19 @@ func (b *Baker) setBranchConfig(step *types.Step, ts *Step) error {
 		env[k] = subV
 	}
 
-	// Convert shell outputs to types format (shell-as-sugar support)
+	// Convert shell outputs to types format (shell-as-sugar support), substituting variables
 	var outputs map[string]types.OutputSource
 	if len(ts.ShellOutputs) > 0 {
 		outputs = make(map[string]types.OutputSource)
 		for k, v := range ts.ShellOutputs {
-			outputs[k] = types.OutputSource{Source: v.Source}
+			source := v.Source
+			if source != "" {
+				source, err = b.VarContext.Substitute(source)
+				if err != nil {
+					return fmt.Errorf("substitute shell_outputs.%s.source: %w", k, err)
+				}
+			}
+			outputs[k] = types.OutputSource{Source: source}
 		}
 	}
 
