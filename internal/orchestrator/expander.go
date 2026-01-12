@@ -14,7 +14,7 @@ import (
 
 // resolveLibraryPath resolves a library template reference (e.g., "lib/worktree")
 // to an actual file path. Search order:
-// 1. Project: {baseDir}/.meow/templates/lib/{name}.meow.toml
+// 1. Project: {baseDir}/.meow/lib/{name}.meow.toml
 // 2. User:    ~/.meow/lib/{name}.meow.toml
 //
 // Returns the resolved path and true if found, or empty string and false if not found.
@@ -25,12 +25,12 @@ func resolveLibraryPath(baseDir, libRef string) (string, bool) {
 	// Build candidate paths
 	var candidates []string
 
-	// 1. Project library: .meow/templates/lib/<name>.meow.toml
-	projectPath := filepath.Join(baseDir, ".meow", "templates", "lib", name+".meow.toml")
+	// 1. Project library: .meow/lib/<name>.meow.toml
+	projectPath := filepath.Join(baseDir, ".meow", "lib", name+".meow.toml")
 	candidates = append(candidates, projectPath)
 
 	// Also try without .meow extension for backwards compat
-	projectPathAlt := filepath.Join(baseDir, ".meow", "templates", "lib", name+".toml")
+	projectPathAlt := filepath.Join(baseDir, ".meow", "lib", name+".toml")
 	candidates = append(candidates, projectPathAlt)
 
 	// 2. User library: ~/.meow/lib/<name>.meow.toml
@@ -143,16 +143,31 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		filePath := parts[0]
 		workflowName := parts[1]
 
-		// Resolve file path
-		if !filepath.IsAbs(filePath) {
-			filePath = filepath.Join(e.BaseDir, filePath)
-		}
+		// Check if the file part is a library reference (e.g., "lib/agent-persistence#monitor")
+		if strings.HasPrefix(filePath, "lib/") {
+			resolved, found := resolveLibraryPath(e.BaseDir, filePath)
+			if !found {
+				name := strings.TrimPrefix(filePath, "lib/")
+				var searchPaths []string
+				searchPaths = append(searchPaths, filepath.Join(e.BaseDir, ".meow", "lib", name+".meow.toml"))
+				if home, err := os.UserHomeDir(); err == nil {
+					searchPaths = append(searchPaths, filepath.Join(home, ".meow", "lib", name+".meow.toml"))
+				}
+				return nil, fmt.Errorf("library template %q not found in: %v", filePath, searchPaths)
+			}
+			filePath = resolved
+		} else {
+			// Resolve file path
+			if !filepath.IsAbs(filePath) {
+				filePath = filepath.Join(e.BaseDir, filePath)
+			}
 
-		// Try adding .meow.toml extension if file doesn't exist
-		if !strings.HasSuffix(filePath, ".toml") {
-			if _, err := os.Stat(filePath); os.IsNotExist(err) {
-				if _, err := os.Stat(filePath + ".meow.toml"); err == nil {
-					filePath = filePath + ".meow.toml"
+			// Try adding .meow.toml extension if file doesn't exist
+			if !strings.HasSuffix(filePath, ".toml") {
+				if _, err := os.Stat(filePath); os.IsNotExist(err) {
+					if _, err := os.Stat(filePath + ".meow.toml"); err == nil {
+						filePath = filePath + ".meow.toml"
+					}
 				}
 			}
 		}
@@ -171,14 +186,14 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	} else if strings.HasPrefix(templateRef, "lib/") {
 		// Library reference (e.g., "lib/worktree")
 		// Resolve through library search path:
-		// 1. Project: .meow/templates/lib/<name>.meow.toml
+		// 1. Project: .meow/lib/<name>.meow.toml
 		// 2. User:    ~/.meow/lib/<name>.meow.toml
 		filePath, found := resolveLibraryPath(e.BaseDir, templateRef)
 		if !found {
 			// Build helpful error message with search paths
 			name := strings.TrimPrefix(templateRef, "lib/")
 			var searchPaths []string
-			searchPaths = append(searchPaths, filepath.Join(e.BaseDir, ".meow", "templates", "lib", name+".meow.toml"))
+			searchPaths = append(searchPaths, filepath.Join(e.BaseDir, ".meow", "lib", name+".meow.toml"))
 			if home, err := os.UserHomeDir(); err == nil {
 				searchPaths = append(searchPaths, filepath.Join(home, ".meow", "lib", name+".meow.toml"))
 			}

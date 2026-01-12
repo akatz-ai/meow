@@ -1,0 +1,177 @@
+# Simple Ralph Wiggum Pattern Test
+#
+# Tests the complete Ralph Wiggum loop with a real Claude agent:
+#   1. Setup stop hook in temp workdir
+#   2. Spawn Claude agent
+#   3. Start persistence monitor in parallel
+#   4. Give Claude a task that will cause it to stop (create file, wait for user)
+#   5. Claude stops → Stop hook fires `meow event agent-stopped`
+#   6. Monitor catches event → nudges Claude with "run meow done"
+#   7. Claude runs `meow done` → agent step completes
+#   8. Monitor exits gracefully
+#   9. Cleanup (kill agent)
+#
+# Usage:
+#   meow run .meow/templates/tests/rw-simple-test.meow.toml
+#
+# Expected behavior:
+#   - Claude creates a file and stops waiting for user
+#   - Monitor detects the stop and nudges Claude
+#   - Claude runs meow done
+#   - Workflow completes successfully
+
+[main]
+name = "rw-simple-test"
+description = "Simple Ralph Wiggum pattern test with real Claude agent"
+
+# Fixed temp path for cleanup access
+cleanup_on_success = "rm -rf /tmp/rw-simple-test"
+cleanup_on_failure = "rm -rf /tmp/rw-simple-test"
+cleanup_on_stop = "rm -rf /tmp/rw-simple-test"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 1: Create temp workdir and setup hooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = """
+# Create temp workdir (fixed path for cleanup)
+WORKDIR="/tmp/rw-simple-test"
+rm -rf "$WORKDIR"
+mkdir -p "$WORKDIR"
+
+# Setup Claude stop hook
+mkdir -p "$WORKDIR/.claude"
+cat > "$WORKDIR/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+echo "$WORKDIR"
+"""
+
+[main.steps.shell_outputs]
+workdir = { source = "stdout" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 2: Spawn Claude agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "test-agent"
+workdir = "{{setup.outputs.workdir}}"
+needs = ["setup"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 3: Start persistence monitor (parallel with work step)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "monitor"
+executor = "expand"
+template = "lib/agent-persistence#monitor"
+needs = ["spawn"]
+
+[main.steps.variables]
+agent = "test-agent"
+check_step = "work"
+nudge_prompt = """
+The orchestrator detected you stopped. Your task is complete!
+
+Now signal completion by running this command:
+
+```
+meow done
+```
+
+Run it now.
+"""
+timeout = "30s"
+max_loops = "3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4: Main work - give Claude a task that causes it to stop
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "test-agent"
+needs = ["spawn"]
+prompt = """
+This is a test of the Ralph Wiggum persistence pattern.
+
+Your task:
+1. Create a file called "test.txt" with the content "Hello from Claude"
+2. After creating the file, stop and wait for further instructions
+
+Do NOT run `meow done` yet - just create the file and stop.
+The orchestrator will nudge you when it's time to complete.
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 5: Verify the file was created
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["work"]
+command = """
+WORKDIR="{{setup.outputs.workdir}}"
+if [ -f "$WORKDIR/test.txt" ]; then
+    echo "✅ File created successfully:"
+    cat "$WORKDIR/test.txt"
+else
+    echo "❌ File not found at $WORKDIR/test.txt"
+    exit 1
+fi
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 6: Kill the agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "test-agent"
+needs = ["work"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 7: Success message
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[main.steps]]
+id = "done"
+executor = "shell"
+needs = ["verify", "kill"]
+command = """
+echo ""
+echo "🎉 Ralph Wiggum pattern test PASSED!"
+echo ""
+echo "The workflow demonstrated:"
+echo "  1. Claude was spawned and given a task"
+echo "  2. Claude stopped after creating the file (as instructed)"
+echo "  3. The Stop hook fired 'meow event agent-stopped'"
+echo "  4. The monitor caught the event and nudged Claude"
+echo "  5. Claude ran 'meow done' to complete the task"
+echo "  6. The workflow completed successfully"
+echo ""
+"""
