@@ -56,32 +56,33 @@ const (
 	StepStatusCompleting StepStatus = "completing" // Agent called meow done, orchestrator handling transition
 	StepStatusDone       StepStatus = "done"       // Completed successfully
 	StepStatusFailed     StepStatus = "failed"     // Execution failed
+	StepStatusSkipped    StepStatus = "skipped"    // Skipped because dependency failed
 )
 
 // Valid returns true if this is a recognized status.
 func (s StepStatus) Valid() bool {
 	switch s {
-	case StepStatusPending, StepStatusRunning, StepStatusCompleting, StepStatusDone, StepStatusFailed:
+	case StepStatusPending, StepStatusRunning, StepStatusCompleting, StepStatusDone, StepStatusFailed, StepStatusSkipped:
 		return true
 	}
 	return false
 }
 
-// IsTerminal returns true if this status is final (done or failed).
+// IsTerminal returns true if this status is final (done, failed, or skipped).
 func (s StepStatus) IsTerminal() bool {
-	return s == StepStatusDone || s == StepStatusFailed
+	return s == StepStatusDone || s == StepStatusFailed || s == StepStatusSkipped
 }
 
 // CanTransitionTo returns true if transitioning from s to target is valid.
 func (s StepStatus) CanTransitionTo(target StepStatus) bool {
 	switch s {
 	case StepStatusPending:
-		return target == StepStatusRunning
+		return target == StepStatusRunning || target == StepStatusSkipped // Can run or skip (if dependency failed)
 	case StepStatusRunning:
 		return target == StepStatusCompleting || target == StepStatusDone || target == StepStatusFailed || target == StepStatusPending // Reset on crash
 	case StepStatusCompleting:
 		return target == StepStatusDone || target == StepStatusRunning // Back to running if validation fails
-	case StepStatusDone, StepStatusFailed:
+	case StepStatusDone, StepStatusFailed, StepStatusSkipped:
 		return false // Terminal states
 	}
 	return false
@@ -364,6 +365,18 @@ func (s *Step) Fail(err *StepError) error {
 	s.Status = StepStatusFailed
 	s.DoneAt = &now
 	s.Error = err
+	return nil
+}
+
+// Skip marks the step as skipped (because a dependency failed).
+func (s *Step) Skip(reason string) error {
+	if !s.Status.CanTransitionTo(StepStatusSkipped) {
+		return fmt.Errorf("cannot skip step in status %s", s.Status)
+	}
+	now := time.Now()
+	s.Status = StepStatusSkipped
+	s.DoneAt = &now
+	s.Error = &StepError{Message: reason}
 	return nil
 }
 

@@ -271,6 +271,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	// Check timeouts for running agent steps
 	timeoutModified := o.checkStepTimeouts(ctx, wf)
 
+	// Check for pending steps that are blocked by failed dependencies
+	blockedModified := o.checkBlockedSteps(wf)
+
 	// Check for foreach steps with implicit join that are ready to complete
 	o.checkForeachCompletion(wf)
 
@@ -310,8 +313,8 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 			}
 			return o.store.Save(ctx, wf)
 		}
-		// Save if timeout handling modified state (e.g., set InterruptedAt)
-		if timeoutModified {
+		// Save if timeout handling or blocked step detection modified state
+		if timeoutModified || blockedModified {
 			return o.store.Save(ctx, wf)
 		}
 		return nil // Waiting for external completion
@@ -770,6 +773,55 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 			now := time.Now()
 			step.InterruptedAt = &now
 			modified = true
+		}
+	}
+	return modified
+}
+
+// checkBlockedSteps marks pending steps as skipped if they have failed dependencies.
+// A step is blocked if any of its dependencies has failed (and that dependency doesn't have on_error=continue).
+// Returns true if any step was modified.
+func (o *Orchestrator) checkBlockedSteps(wf *types.Workflow) bool {
+	modified := false
+	for _, step := range wf.Steps {
+		if step.Status != types.StepStatusPending {
+			continue
+		}
+
+		// Check if any dependency failed
+		for _, depID := range step.Needs {
+			dep, ok := wf.Steps[depID]
+			if !ok {
+				continue
+			}
+			if dep.Status == types.StepStatusFailed {
+				// Dependency failed - this step should be skipped
+				reason := fmt.Sprintf("dependency %q failed", depID)
+				o.logger.Info("skipping step due to failed dependency",
+					"step", step.ID,
+					"dependency", depID)
+				if err := step.Skip(reason); err != nil {
+					o.logger.Error("failed to skip step",
+						"step", step.ID,
+						"error", err)
+				}
+				modified = true
+				break // No need to check other dependencies
+			}
+			if dep.Status == types.StepStatusSkipped {
+				// Dependency was skipped - cascade the skip
+				reason := fmt.Sprintf("dependency %q was skipped", depID)
+				o.logger.Info("skipping step due to skipped dependency",
+					"step", step.ID,
+					"dependency", depID)
+				if err := step.Skip(reason); err != nil {
+					o.logger.Error("failed to skip step",
+						"step", step.ID,
+						"error", err)
+				}
+				modified = true
+				break
+			}
 		}
 	}
 	return modified
