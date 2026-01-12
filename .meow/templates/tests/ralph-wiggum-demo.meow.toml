@@ -1,0 +1,60 @@
+# Ralph Wiggum Pattern Demo
+#
+# This demonstrates the async branch pattern where a monitor runs
+# alongside a "worker" (simulated with shell sleep).
+#
+# Usage:
+#   meow run .meow/templates/tests/ralph-wiggum-demo.meow.toml
+#
+# Expected behavior:
+#   - Both monitor and worker start at the same time (parallel)
+#   - Worker "works" for 3 seconds then sends agent-stopped event
+#   - Monitor receives the event and completes
+#   - Total time: ~3s (parallel), not ~13s (sequential)
+
+[main]
+name = "ralph-wiggum-demo"
+description = "Demonstrate async branch monitoring pattern"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = "echo '🚀 Starting Ralph Wiggum demo...'"
+
+# The "worker" - simulates an agent doing work then stopping
+[[main.steps]]
+id = "worker"
+executor = "shell"
+needs = ["setup"]
+command = """
+echo '👷 Worker starting...'
+sleep 3
+echo '👷 Worker done, sending agent-stopped event'
+meow event agent-stopped --data worker=demo
+echo '👷 Event sent!'
+"""
+
+# The "monitor" - waits for agent-stopped event (Ralph Wiggum pattern)
+[[main.steps]]
+id = "monitor"
+executor = "branch"
+needs = ["setup"]
+condition = "echo '👀 Monitor waiting for agent-stopped...' && meow await-event agent-stopped --timeout 30s"
+timeout = "35s"
+
+[main.steps.on_true]
+inline = [
+  { id = "monitor-received", executor = "shell", command = "echo '✅ Monitor received agent-stopped event!'" }
+]
+
+[main.steps.on_timeout]
+inline = [
+  { id = "monitor-timeout", executor = "shell", command = "echo '❌ Monitor timed out waiting for event'" }
+]
+
+# Final verification
+[[main.steps]]
+id = "done"
+executor = "shell"
+needs = ["worker", "monitor"]
+command = "echo '🎉 Ralph Wiggum pattern verified - both completed!'"
