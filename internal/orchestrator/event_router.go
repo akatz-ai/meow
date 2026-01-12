@@ -113,19 +113,31 @@ func (r *EventRouter) Route(event *ipc.EventMessage) bool {
 
 // matchesFilter checks if an event matches all the filter criteria.
 // All filter key-value pairs must match the event data exactly.
+// Special keys "agent" and "workflow" are matched against the event's
+// Agent and Workflow fields respectively.
 func (r *EventRouter) matchesFilter(event *ipc.EventMessage, filter map[string]string) bool {
 	if len(filter) == 0 {
 		return true
 	}
 
 	for key, expectedValue := range filter {
-		actualValue, ok := event.Data[key]
-		if !ok {
-			return false
+		var actualStr string
+
+		// Handle special fields that are on the event struct, not in Data
+		switch key {
+		case "agent":
+			actualStr = event.Agent
+		case "workflow":
+			actualStr = event.Workflow
+		default:
+			actualValue, ok := event.Data[key]
+			if !ok {
+				return false
+			}
+			// Convert actual value to string for comparison
+			actualStr = fmt.Sprintf("%v", actualValue)
 		}
 
-		// Convert actual value to string for comparison
-		actualStr := fmt.Sprintf("%v", actualValue)
 		if actualStr != expectedValue {
 			return false
 		}

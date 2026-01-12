@@ -1,0 +1,88 @@
+# Minimal spawn test - verify Claude runs with meow hooks
+#
+# This is the simplest possible test:
+#   1. Spawn Claude with --settings pointing to meow-hooks.json
+#   2. Give Claude a trivial task (echo a message)
+#   3. Claude should complete, stop, and the Stop hook fires agent-stopped
+#   4. Wait for the event to confirm hook is working
+#
+# Usage:
+#   meow run .meow/templates/tests/spawn-hook-test.meow.toml
+#
+# What to look for:
+#   - Log showing "spawning agent" with spawn args
+#   - Log showing "event_type=agent-stopped" when Claude stops
+
+[main]
+name = "spawn-hook-test"
+description = "Minimal test to verify Claude spawns with meow hooks"
+
+[[main.steps]]
+id = "setup"
+executor = "shell"
+command = """
+WORKDIR="/tmp/spawn-hook-test"
+rm -rf "$WORKDIR"
+mkdir -p "$WORKDIR"
+echo "$WORKDIR"
+"""
+
+[main.steps.shell_outputs]
+workdir = { source = "stdout" }
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "hook-test-agent"
+workdir = "{{setup.outputs.workdir}}"
+spawn_args = "--settings /data/projects/meow-machine/.meow/meow-hooks.json"
+needs = ["setup"]
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "hook-test-agent"
+needs = ["spawn"]
+prompt = """
+This is a quick test. Run this command:
+
+```bash
+echo "Hello from Claude"
+```
+
+After running the command, stop and wait. Do NOT run `meow done`.
+"""
+
+# Wait for the stop event to fire (timeout after 30s)
+[[main.steps]]
+id = "wait-for-stop"
+executor = "branch"
+needs = ["spawn"]
+condition = "meow await-event agent-stopped --filter agent=hook-test-agent --timeout 30s"
+
+[[main.steps]]
+id = "report"
+executor = "shell"
+needs = ["wait-for-stop"]
+command = """
+echo ""
+echo "SUCCESS: Stop hook fired!"
+echo "The meow event agent-stopped was received, confirming hooks are working."
+echo ""
+"""
+
+# Clean up
+[[main.steps]]
+id = "kill"
+executor = "kill"
+agent = "hook-test-agent"
+needs = ["work", "wait-for-stop"]
+
+[[main.steps]]
+id = "cleanup"
+executor = "shell"
+needs = ["kill"]
+command = """
+rm -rf /tmp/spawn-hook-test
+echo "Cleaned up"
+"""

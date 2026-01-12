@@ -30,7 +30,7 @@ cleanup_on_failure = "rm -rf /tmp/rw-simple-test"
 cleanup_on_stop = "rm -rf /tmp/rw-simple-test"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 1: Create temp workdir and setup hooks
+# Step 1: Create temp workdir
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[main.steps]]
@@ -41,26 +41,6 @@ command = """
 WORKDIR="/tmp/rw-simple-test"
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
-
-# Setup Claude stop hook
-mkdir -p "$WORKDIR/.claude"
-cat > "$WORKDIR/.claude/settings.json" << 'EOF'
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "meow event agent-stopped"
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-
 echo "$WORKDIR"
 """
 
@@ -68,7 +48,7 @@ echo "$WORKDIR"
 workdir = { source = "stdout" }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: Spawn Claude agent
+# Step 2: Spawn Claude agent with meow hooks
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[main.steps]]
@@ -76,6 +56,7 @@ id = "spawn"
 executor = "spawn"
 agent = "test-agent"
 workdir = "{{setup.outputs.workdir}}"
+spawn_args = "--settings /data/projects/meow-machine/.meow/meow-hooks.json"
 needs = ["setup"]
 
 # ─────────────────────────────────────────────────────────────────────────────
