@@ -180,6 +180,18 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("starting workflow: %w", err)
 	}
 
+	// Store orchestrator PID for meow stop
+	wf.OrchestratorPID = os.Getpid()
+	if err := store.Save(ctx, wf); err != nil {
+		return fmt.Errorf("saving workflow with PID: %w", err)
+	}
+
+	// Clear PID on exit (clean shutdown)
+	defer func() {
+		wf.OrchestratorPID = 0
+		store.Save(ctx, wf)
+	}()
+
 	// Create logger
 	logLevel := slog.LevelInfo
 	if verbose {

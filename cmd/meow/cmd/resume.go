@@ -139,6 +139,18 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Store orchestrator PID for meow stop
+	wf.OrchestratorPID = os.Getpid()
+	if err := store.Save(ctx, wf); err != nil {
+		return fmt.Errorf("saving workflow with PID: %w", err)
+	}
+
+	// Clear PID on exit (clean shutdown)
+	defer func() {
+		wf.OrchestratorPID = 0
+		store.Save(ctx, wf)
+	}()
+
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
