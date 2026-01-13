@@ -154,21 +154,6 @@ type Step struct {
 
 	// Agent output definitions (for agent executor)
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
-
-	// === Legacy fields - MIGRATION REQUIRED ===
-	// TODO: Migrate existing templates to use executor/prompt/command fields,
-	// then remove these fields. See .meow/templates/*.toml for templates to migrate.
-
-	Type         string          `toml:"type,omitempty"`         // DEPRECATED: use executor
-	Title        string          `toml:"title,omitempty"`        // Human-readable title
-	Description  string          `toml:"description,omitempty"`  // Step description
-	Instructions string          `toml:"instructions,omitempty"` // DEPRECATED: use prompt
-	Assignee     string          `toml:"assignee,omitempty"`     // DEPRECATED: use agent
-	Code         string          `toml:"code,omitempty"`         // DEPRECATED: use command
-	Action       string          `toml:"action,omitempty"`       // Legacy action field
-	Validation   string          `toml:"validation,omitempty"`   // Legacy validation field
-	Ephemeral    bool            `toml:"ephemeral,omitempty"`    // Legacy ephemeral flag
-	LegacyOutputs *TaskOutputSpec `toml:"task_outputs,omitempty"` // DEPRECATED: use outputs
 }
 
 // Validate checks that the step has required fields for its executor type.
@@ -276,31 +261,7 @@ func (is *InlineStep) ToStep() *Step {
 		MaxConcurrent: is.MaxConcurrent,
 		Join:          is.Join,
 		Outputs:       is.Outputs,
-		// Legacy fields
-		Type:          is.Type,
-		Title:         is.Title,
-		Description:   is.Description,
-		Instructions:  is.Instructions,
-		Assignee:      is.Assignee,
-		Code:          is.Code,
-		Action:        is.Action,
-		Validation:    is.Validation,
-		Ephemeral:     is.Ephemeral,
-		LegacyOutputs: is.LegacyOutputs,
 	}
-}
-
-// TaskOutputSpec defines the expected outputs from a task step.
-type TaskOutputSpec struct {
-	Required []TaskOutputDef `toml:"required,omitempty"`
-	Optional []TaskOutputDef `toml:"optional,omitempty"`
-}
-
-// TaskOutputDef defines a required or optional output from a task step.
-type TaskOutputDef struct {
-	Name        string `toml:"name"`
-	Type        string `toml:"type"`
-	Description string `toml:"description,omitempty"`
 }
 
 // ExpansionTarget specifies what to expand for condition branches.
@@ -362,18 +323,6 @@ type InlineStep struct {
 
 	// Agent outputs
 	Outputs map[string]AgentOutputDef `toml:"outputs,omitempty"`
-
-	// === Legacy fields - MIGRATION REQUIRED ===
-	Type         string          `toml:"type,omitempty"`
-	Title        string          `toml:"title,omitempty"`
-	Description  string          `toml:"description,omitempty"`
-	Instructions string          `toml:"instructions,omitempty"`
-	Assignee     string          `toml:"assignee,omitempty"`
-	Code         string          `toml:"code,omitempty"`
-	Action       string          `toml:"action,omitempty"`
-	Validation   string          `toml:"validation,omitempty"`
-	Ephemeral    bool            `toml:"ephemeral,omitempty"`
-	LegacyOutputs *TaskOutputSpec `toml:"task_outputs,omitempty"`
 }
 
 // ParseFile parses a TOML template file from the given path.

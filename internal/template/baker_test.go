@@ -459,69 +459,6 @@ func TestBakeWorkflow_VariableSubstitution(t *testing.T) {
 	}
 }
 
-// TestBakeWorkflow_TypeMapping tests that Type field maps to executor
-func TestBakeWorkflow_TypeMapping(t *testing.T) {
-	tests := []struct {
-		stepType         string
-		expectedExecutor types.ExecutorType
-	}{
-		{"task", types.ExecutorAgent},
-		{"collaborative", types.ExecutorAgent},
-		{"code", types.ExecutorShell},
-		{"condition", types.ExecutorBranch},
-		{"start", types.ExecutorSpawn},
-		{"stop", types.ExecutorKill},
-		{"expand", types.ExecutorExpand},
-		{"gate", types.ExecutorBranch}, // Gates become branch with await-approval
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.stepType, func(t *testing.T) {
-			step := &Step{
-				ID:   "test",
-				Type: tt.stepType,
-			}
-			// Add required fields based on type
-			switch tt.stepType {
-			case "code":
-				step.Code = "echo test"
-			case "condition":
-				step.Condition = "test -f /tmp/x"
-			case "start", "stop":
-				step.Assignee = "claude"
-			case "expand":
-				step.Template = "sub"
-			case "gate":
-				step.Instructions = "Approve this"
-			case "task", "collaborative":
-				step.Instructions = "Do work"
-			}
-
-			workflow := &Workflow{
-				Name:  "type-test",
-				Steps: []*Step{step},
-			}
-
-			baker := NewBaker("wf-type-001")
-			baker.Now = fixedTime
-
-			result, err := baker.BakeWorkflow(workflow, nil)
-			if err != nil {
-				t.Fatalf("BakeWorkflow failed: %v", err)
-			}
-
-			if len(result.Steps) != 1 {
-				t.Fatalf("expected 1 step, got %d", len(result.Steps))
-			}
-
-			if result.Steps[0].Executor != tt.expectedExecutor {
-				t.Errorf("expected executor %s for type %q, got %s",
-					tt.expectedExecutor, tt.stepType, result.Steps[0].Executor)
-			}
-		})
-	}
-}
-
 // TestBakeWorkflow_StepValidation tests that created steps are valid
 func TestBakeWorkflow_StepValidation(t *testing.T) {
 	workflow := &Workflow{

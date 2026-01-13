@@ -15,8 +15,7 @@ import (
 type FileFormat int
 
 const (
-	FormatLegacy FileFormat = iota // [meta] + [[steps]]
-	FormatModule                   // [workflow-name] sections
+	FormatModule FileFormat = iota // [workflow-name] sections
 )
 
 // Module represents a parsed module file containing one or more workflows.
@@ -52,16 +51,6 @@ func (m *Module) DefaultWorkflow() *Workflow {
 // IsInternal returns true if the workflow is marked as internal.
 func (w *Workflow) IsInternal() bool {
 	return w.Internal
-}
-
-// DetectFormat determines if a TOML file uses legacy or module format.
-// Legacy format has [meta] section, module format has workflow sections.
-func DetectFormat(content string) FileFormat {
-	// Simple heuristic: if it starts with [meta], it's legacy
-	if strings.Contains(content, "[meta]") {
-		return FormatLegacy
-	}
-	return FormatModule
 }
 
 // ParseModuleFile parses a module-format TOML file from the given path.
@@ -153,16 +142,6 @@ func parseWorkflow(name string, data map[string]any) (*Workflow, error) {
 	if v, ok := data["cleanup_on_stop"].(string); ok {
 		w.CleanupOnStop = v
 	}
-	// Legacy "cleanup" field - treat as cleanup_on_success for backwards compatibility
-	// but log a warning (callers should migrate to explicit triggers)
-	if v, ok := data["cleanup"].(string); ok {
-		if w.CleanupOnSuccess == "" {
-			w.CleanupOnSuccess = v
-		}
-	}
-
-	// Note: ephemeral and hooks_to are no longer supported
-	// They are ignored if present in templates for backwards compatibility
 
 	// Parse variables
 	if vars, ok := data["variables"].(map[string]any); ok {
@@ -380,143 +359,27 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		s.Join = &v
 	}
 
-	// Parse agent output definitions (new format: map of field -> definition)
+	// Parse agent output definitions
 	if outputs, ok := data["outputs"].(map[string]any); ok {
-		// Check if this is new format (map of definitions) or legacy format (required/optional arrays)
-		if _, hasRequired := outputs["required"]; hasRequired {
-			// Legacy format - parse as TaskOutputSpec
-			spec, err := parseTaskOutputSpec(outputs)
-			if err != nil {
-				return nil, fmt.Errorf("outputs: %w", err)
-			}
-			s.LegacyOutputs = spec
-		} else {
-			// New format - parse as map[string]AgentOutputDef
-			s.Outputs = make(map[string]AgentOutputDef)
-			for name, def := range outputs {
-				if defMap, ok := def.(map[string]any); ok {
-					outDef := AgentOutputDef{}
-					if req, ok := defMap["required"].(bool); ok {
-						outDef.Required = req
-					}
-					if typ, ok := defMap["type"].(string); ok {
-						outDef.Type = typ
-					}
-					if desc, ok := defMap["description"].(string); ok {
-						outDef.Description = desc
-					}
-					s.Outputs[name] = outDef
+		s.Outputs = make(map[string]AgentOutputDef)
+		for name, def := range outputs {
+			if defMap, ok := def.(map[string]any); ok {
+				outDef := AgentOutputDef{}
+				if req, ok := defMap["required"].(bool); ok {
+					outDef.Required = req
 				}
+				if typ, ok := defMap["type"].(string); ok {
+					outDef.Type = typ
+				}
+				if desc, ok := defMap["description"].(string); ok {
+					outDef.Description = desc
+				}
+				s.Outputs[name] = outDef
 			}
 		}
-	}
-
-	// === Legacy field parsing (for backwards compatibility) ===
-	if v, ok := data["type"].(string); ok {
-		s.Type = v
-	}
-	if v, ok := data["title"].(string); ok {
-		s.Title = v
-	}
-	if v, ok := data["description"].(string); ok {
-		s.Description = v
-	}
-	if v, ok := data["instructions"].(string); ok {
-		s.Instructions = v
-	}
-	if v, ok := data["assignee"].(string); ok {
-		s.Assignee = v
-	}
-	if v, ok := data["code"].(string); ok {
-		s.Code = v
-	}
-	if v, ok := data["action"].(string); ok {
-		s.Action = v
-	}
-	if v, ok := data["validation"].(string); ok {
-		s.Validation = v
-	}
-	if v, ok := data["ephemeral"].(bool); ok {
-		s.Ephemeral = v
 	}
 
 	return s, nil
-}
-
-// parseTaskOutputSpec parses a task output specification from a map.
-func parseTaskOutputSpec(data map[string]any) (*TaskOutputSpec, error) {
-	spec := &TaskOutputSpec{}
-
-	// Parse required outputs
-	if required, ok := data["required"].([]any); ok {
-		for i, item := range required {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("required[%d] is not a table", i)
-			}
-			def, err := parseTaskOutputDef(itemMap)
-			if err != nil {
-				return nil, fmt.Errorf("required[%d]: %w", i, err)
-			}
-			spec.Required = append(spec.Required, *def)
-		}
-	} else if required, ok := data["required"].([]map[string]any); ok {
-		for i, itemMap := range required {
-			def, err := parseTaskOutputDef(itemMap)
-			if err != nil {
-				return nil, fmt.Errorf("required[%d]: %w", i, err)
-			}
-			spec.Required = append(spec.Required, *def)
-		}
-	}
-
-	// Parse optional outputs
-	if optional, ok := data["optional"].([]any); ok {
-		for i, item := range optional {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("optional[%d] is not a table", i)
-			}
-			def, err := parseTaskOutputDef(itemMap)
-			if err != nil {
-				return nil, fmt.Errorf("optional[%d]: %w", i, err)
-			}
-			spec.Optional = append(spec.Optional, *def)
-		}
-	} else if optional, ok := data["optional"].([]map[string]any); ok {
-		for i, itemMap := range optional {
-			def, err := parseTaskOutputDef(itemMap)
-			if err != nil {
-				return nil, fmt.Errorf("optional[%d]: %w", i, err)
-			}
-			spec.Optional = append(spec.Optional, *def)
-		}
-	}
-
-	return spec, nil
-}
-
-// parseTaskOutputDef parses a single output definition from a map.
-func parseTaskOutputDef(data map[string]any) (*TaskOutputDef, error) {
-	def := &TaskOutputDef{}
-
-	if name, ok := data["name"].(string); ok {
-		def.Name = name
-	} else {
-		return nil, fmt.Errorf("output missing name")
-	}
-
-	if typ, ok := data["type"].(string); ok {
-		def.Type = typ
-	} else {
-		return nil, fmt.Errorf("output missing type")
-	}
-
-	if desc, ok := data["description"].(string); ok {
-		def.Description = desc
-	}
-
-	return def, nil
 }
 
 // parseExpansionTarget parses an expansion target from a map.
@@ -729,35 +592,6 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 		}
 	}
 
-	// === Legacy field parsing ===
-	if v, ok := data["type"].(string); ok {
-		step.Type = v
-	}
-	if v, ok := data["title"].(string); ok {
-		step.Title = v
-	}
-	if v, ok := data["description"].(string); ok {
-		step.Description = v
-	}
-	if v, ok := data["instructions"].(string); ok {
-		step.Instructions = v
-	}
-	if v, ok := data["assignee"].(string); ok {
-		step.Assignee = v
-	}
-	if v, ok := data["code"].(string); ok {
-		step.Code = v
-	}
-	if v, ok := data["action"].(string); ok {
-		step.Action = v
-	}
-	if v, ok := data["validation"].(string); ok {
-		step.Validation = v
-	}
-	if v, ok := data["ephemeral"].(bool); ok {
-		step.Ephemeral = v
-	}
-
 	return step, nil
 }
 
@@ -812,24 +646,6 @@ func (w *Workflow) Validate() error {
 				}
 				return fmt.Errorf("step[%d] %q: needs references unknown step %q", i, step.ID, need)
 			}
-		}
-	}
-
-	// Validate step types
-	validTypes := map[string]bool{
-		"":              true, // Default to task
-		"task":          true,
-		"collaborative": true,
-		"gate":          true,
-		"condition":     true,
-		"code":          true,
-		"start":         true,
-		"stop":          true,
-		"expand":        true,
-	}
-	for i, step := range w.Steps {
-		if !validTypes[step.Type] {
-			return fmt.Errorf("step[%d] %q: invalid type %q", i, step.ID, step.Type)
 		}
 	}
 
@@ -971,12 +787,9 @@ func validateModuleWorkflow(m *Module, name string, w *Workflow, result *ModuleV
 		stepIDs[step.ID] = i
 
 		// Track expand steps for dependency validation
-		if step.Executor == ExecutorExpand || step.Type == "expand" {
+		if step.Executor == ExecutorExpand {
 			expandSteps[step.ID] = true
 		}
-
-		// Validate step type
-		validateModuleStepType(name, step, result)
 	}
 
 	// Validate dependencies
@@ -1009,29 +822,6 @@ func validateModuleWorkflow(m *Module, name string, w *Workflow, result *ModuleV
 
 	// Validate variable references
 	validateModuleVariableReferences(m, name, w, result)
-
-	// Validate type-specific rules
-	validateModuleTypeSpecific(name, w, result)
-}
-
-// validateModuleStepType validates the step type is valid.
-func validateModuleStepType(workflowName string, step *Step, result *ModuleValidationResult) {
-	validTypes := map[string]bool{
-		"":              true, // Default to task
-		"task":          true,
-		"collaborative": true,
-		"gate":          true,
-		"condition":     true,
-		"code":          true,
-		"start":         true,
-		"stop":          true,
-		"expand":        true,
-	}
-	if !validTypes[step.Type] {
-		result.Add(workflowName, step.ID, "type",
-			fmt.Sprintf("invalid step type: %q", step.Type),
-			"use task, collaborative, gate, condition, code, start, stop, or expand")
-	}
 }
 
 // validateLocalReferences checks that all local template references (.workflow syntax)
@@ -1129,12 +919,7 @@ func validateModuleVariableReferences(m *Module, workflowName string, w *Workflo
 
 	// Check all string fields in steps for variable references
 	for _, step := range w.Steps {
-		checkModuleVarRefs(step.Title, workflowName, step.ID, "title", defined, result)
-		checkModuleVarRefs(step.Description, workflowName, step.ID, "description", defined, result)
-		checkModuleVarRefs(step.Instructions, workflowName, step.ID, "instructions", defined, result)
 		checkModuleVarRefs(step.Condition, workflowName, step.ID, "condition", defined, result)
-		checkModuleVarRefs(step.Code, workflowName, step.ID, "code", defined, result)
-		checkModuleVarRefs(step.Assignee, workflowName, step.ID, "assignee", defined, result)
 
 		for k, v := range step.Variables {
 			checkModuleVarRefs(v, workflowName, step.ID, fmt.Sprintf("variables.%s", k), defined, result)
@@ -1196,74 +981,6 @@ func checkModuleVarRefs(text, workflowName, stepID, field string, defined map[st
 			result.Add(workflowName, stepID, field,
 				fmt.Sprintf("undefined variable %q", root),
 				suggest)
-		}
-	}
-}
-
-// validateModuleTypeSpecific validates type-specific rules for steps.
-func validateModuleTypeSpecific(workflowName string, w *Workflow, result *ModuleValidationResult) {
-	for _, step := range w.Steps {
-		stepType := step.Type
-		if stepType == "" {
-			stepType = "task"
-		}
-
-		switch stepType {
-		case "condition":
-			// Condition steps need a condition and at least one branch
-			if step.Condition == "" {
-				result.Add(workflowName, step.ID, "condition",
-					"condition step requires a condition expression",
-					"add condition = \"your shell command\"")
-			}
-			if step.OnTrue == nil && step.OnFalse == nil {
-				result.Add(workflowName, step.ID, "condition",
-					"condition without on_true or on_false branch",
-					"add on_true and/or on_false to specify branch actions")
-			}
-
-		case "gate":
-			// Gate steps should have instructions for the human
-			if step.Instructions == "" {
-				result.Add(workflowName, step.ID, "type",
-					"gate without instructions",
-					"add instructions explaining what the human should do")
-			}
-			// Gates should NOT have an assignee
-			if step.Assignee != "" {
-				result.Add(workflowName, step.ID, "assignee",
-					"gate steps must not have an assignee",
-					"remove assignee - gates are for human approval, not agent execution")
-			}
-
-		case "task", "collaborative":
-			// Task and collaborative steps may need an assignee
-			// This is a soft check - assignee can be set at bake time
-			// so we don't enforce it during template parsing
-
-		case "expand":
-			// Expand steps need a template
-			if step.Template == "" {
-				result.Add(workflowName, step.ID, "template",
-					"expand step requires a template reference",
-					"add template = \".workflow\" or template = \"file#workflow\"")
-			}
-
-		case "code":
-			// Code steps need code
-			if step.Code == "" {
-				result.Add(workflowName, step.ID, "code",
-					"code step requires a code block",
-					"add code = \"your shell command\"")
-			}
-
-		case "start", "stop":
-			// Start/stop need an agent/assignee
-			if step.Assignee == "" {
-				result.Add(workflowName, step.ID, "assignee",
-					fmt.Sprintf("%s step requires an assignee (agent to %s)", stepType, stepType),
-					"add assignee = \"{{agent}}\" or specific agent ID")
-			}
 		}
 	}
 }

@@ -108,13 +108,10 @@ func (b *Baker) templateStepToStep(ts *Step) (*types.Step, error) {
 	// Set step-specific builtins BEFORE substitution
 	b.VarContext.SetBuiltin("step_id", ts.ID)
 
-	// Determine executor type
-	executor := b.determineExecutor(ts)
-
 	// Create base step
 	step := &types.Step{
 		ID:       ts.ID,
-		Executor: executor,
+		Executor: types.ExecutorType(ts.Executor),
 		Status:   types.StepStatusPending,
 		Needs:    ts.Needs,
 	}
@@ -125,35 +122,6 @@ func (b *Baker) templateStepToStep(ts *Step) (*types.Step, error) {
 	}
 
 	return step, nil
-}
-
-// determineExecutor determines the executor type from template step fields.
-func (b *Baker) determineExecutor(ts *Step) types.ExecutorType {
-	// Executor field takes precedence
-	if ts.Executor != "" {
-		return types.ExecutorType(ts.Executor)
-	}
-
-	// Map Type field to executor
-	switch ts.Type {
-	case "task", "collaborative", "":
-		return types.ExecutorAgent
-	case "code":
-		return types.ExecutorShell
-	case "condition":
-		return types.ExecutorBranch
-	case "start":
-		return types.ExecutorSpawn
-	case "stop":
-		return types.ExecutorKill
-	case "expand":
-		return types.ExecutorExpand
-	case "gate":
-		// Gates become branch with await-approval condition
-		return types.ExecutorBranch
-	default:
-		return types.ExecutorAgent
-	}
 }
 
 // setStepConfig sets the executor-specific configuration on the step.
@@ -180,11 +148,7 @@ func (b *Baker) setStepConfig(step *types.Step, ts *Step) error {
 
 // setShellConfig sets ShellConfig for shell executor steps.
 func (b *Baker) setShellConfig(step *types.Step, ts *Step) error {
-	// Get command from Command or Code field
 	command := ts.Command
-	if command == "" {
-		command = ts.Code
-	}
 
 	// Substitute variables
 	var err error
@@ -240,11 +204,7 @@ func (b *Baker) setShellConfig(step *types.Step, ts *Step) error {
 
 // setSpawnConfig sets SpawnConfig for spawn executor steps.
 func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
-	// Get agent from Agent or Assignee field
 	agent := ts.Agent
-	if agent == "" {
-		agent = ts.Assignee
-	}
 
 	var err error
 	agent, err = b.VarContext.Substitute(agent)
@@ -301,11 +261,7 @@ func (b *Baker) setSpawnConfig(step *types.Step, ts *Step) error {
 
 // setKillConfig sets KillConfig for kill executor steps.
 func (b *Baker) setKillConfig(step *types.Step, ts *Step) error {
-	// Get agent from Agent or Assignee field
 	agent := ts.Agent
-	if agent == "" {
-		agent = ts.Assignee
-	}
 
 	var err error
 	agent, err = b.VarContext.Substitute(agent)
@@ -450,10 +406,7 @@ func (b *Baker) setBranchConfig(step *types.Step, ts *Step) error {
 	condition := ts.Condition
 	var err error
 
-	// Gate type uses await-approval condition
-	if ts.Type == "gate" {
-		condition = fmt.Sprintf("meow await-approval %s", step.ID)
-	} else if condition != "" {
+	if condition != "" {
 		condition, err = b.VarContext.Substitute(condition)
 		if err != nil {
 			return fmt.Errorf("substitute condition: %w", err)
@@ -560,36 +513,12 @@ func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.Branch
 	// Convert inline steps
 	if len(et.Inline) > 0 {
 		for _, inlineStep := range et.Inline {
-			executor := types.ExecutorAgent
-			if inlineStep.Executor != "" {
-				executor = types.ExecutorType(inlineStep.Executor)
-			} else {
-				// Map Type field
-				switch inlineStep.Type {
-				case "task", "collaborative", "":
-					executor = types.ExecutorAgent
-				case "code":
-					executor = types.ExecutorShell
-				}
-			}
-
-			// Get prompt from Prompt or Instructions field
-			prompt := inlineStep.Prompt
-			if prompt == "" {
-				prompt = inlineStep.Instructions
-			}
-
-			// Get agent from Agent or Assignee field
-			agent := inlineStep.Agent
-			if agent == "" {
-				agent = inlineStep.Assignee
-			}
-
 			typesInlineStep := types.InlineStep{
 				ID:       inlineStep.ID,
-				Executor: executor,
-				Prompt:   prompt,
-				Agent:    agent,
+				Executor: types.ExecutorType(inlineStep.Executor),
+				Command:  inlineStep.Command,
+				Prompt:   inlineStep.Prompt,
+				Agent:    inlineStep.Agent,
 				Needs:    inlineStep.Needs,
 			}
 
@@ -602,11 +531,7 @@ func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.Branch
 
 // setAgentConfig sets AgentConfig for agent executor steps.
 func (b *Baker) setAgentConfig(step *types.Step, ts *Step) error {
-	// Get agent from Agent or Assignee field, or baker default
 	agent := ts.Agent
-	if agent == "" {
-		agent = ts.Assignee
-	}
 	if agent == "" {
 		agent = b.Assignee
 	}
@@ -619,11 +544,7 @@ func (b *Baker) setAgentConfig(step *types.Step, ts *Step) error {
 		}
 	}
 
-	// Get prompt from Prompt or Instructions field
 	prompt := ts.Prompt
-	if prompt == "" {
-		prompt = ts.Instructions
-	}
 	if prompt != "" {
 		prompt, err = b.VarContext.Substitute(prompt)
 		if err != nil {
