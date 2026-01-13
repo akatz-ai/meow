@@ -29,6 +29,12 @@ var embeddedTemplates embed.FS
 //go:embed adapters/*/adapter.toml
 var embeddedAdapters embed.FS
 
+//go:embed lib/*.toml
+var embeddedLib embed.FS
+
+//go:embed agents_template.md
+var embeddedAgentsMD string
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a MEOW project",
@@ -38,15 +44,24 @@ Creates the following structure:
 
   .meow/
   ├── config.toml      # Project configuration
+  ├── AGENTS.md        # Guidelines for agents working in workflows
   ├── templates/       # Workflow templates (starter templates included)
   │   ├── simple.meow.toml
   │   └── tdd.meow.toml
+  ├── lib/             # Standard library templates
+  │   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
+  │   ├── claude-utils.meow.toml       # Context monitoring
+  │   ├── claude-events.meow.toml      # Hook configuration
+  │   └── worktree.meow.toml           # Git worktree helper
   ├── adapters/        # Agent adapter configs (claude, codex, opencode)
   ├── runs/            # Runtime state for active runs (gitignored)
   └── logs/            # Per-run log files (gitignored)
 
 The runs/ and logs/ directories should be added to .gitignore as they
 contain ephemeral runtime state.
+
+AGENTS.md contains guidelines for AI agents working within MEOW workflows.
+Include it in your agent worktrees or reference from your project's CLAUDE.md.
 
 Use --hooks to also create .claude/settings.json with MEOW hooks for
 agent automation (typically only needed in agent worktrees).`,
@@ -78,6 +93,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Create directory structure
 	dirs := []string{
 		filepath.Join(meowDir, "templates"),
+		filepath.Join(meowDir, "lib"),
 		filepath.Join(meowDir, "runs"),
 		filepath.Join(meowDir, "logs"),
 		filepath.Join(meowDir, "adapters"),
@@ -139,6 +155,17 @@ default_adapter = "claude"
 		return fmt.Errorf("copying adapters: %w", err)
 	}
 
+	// Copy standard library templates
+	if err := copyEmbeddedLib(filepath.Join(meowDir, "lib")); err != nil {
+		return fmt.Errorf("copying lib: %w", err)
+	}
+
+	// Write AGENTS.md (agent guidelines for workflow participants)
+	agentsPath := filepath.Join(meowDir, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte(embeddedAgentsMD), 0644); err != nil {
+		return fmt.Errorf("writing AGENTS.md: %w", err)
+	}
+
 	// Ensure .beads directory exists
 	beadsDir := filepath.Join(dir, ".beads")
 	if err := os.MkdirAll(beadsDir, 0755); err != nil {
@@ -158,7 +185,9 @@ default_adapter = "claude"
 	fmt.Println("Initialized MEOW project in", dir)
 	fmt.Println("\nCreated:")
 	fmt.Println("  .meow/config.toml    - configuration")
+	fmt.Println("  .meow/AGENTS.md      - agent workflow guidelines")
 	fmt.Println("  .meow/templates/     - workflow templates")
+	fmt.Println("  .meow/lib/           - standard library (agent-persistence, context-monitor, etc)")
 	fmt.Println("  .meow/adapters/      - adapter configs")
 	fmt.Println("  .meow/runs/          - run state files")
 	fmt.Println("  .meow/logs/          - per-run log files")
@@ -225,6 +254,32 @@ func copyEmbeddedAdapters(destDir string) error {
 			return fmt.Errorf("creating adapter dir %s: %w", filepath.Dir(destPath), err)
 		}
 
+		if err := os.WriteFile(destPath, content, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", destPath, err)
+		}
+
+		return nil
+	})
+}
+
+// copyEmbeddedLib copies standard library templates from the embedded filesystem.
+func copyEmbeddedLib(destDir string) error {
+	return fs.WalkDir(embeddedLib, "lib", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		// Read embedded file
+		content, err := embeddedLib.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading embedded %s: %w", path, err)
+		}
+
+		// Write to destination
+		destPath := filepath.Join(destDir, filepath.Base(path))
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
 		}

@@ -1,4 +1,6 @@
-# Agent Persistence Library Template (Ralph Wiggum Pattern)
+# ═══════════════════════════════════════════════════════════════════════════════
+# MEOW Library: Agent Persistence (Ralph Wiggum Pattern)
+# ═══════════════════════════════════════════════════════════════════════════════
 #
 # Monitors an agent and re-injects prompts when it stops unexpectedly.
 # Named after Ralph Wiggum's famous "I'm helping!" persistence.
@@ -7,7 +9,7 @@
 #   1. Listening for agent-stopped events
 #   2. Re-injecting a nudge prompt when the agent stops
 #   3. Checking if the main task is complete
-#   4. Looping until the task completes
+#   4. Looping until the task completes or max_loops is reached
 #
 # This is agent-agnostic - works with any agent that emits agent-stopped events
 # (configure via lib/claude-events#setup-stop-hook for Claude Code).
@@ -20,7 +22,6 @@
 #   id = "spawn"
 #   executor = "spawn"
 #   agent = "worker"
-#   workdir = "{{worktree}}"
 #
 #   # Main task
 #   [[main.steps]]
@@ -32,7 +33,7 @@
 #
 #   # Start persistence monitor in parallel
 #   [[main.steps]]
-#   id = "persistence-monitor"
+#   id = "persistence"
 #   executor = "expand"
 #   template = "lib/agent-persistence#monitor"
 #   needs = ["spawn"]
@@ -49,39 +50,12 @@
 #   agent = "worker"
 #   needs = ["work"]
 #
-# ARCHITECTURE:
-#
-#   ┌─────────────────────────────────────────────────────────────────┐
-#   │                      WORKFLOW                                    │
-#   │                                                                  │
-#   │  spawn ─┬─► work (agent executor, waits for meow done)          │
-#   │         │                                                        │
-#   │         └─► monitor (expand, parallel)                           │
-#   │                 │                                                │
-#   │                 ▼                                                │
-#   │            monitor-loop (internal)                               │
-#   │                 │                                                │
-#   │                 ├─► await-event agent-stopped (timeout: 60s)    │
-#   │                 │                                                │
-#   │                 ├─[event]─► nudge via fire_forget               │
-#   │                 │           └─► check if done → loop/exit       │
-#   │                 │                                                │
-#   │                 └─[timeout]─► check if done → loop/exit         │
-#   │                                                                  │
-#   │  kill ◄── needs: [work] (NOT monitor)                           │
-#   └─────────────────────────────────────────────────────────────────┘
-#
-# The monitor naturally terminates when check_step completes because:
-#   1. The await-event times out
-#   2. meow step-status shows the step is done
-#   3. The loop exits via the on_false branch (no more recursion)
-#
 # VARIABLES:
 #
 #   agent (required): Agent ID to monitor for agent-stopped events
 #   nudge_prompt (required): Prompt to re-inject when agent stops unexpectedly
 #   check_step (required): Step ID to check for completion (exits loop when done)
-#   timeout (default "60s"): How long to wait between checks
+#   timeout (default "60"): Seconds to wait between event checks
 #   max_loops (default "10"): Safety kill switch - max nudges before force-completing
 #
 # PREREQUISITES:
@@ -90,12 +64,7 @@
 #     template = "lib/claude-events#setup-stop-hook"
 #     variables = { worktree = "{{workdir}}" }
 #
-# NOTES:
-#
-#   - The monitor runs in parallel with the main task
-#   - Kill/cleanup should depend on the main task, not the monitor
-#   - The monitor self-terminates when check_step completes
-#   - Uses fire_forget mode to inject prompts without blocking
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MONITOR (Public Entry Point)
@@ -103,18 +72,6 @@
 #
 # Starts the persistence monitor loop. Expand this in parallel with your main
 # agent task to ensure the agent stays on track.
-#
-# Example:
-#   [[main.steps]]
-#   id = "persistence"
-#   executor = "expand"
-#   template = "lib/agent-persistence#monitor"
-#   needs = ["spawn"]
-#   variables = {
-#     agent = "worker",
-#     nudge_prompt = "Continue working. Run 'meow done' when finished.",
-#     check_step = "main-task"
-#   }
 
 [monitor]
 name = "agent-persistence-monitor"
@@ -124,27 +81,72 @@ description = "Monitor agent for unexpected stops and re-inject prompts"
 agent = { required = true, description = "Agent ID to monitor" }
 nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
 check_step = { required = true, description = "Step ID to check for completion" }
-timeout = { default = "60s", description = "How long to wait between checks" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
 max_loops = { default = "10", description = "Max nudges before force-completing (safety kill switch)" }
 
 [[monitor.steps]]
-id = "start"
+id = "monitor-loop"
 executor = "shell"
-command = "echo 'Starting persistence monitor for agent {{agent}}, watching step {{check_step}} (max {{max_loops}} nudges)'"
+command = """
+AGENT="{{agent}}"
+CHECK_STEP="{{check_step}}"
+TIMEOUT="{{timeout}}"
+MAX_LOOPS="{{max_loops}}"
+SESSION="meow-${MEOW_WORKFLOW}-${AGENT}"
+LOOP_COUNT=0
 
-[[monitor.steps]]
-id = "loop"
-executor = "expand"
-template = ".monitor-loop"
-needs = ["start"]
+# Escape special characters in nudge prompt for shell
+NUDGE_PROMPT=$(cat <<'NUDGE_EOF'
+{{nudge_prompt}}
+NUDGE_EOF
+)
 
-[monitor.steps.variables]
-agent = "{{agent}}"
-nudge_prompt = "{{nudge_prompt}}"
-check_step = "{{check_step}}"
-timeout = "{{timeout}}"
-max_loops = "{{max_loops}}"
-loop_count = "0"
+echo "Starting persistence monitor for agent $AGENT, watching step $CHECK_STEP (max $MAX_LOOPS nudges)"
+
+while [ $LOOP_COUNT -lt $MAX_LOOPS ]; do
+    # Check if session still exists
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "Session $SESSION no longer exists, monitor exiting"
+        exit 0
+    fi
+
+    # Wait for agent-stopped event with timeout
+    echo "Waiting for agent-stopped event (timeout: ${TIMEOUT}s)..."
+    if meow await-event agent-stopped --filter agent=${AGENT} --timeout ${TIMEOUT}s 2>/dev/null; then
+        # Event received - agent stopped unexpectedly
+        LOOP_COUNT=$((LOOP_COUNT + 1))
+        echo "Agent $AGENT stopped unexpectedly. Nudge #$LOOP_COUNT of $MAX_LOOPS"
+
+        # Re-inject the prompt via tmux (use -l for literal mode, then Enter separately)
+        tmux send-keys -t "$SESSION" -l "$NUDGE_PROMPT"
+        sleep 0.1  # Small delay before Enter (like adapter post_delay)
+        tmux send-keys -t "$SESSION" Enter
+
+        # Small delay to let the nudge take effect
+        sleep 2
+    fi
+
+    # Check if main task step is done
+    if ! meow step-status "$CHECK_STEP" --is-not done 2>/dev/null; then
+        echo "Persistence monitor exiting - step $CHECK_STEP is done (after $LOOP_COUNT nudges)"
+        exit 0
+    fi
+done
+
+# Max loops reached - force complete
+echo "WARNING: Agent $AGENT hit max nudge limit ($LOOP_COUNT nudges). Force completing..."
+FORCE_PROMPT="SYSTEM OVERRIDE: You have been nudged $LOOP_COUNT times without completing your task.
+
+This is an automatic safety intervention. Please run meow done NOW to signal completion, even if your work is incomplete.
+
+Run this command immediately:
+meow done"
+
+tmux send-keys -t "$SESSION" -l "$FORCE_PROMPT"
+sleep 0.1
+tmux send-keys -t "$SESSION" Enter
+echo "Force-complete sent to agent $AGENT. Monitor exiting."
+"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,18 +157,6 @@ loop_count = "0"
 # workflow. Includes enable/disable toggle and sensible defaults.
 #
 # This is the RECOMMENDED way to add RW persistence to workflows.
-#
-# Example:
-#   [[main.steps]]
-#   id = "persistence"
-#   executor = "expand"
-#   template = "lib/agent-persistence#optional-monitor"
-#   needs = ["spawn"]
-#
-#   [main.steps.variables]
-#   agent = "{{agent_name}}"
-#   check_step = "work"
-#   # Optional: enable = "{{enable_rw}}", max_loops = "10", nudge_prompt = "..."
 
 [optional-monitor]
 name = "optional-agent-persistence"
@@ -176,8 +166,8 @@ description = "Optionally enabled persistence monitor - modular drop-in for any 
 agent = { required = true, description = "Agent ID to monitor" }
 check_step = { required = true, description = "Step ID to check for completion (monitor exits when this step is done)" }
 enable = { default = "true", description = "Enable monitoring (true/false) - use for conditional RW" }
-nudge_prompt = { default = "You stopped unexpectedly. Continue with your assigned task.\n\nWhen complete, run: `meow done`", description = "Prompt to re-inject on unexpected stop" }
-timeout = { default = "60s", description = "How long to wait between event checks" }
+nudge_prompt = { default = "You stopped unexpectedly. Continue with your assigned task.\n\nWhen complete, run: meow done", description = "Prompt to re-inject on unexpected stop" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
 max_loops = { default = "10", description = "Max nudges before force-completing (safety limit)" }
 
 [[optional-monitor.steps]]
@@ -186,7 +176,7 @@ executor = "branch"
 condition = "test '{{enable}}' = 'true'"
 
 [optional-monitor.steps.on_true]
-template = ".monitor-impl"
+template = "#monitor"
 variables = { agent = "{{agent}}", check_step = "{{check_step}}", nudge_prompt = "{{nudge_prompt}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}" }
 
 [optional-monitor.steps.on_false]
@@ -196,282 +186,11 @@ inline = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MONITOR IMPL (Internal - used by optional-monitor)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Internal implementation that starts the actual monitor. Separated so the
-# branch in optional-monitor can expand to it.
-
-[monitor-impl]
-name = "monitor-impl"
-description = "Internal: Actual monitor start (use optional-monitor or monitor instead)"
-internal = true
-
-[monitor-impl.variables]
-agent = { required = true }
-check_step = { required = true }
-nudge_prompt = { required = true }
-timeout = { default = "60s" }
-max_loops = { default = "10" }
-
-[[monitor-impl.steps]]
-id = "start"
-executor = "shell"
-command = "echo 'Starting persistence monitor for agent {{agent}}, watching step {{check_step}} (max {{max_loops}} nudges)'"
-
-[[monitor-impl.steps]]
-id = "loop"
-executor = "expand"
-template = ".monitor-loop"
-needs = ["start"]
-
-[monitor-impl.steps.variables]
-agent = "{{agent}}"
-nudge_prompt = "{{nudge_prompt}}"
-check_step = "{{check_step}}"
-timeout = "{{timeout}}"
-max_loops = "{{max_loops}}"
-loop_count = "0"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MONITOR LOOP (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# The core monitoring loop that waits for events and handles them.
-# This template calls itself recursively until check_step completes.
-
-[monitor-loop]
-name = "monitor-loop"
-description = "Internal: Event monitoring loop"
-internal = true
-
-[monitor-loop.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-max_loops = { default = "10" }
-loop_count = { default = "0" }
-
-# First check if we've hit the max loop limit
-[[monitor-loop.steps]]
-id = "check-limit"
-executor = "branch"
-condition = "test {{loop_count}} -lt {{max_loops}}"
-
-# Under limit - continue monitoring
-[monitor-loop.steps.on_true]
-template = ".monitor-loop-body"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}", loop_count = "{{loop_count}}" }
-
-# Limit reached - force complete the agent
-[monitor-loop.steps.on_false]
-template = ".force-complete"
-variables = { agent = "{{agent}}", check_step = "{{check_step}}", loop_count = "{{loop_count}}" }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MONITOR LOOP BODY (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# The actual event waiting logic, separated so we can check limits first.
-
-[monitor-loop-body]
-name = "monitor-loop-body"
-description = "Internal: Event waiting logic"
-internal = true
-
-[monitor-loop-body.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-max_loops = { default = "10" }
-loop_count = { default = "0" }
-
-# Wait for agent-stopped event with timeout
-[[monitor-loop-body.steps]]
-id = "wait-for-event"
-executor = "branch"
-condition = "meow await-event agent-stopped --filter agent={{agent}} --timeout {{timeout}}"
-
-# Event received - agent stopped unexpectedly
-[monitor-loop-body.steps.on_true]
-template = ".handle-stop-event"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}", loop_count = "{{loop_count}}" }
-
-# Timeout - no event, just check if we should continue
-[monitor-loop-body.steps.on_false]
-template = ".check-and-continue"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}", loop_count = "{{loop_count}}" }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FORCE COMPLETE (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Called when max_loops is reached. Forces the agent to complete.
-
-[force-complete]
-name = "force-complete"
-description = "Internal: Force agent to complete after max nudges"
-internal = true
-
-[force-complete.variables]
-agent = { required = true }
-check_step = { required = true }
-loop_count = { required = true }
-
-[[force-complete.steps]]
-id = "warn"
-executor = "shell"
-command = "echo 'WARNING: Agent {{agent}} hit max nudge limit ({{loop_count}} nudges). Force completing...'"
-
-[[force-complete.steps]]
-id = "force-done"
-executor = "agent"
-agent = "{{agent}}"
-needs = ["warn"]
-mode = "fire_forget"
-prompt = """
-SYSTEM OVERRIDE: You have been nudged {{loop_count}} times without completing your task.
-
-This is an automatic safety intervention. Please run `meow done` NOW to signal completion, even if your work is incomplete. The orchestrator will handle cleanup.
-
-Run this command immediately:
-```
-meow done
-```
-"""
-
-[[force-complete.steps]]
-id = "exit"
-executor = "shell"
-command = "echo 'Force-complete sent to agent {{agent}}. Monitor exiting.'"
-needs = ["force-done"]
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# HANDLE STOP EVENT (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Called when an agent-stopped event is received. Nudges the agent and
-# then checks if we should continue monitoring.
-
-[handle-stop-event]
-name = "handle-stop-event"
-description = "Internal: Handle agent-stopped event"
-internal = true
-
-[handle-stop-event.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-max_loops = { default = "10" }
-loop_count = { default = "0" }
-
-# Log the nudge
-[[handle-stop-event.steps]]
-id = "log"
-executor = "shell"
-command = "echo 'Agent {{agent}} stopped unexpectedly. Nudge #$(({{loop_count}} + 1)) of {{max_loops}}'"
-
-# Re-inject the prompt using fire_forget
-[[handle-stop-event.steps]]
-id = "nudge"
-executor = "agent"
-agent = "{{agent}}"
-prompt = "{{nudge_prompt}}"
-mode = "fire_forget"
-needs = ["log"]
-
-# Small delay to let the nudge take effect
-[[handle-stop-event.steps]]
-id = "delay"
-executor = "shell"
-command = "sleep 2"
-needs = ["nudge"]
-
-# Increment loop count and check if we should continue monitoring
-[[handle-stop-event.steps]]
-id = "increment"
-executor = "shell"
-command = "echo $(({{loop_count}} + 1))"
-needs = ["delay"]
-
-[handle-stop-event.steps.shell_outputs]
-next_count = { source = "stdout" }
-
-# Check if we should continue monitoring (with incremented count)
-[[handle-stop-event.steps]]
-id = "check"
-executor = "expand"
-template = ".check-and-continue"
-needs = ["increment"]
-
-[handle-stop-event.steps.variables]
-agent = "{{agent}}"
-nudge_prompt = "{{nudge_prompt}}"
-check_step = "{{check_step}}"
-timeout = "{{timeout}}"
-max_loops = "{{max_loops}}"
-loop_count = "{{increment.outputs.next_count}}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CHECK AND CONTINUE (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Checks if the main task step is done. If not, continues the loop.
-# If done, exits gracefully.
-
-[check-and-continue]
-name = "check-and-continue"
-description = "Internal: Check if main step done, continue loop if not"
-internal = true
-
-[check-and-continue.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-max_loops = { default = "10" }
-loop_count = { default = "0" }
-
-# Check if the main task step is NOT done (still running or pending)
-[[check-and-continue.steps]]
-id = "check-step"
-executor = "branch"
-condition = "meow step-status {{check_step}} --is-not done"
-
-# Main task still running - continue monitoring (pass loop count)
-[check-and-continue.steps.on_true]
-template = ".monitor-loop"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}", loop_count = "{{loop_count}}" }
-
-# Main task done - exit the monitor loop gracefully
-[check-and-continue.steps.on_false]
-inline = [
-  { id = "exit", executor = "shell", command = "echo 'Persistence monitor exiting - step {{check_step}} is done (after {{loop_count}} nudges)'" }
-]
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # AGGRESSIVE MONITOR (Public Entry Point)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # A more aggressive variant that sends Escape before the nudge prompt.
 # Useful when you want to interrupt an agent that might be stuck.
-#
-# Example:
-#   [[main.steps]]
-#   id = "persistence"
-#   executor = "expand"
-#   template = "lib/agent-persistence#aggressive-monitor"
-#   needs = ["spawn"]
-#   variables = { ... }
 
 [aggressive-monitor]
 name = "aggressive-agent-persistence"
@@ -481,140 +200,76 @@ description = "Monitor with aggressive interrupt before nudge"
 agent = { required = true, description = "Agent ID to monitor" }
 nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
 check_step = { required = true, description = "Step ID to check for completion" }
-timeout = { default = "60s", description = "How long to wait between checks" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
+max_loops = { default = "10", description = "Max nudges before force-completing (safety kill switch)" }
 
 [[aggressive-monitor.steps]]
-id = "start"
+id = "monitor-loop"
 executor = "shell"
-command = "echo 'Starting AGGRESSIVE persistence monitor for agent {{agent}}'"
+command = """
+AGENT="{{agent}}"
+CHECK_STEP="{{check_step}}"
+TIMEOUT="{{timeout}}"
+MAX_LOOPS="{{max_loops}}"
+SESSION="meow-${MEOW_WORKFLOW}-${AGENT}"
+LOOP_COUNT=0
 
-[[aggressive-monitor.steps]]
-id = "loop"
-executor = "expand"
-template = ".aggressive-monitor-loop"
-needs = ["start"]
+# Escape special characters in nudge prompt for shell
+NUDGE_PROMPT=$(cat <<'NUDGE_EOF'
+{{nudge_prompt}}
+NUDGE_EOF
+)
 
-[aggressive-monitor.steps.variables]
-agent = "{{agent}}"
-nudge_prompt = "{{nudge_prompt}}"
-check_step = "{{check_step}}"
-timeout = "{{timeout}}"
+echo "Starting AGGRESSIVE persistence monitor for agent $AGENT, watching step $CHECK_STEP (max $MAX_LOOPS nudges)"
 
+while [ $LOOP_COUNT -lt $MAX_LOOPS ]; do
+    # Check if session still exists
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "Session $SESSION no longer exists, aggressive monitor exiting"
+        exit 0
+    fi
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGGRESSIVE MONITOR LOOP (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
+    # Wait for agent-stopped event with timeout
+    echo "Waiting for agent-stopped event (timeout: ${TIMEOUT}s)..."
+    if meow await-event agent-stopped --filter agent=${AGENT} --timeout ${TIMEOUT}s 2>/dev/null; then
+        # Event received - agent stopped unexpectedly
+        LOOP_COUNT=$((LOOP_COUNT + 1))
+        echo "Agent $AGENT stopped unexpectedly (aggressive). Nudge #$LOOP_COUNT of $MAX_LOOPS"
 
-[aggressive-monitor-loop]
-name = "aggressive-monitor-loop"
-description = "Internal: Aggressive event monitoring loop"
-internal = true
+        # Send Escape first to ensure agent is in clean state
+        tmux send-keys -t "$SESSION" Escape
+        sleep 0.5
 
-[aggressive-monitor-loop.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
+        # Then send the nudge prompt (use -l for literal mode, then Enter separately)
+        tmux send-keys -t "$SESSION" -l "$NUDGE_PROMPT"
+        sleep 0.1
+        tmux send-keys -t "$SESSION" Enter
 
-[[aggressive-monitor-loop.steps]]
-id = "wait-for-event"
-executor = "branch"
-condition = "meow await-event agent-stopped --filter agent={{agent}} --timeout {{timeout}}"
+        # Small delay to let the nudge take effect
+        sleep 2
+    fi
 
-[aggressive-monitor-loop.steps.on_true]
-template = ".aggressive-handle-stop"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+    # Check if main task step is done
+    if ! meow step-status "$CHECK_STEP" --is-not done 2>/dev/null; then
+        echo "Aggressive monitor exiting - step $CHECK_STEP is done (after $LOOP_COUNT nudges)"
+        exit 0
+    fi
+done
 
-[aggressive-monitor-loop.steps.on_false]
-template = ".check-and-continue-aggressive"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
+# Max loops reached - force complete
+echo "WARNING: Agent $AGENT hit max nudge limit ($LOOP_COUNT nudges). Force completing..."
+tmux send-keys -t "$SESSION" Escape
+sleep 0.5
 
+FORCE_PROMPT="SYSTEM OVERRIDE: You have been nudged $LOOP_COUNT times without completing your task.
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGGRESSIVE HANDLE STOP (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
+This is an automatic safety intervention. Please run meow done NOW to signal completion, even if your work is incomplete.
 
-[aggressive-handle-stop]
-name = "aggressive-handle-stop"
-description = "Internal: Handle stop with Escape before nudge"
-internal = true
+Run this command immediately:
+meow done"
 
-[aggressive-handle-stop.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-
-# Send Escape first to ensure agent is in clean state
-[[aggressive-handle-stop.steps]]
-id = "escape"
-executor = "agent"
-agent = "{{agent}}"
-prompt = "Escape"
-mode = "fire_forget"
-
-# Small delay for escape to take effect
-[[aggressive-handle-stop.steps]]
-id = "escape-delay"
-executor = "shell"
-command = "sleep 0.5"
-needs = ["escape"]
-
-# Then send the nudge prompt
-[[aggressive-handle-stop.steps]]
-id = "nudge"
-executor = "agent"
-agent = "{{agent}}"
-prompt = "{{nudge_prompt}}"
-mode = "fire_forget"
-needs = ["escape-delay"]
-
-# Delay before checking
-[[aggressive-handle-stop.steps]]
-id = "nudge-delay"
-executor = "shell"
-command = "sleep 2"
-needs = ["nudge"]
-
-# Check and potentially continue
-[[aggressive-handle-stop.steps]]
-id = "check"
-executor = "expand"
-template = ".check-and-continue-aggressive"
-needs = ["nudge-delay"]
-
-[aggressive-handle-stop.steps.variables]
-agent = "{{agent}}"
-nudge_prompt = "{{nudge_prompt}}"
-check_step = "{{check_step}}"
-timeout = "{{timeout}}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CHECK AND CONTINUE AGGRESSIVE (Internal)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-[check-and-continue-aggressive]
-name = "check-and-continue-aggressive"
-description = "Internal: Check if main step done for aggressive monitor"
-internal = true
-
-[check-and-continue-aggressive.variables]
-agent = { required = true }
-nudge_prompt = { required = true }
-check_step = { required = true }
-timeout = { default = "60s" }
-
-[[check-and-continue-aggressive.steps]]
-id = "check-step"
-executor = "branch"
-condition = "meow step-status {{check_step}} --is-not done"
-
-[check-and-continue-aggressive.steps.on_true]
-template = ".aggressive-monitor-loop"
-variables = { agent = "{{agent}}", nudge_prompt = "{{nudge_prompt}}", check_step = "{{check_step}}", timeout = "{{timeout}}" }
-
-[check-and-continue-aggressive.steps.on_false]
-inline = [
-  { id = "exit", executor = "shell", command = "echo 'Aggressive monitor exiting - step {{check_step}} is done'" }
-]
+tmux send-keys -t "$SESSION" -l "$FORCE_PROMPT"
+sleep 0.1
+tmux send-keys -t "$SESSION" Enter
+echo "Force-complete sent to agent $AGENT. Aggressive monitor exiting."
+"""
