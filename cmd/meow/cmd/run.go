@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -25,19 +26,36 @@ var runCmd = &cobra.Command{
 	Long: `Start a workflow by baking a template into steps and running the orchestrator.
 
 The template is loaded and baked into steps which are persisted in
-.meow/workflows/<id>.yaml. The orchestrator then executes the workflow.`,
+.meow/workflows/<id>.yaml. The orchestrator then executes the workflow.
+
+Use -d/--detach to run in background mode. The orchestrator will run
+as a daemon and you can use 'meow status' to check progress and
+'meow stop' to stop it.
+
+Examples:
+  meow run workflow.toml              # Run in foreground
+  meow run workflow.toml -d           # Run in background
+  meow run workflow.toml --var x=y    # Pass variables`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRun,
 }
 
 var (
-	runDry      bool
-	runVars     []string
-	runWorkflow string
+	runDry           bool
+	runDetach        bool
+	runDetachedChild bool   // internal flag for child process
+	runWorkflowID    string // internal: workflow ID for detached child
+	runVars          []string
+	runWorkflow      string
 )
 
 func init() {
 	runCmd.Flags().BoolVar(&runDry, "dry-run", false, "validate and show what would be created without executing")
+	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "run in background (detached mode)")
+	runCmd.Flags().BoolVar(&runDetachedChild, "_detached-child", false, "internal: running as detached child")
+	runCmd.Flags().StringVar(&runWorkflowID, "_workflow-id", "", "internal: workflow ID for detached child")
+	runCmd.Flags().MarkHidden("_detached-child")
+	runCmd.Flags().MarkHidden("_workflow-id")
 	runCmd.Flags().StringArrayVar(&runVars, "var", nil, "variable values (format: name=value)")
 	runCmd.Flags().StringVar(&runWorkflow, "workflow", "main", "workflow name to run (default: main)")
 	rootCmd.AddCommand(runCmd)
@@ -102,8 +120,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workflow %q not found in template. Available: %v", runWorkflow, available)
 	}
 
-	// Generate a unique workflow ID
-	workflowID := fmt.Sprintf("wf-%d", time.Now().UnixNano())
+	// Generate a unique workflow ID (or use passed ID for detached child)
+	workflowID := runWorkflowID
+	if workflowID == "" {
+		workflowID = fmt.Sprintf("wf-%d", time.Now().UnixNano())
+	}
 
 	// Create baker
 	baker := template.NewBaker(workflowID)
@@ -125,6 +146,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 			}
 		}
 		return nil
+	}
+
+	// Handle detached mode: spawn child process and exit
+	if runDetach && !runDetachedChild {
+		return spawnDetachedOrchestrator(dir, templatePath, workflowID)
 	}
 
 	// Create a Workflow object
@@ -274,6 +300,66 @@ func runRun(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+// spawnDetachedOrchestrator spawns a child process to run the workflow in background
+func spawnDetachedOrchestrator(dir, templatePath, workflowID string) error {
+	// Build command args for the child process
+	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", runWorkflow}
+	for _, v := range runVars {
+		args = append(args, "--var", v)
+	}
+	if verbose {
+		args = append(args, "--verbose")
+	}
+
+	// Find the executable path
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding executable: %w", err)
+	}
+
+	// Create log file for output
+	logDir := filepath.Join(dir, ".meow", "workflows")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("creating log dir: %w", err)
+	}
+	logPath := filepath.Join(logDir, workflowID+".log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("creating log file: %w", err)
+	}
+
+	// Create the child process
+	cmd := exec.Command(executable, args...)
+	cmd.Dir = dir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+
+	// Detach from parent process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true, // Create new session (fully detach)
+	}
+
+	// Start the child process
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("starting detached process: %w", err)
+	}
+
+	// Don't wait for the child - let it run independently
+	// The child will manage its own cleanup
+
+	fmt.Printf("Started workflow in background\n")
+	fmt.Printf("  ID:  %s\n", workflowID)
+	fmt.Printf("  PID: %d\n", cmd.Process.Pid)
+	fmt.Printf("  Log: %s\n", logPath)
+	fmt.Println()
+	fmt.Printf("Use 'meow status %s' to check progress\n", workflowID)
+	fmt.Printf("Use 'meow stop %s' to stop the workflow\n", workflowID)
 
 	return nil
 }
