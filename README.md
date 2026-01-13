@@ -18,7 +18,7 @@ The AI agent orchestration space is full of frameworks: LangChain, CrewAI, Claud
 | Cloud services and databases | TOML files on disk |
 | Agents as API endpoints | Agents as terminal processes |
 | Framework-specific agent code | Any terminal agent, unchanged |
-| Visual builders, dashboards | `git diff`-able TOML templates |
+| Visual builders, dashboards | `git diff`-able TOML workflows |
 
 MEOW is for developers who use Claude Code or Aider, want multi-agent workflows, and don't want to adopt a framework ecosystem. If you need enterprise features or turnkey agent capabilities, look at [Claude-Flow](https://github.com/ruvnet/claude-flow) or [LangGraph](https://langchain-ai.github.io/langgraph/).
 
@@ -46,7 +46,7 @@ Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow/rel
 
 ### Claude Code Skill
 
-If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the MEOW skill to get contextual help with workflows, templates, and debugging:
+If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the MEOW skill to get contextual help with workflows and debugging:
 
 ```bash
 # Add the marketplace
@@ -73,10 +73,10 @@ This creates the following structure:
 .meow/
 ├── config.toml      # Project configuration
 ├── AGENTS.md        # Guidelines for agents in workflows
-├── templates/       # Workflow templates (starter templates included)
+├── workflows/       # Workflow definitions (starter workflows included)
 │   ├── simple.meow.toml
 │   └── tdd.meow.toml
-├── lib/             # Standard library templates
+├── lib/             # Standard library workflows
 │   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
 │   ├── claude-events.meow.toml      # Hook configuration
 │   └── worktree.meow.toml           # Git worktree helper
@@ -93,12 +93,12 @@ The `AGENTS.md` file contains guidelines for AI agents working within workflows�
 Run your first workflow:
 
 ```bash
-meow run .meow/templates/simple.meow.toml --var agent=my-agent
+meow run simple --var task="My first task"
 ```
 
 ## How It Works
 
-MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
+MEOW workflows are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
 
 Here's an example workflow that parses tasks from JSON, farms them to parallel agents with persistence loops, then reviews and merges:
 
@@ -145,11 +145,11 @@ flowchart TB
     merge --> cleanup
 ```
 
-See the [`examples/`](examples/) directory for ready-to-run workflow templates.
+See the [`examples/`](examples/) directory for ready-to-run workflows.
 
 ```
-Templates = Programs (version-controlled .meow.toml files)
-Steps     = Instructions within a template
+Workflows = Programs (version-controlled .meow.toml files)
+Steps     = Instructions within a workflow
 Executors = Who runs each instruction (7 total)
 Runs      = Running instances (runtime state)
 ```
@@ -161,7 +161,7 @@ Runs      = Running instances (runtime state)
 | `shell` | Run commands, capture outputs |
 | `spawn` | Start an agent in tmux |
 | `kill` | Stop an agent session |
-| `expand` | Inline another template |
+| `expand` | Inline another workflow |
 | `branch` | Conditional execution |
 | `foreach` | Iterate over lists |
 | `agent` | Prompt agent, wait for completion |

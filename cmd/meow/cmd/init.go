@@ -23,8 +23,8 @@ const meowHooksJSON = `{
   }
 }`
 
-//go:embed templates/*.toml
-var embeddedTemplates embed.FS
+//go:embed workflows/*.toml
+var embeddedWorkflows embed.FS
 
 //go:embed adapters/*/adapter.toml
 var embeddedAdapters embed.FS
@@ -45,12 +45,11 @@ Creates the following structure:
   .meow/
   ├── config.toml      # Project configuration
   ├── AGENTS.md        # Guidelines for agents working in workflows
-  ├── templates/       # Workflow templates (starter templates included)
+  ├── workflows/       # Workflow definitions (starter workflows included)
   │   ├── simple.meow.toml
   │   └── tdd.meow.toml
-  ├── lib/             # Standard library templates
+  ├── lib/             # Standard library workflows
   │   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
-  │   ├── claude-utils.meow.toml       # Context monitoring
   │   ├── claude-events.meow.toml      # Hook configuration
   │   └── worktree.meow.toml           # Git worktree helper
   ├── adapters/        # Agent adapter configs (claude, codex, opencode)
@@ -70,12 +69,12 @@ agent automation (typically only needed in agent worktrees).`,
 
 var (
 	initWithHooks     bool
-	initSkipTemplates bool
+	initSkipWorkflows bool
 )
 
 func init() {
 	initCmd.Flags().BoolVar(&initWithHooks, "hooks", false, "setup Claude Code hooks for automation (use only in agent worktrees)")
-	initCmd.Flags().BoolVar(&initSkipTemplates, "skip-templates", false, "skip copying default templates")
+	initCmd.Flags().BoolVar(&initSkipWorkflows, "skip-workflows", false, "skip copying default workflows")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -92,7 +91,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Create directory structure
 	dirs := []string{
-		filepath.Join(meowDir, "templates"),
+		filepath.Join(meowDir, "workflows"),
 		filepath.Join(meowDir, "lib"),
 		filepath.Join(meowDir, "runs"),
 		filepath.Join(meowDir, "logs"),
@@ -111,7 +110,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 version = "1"
 
 [paths]
-template_dir = ".meow/templates"
+workflow_dir = ".meow/workflows"
 runs_dir = ".meow/runs"
 logs_dir = ".meow/logs"
 
@@ -143,10 +142,10 @@ default_adapter = "claude"
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	// Copy default templates
-	if !initSkipTemplates {
-		if err := copyEmbeddedTemplates(filepath.Join(meowDir, "templates")); err != nil {
-			return fmt.Errorf("copying templates: %w", err)
+	// Copy default workflows
+	if !initSkipWorkflows {
+		if err := copyEmbeddedWorkflows(filepath.Join(meowDir, "workflows")); err != nil {
+			return fmt.Errorf("copying workflows: %w", err)
 		}
 	}
 
@@ -186,8 +185,8 @@ default_adapter = "claude"
 	fmt.Println("\nCreated:")
 	fmt.Println("  .meow/config.toml    - configuration")
 	fmt.Println("  .meow/AGENTS.md      - agent workflow guidelines")
-	fmt.Println("  .meow/templates/     - workflow templates")
-	fmt.Println("  .meow/lib/           - standard library (agent-persistence, context-monitor, etc)")
+	fmt.Println("  .meow/workflows/     - workflow definitions")
+	fmt.Println("  .meow/lib/           - standard library (agent-persistence, etc)")
 	fmt.Println("  .meow/adapters/      - adapter configs")
 	fmt.Println("  .meow/runs/          - run state files")
 	fmt.Println("  .meow/logs/          - per-run log files")
@@ -195,16 +194,16 @@ default_adapter = "claude"
 		fmt.Println("  .claude/settings.json - Claude Code hooks")
 	}
 	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Run a workflow:    meow run simple")
-	fmt.Println("  2. Check your task:   meow prime")
-	fmt.Println("  3. Complete it:       meow done")
+	fmt.Println("  1. Run a workflow:    meow run simple --var task=\"My task\"")
+	fmt.Println("  2. Check status:      meow status")
+	fmt.Println("  3. Agent completes:   meow done (called by agent)")
 
 	return nil
 }
 
-// copyEmbeddedTemplates copies templates from the embedded filesystem.
-func copyEmbeddedTemplates(destDir string) error {
-	return fs.WalkDir(embeddedTemplates, "templates", func(path string, d fs.DirEntry, err error) error {
+// copyEmbeddedWorkflows copies workflows from the embedded filesystem.
+func copyEmbeddedWorkflows(destDir string) error {
+	return fs.WalkDir(embeddedWorkflows, "workflows", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -213,7 +212,7 @@ func copyEmbeddedTemplates(destDir string) error {
 		}
 
 		// Read embedded file
-		content, err := embeddedTemplates.ReadFile(path)
+		content, err := embeddedWorkflows.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading embedded %s: %w", path, err)
 		}

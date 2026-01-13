@@ -1,17 +1,17 @@
 # MEOW Example Workflows
 
-Ready-to-run workflow templates demonstrating common patterns.
+Ready-to-run workflows demonstrating common patterns.
 
 ## Getting Started
 
-Copy any template to your project's `.meow/templates/` directory:
+Copy any workflow to your project's `.meow/workflows/` directory:
 
 ```bash
 # Initialize MEOW if you haven't already
 meow init
 
 # Copy an example
-cp examples/simple.meow.toml .meow/templates/
+cp examples/simple.meow.toml .meow/workflows/
 
 # Run it
 meow run simple --var task="Fix the login bug"
@@ -19,7 +19,7 @@ meow run simple --var task="Fix the login bug"
 
 ## Examples
 
-| Template | Description |
+| Workflow | Description |
 |----------|-------------|
 | [`simple.meow.toml`](simple.meow.toml) | Minimal single-agent workflow |
 | [`tdd.meow.toml`](tdd.meow.toml) | Test-driven development (red-green-refactor) |

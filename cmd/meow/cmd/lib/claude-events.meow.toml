@@ -1,0 +1,297 @@
+# Claude Code Event Hook Configuration
+#
+# Library templates for configuring Claude Code hooks to emit MEOW events.
+# Use these to enable event-based workflow patterns like Ralph Wiggum monitoring.
+#
+# Usage:
+#   Import in your workflow templates:
+#     template = "lib/claude-events#setup-hooks"
+#     variables = { worktree = "{{create-worktree.outputs.path}}" }
+#
+# Available Templates:
+#   - setup-hooks: Configure all event hooks (Stop, PreToolUse, PostToolUse)
+#   - setup-stop-hook: Configure only the Stop hook (for agent-stopped events)
+#   - setup-tool-hooks: Configure only tool hooks (for tool-starting/completed events)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP ALL HOOKS (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Configures all Claude Code hooks to emit MEOW events:
+#   - Stop → meow event agent-stopped
+#   - PreToolUse → meow event tool-starting --data tool=$TOOL_NAME
+#   - PostToolUse → meow event tool-completed --data tool=$TOOL_NAME
+#
+# Usage in workflows:
+#   [[main.steps]]
+#   id = "setup-hooks"
+#   executor = "expand"
+#   template = "lib/claude-events#setup-hooks"
+#   variables = { worktree = "{{create-worktree.outputs.path}}" }
+#   needs = ["create-worktree"]
+
+[setup-hooks]
+name = "setup-hooks"
+description = "Configure all Claude Code hooks for MEOW events"
+
+[setup-hooks.variables]
+worktree = { required = true, description = "Path to worktree where .claude/settings.json will be created" }
+
+[[setup-hooks.steps]]
+id = "configure"
+executor = "shell"
+command = """
+mkdir -p "{{worktree}}/.claude"
+
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
+cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-starting --data tool=$TOOL_NAME"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-completed --data tool=$TOOL_NAME"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+echo "Configured all Claude hooks in {{worktree}}/.claude/settings.json"
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP STOP HOOK ONLY (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Configures only the Stop hook for agent-stopped events.
+# Use this for Ralph Wiggum monitoring patterns where you only need to detect
+# when the agent stops unexpectedly.
+#
+# Usage in workflows:
+#   [[main.steps]]
+#   id = "setup-hooks"
+#   executor = "expand"
+#   template = "lib/claude-events#setup-stop-hook"
+#   variables = { worktree = "{{create-worktree.outputs.path}}" }
+#   needs = ["create-worktree"]
+
+[setup-stop-hook]
+name = "setup-stop-hook"
+description = "Configure only the Stop hook for agent-stopped events"
+
+[setup-stop-hook.variables]
+worktree = { required = true, description = "Path to worktree where .claude/settings.json will be created" }
+
+[[setup-stop-hook.steps]]
+id = "configure"
+executor = "shell"
+command = """
+mkdir -p "{{worktree}}/.claude"
+
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
+cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+echo "Configured Stop hook in {{worktree}}/.claude/settings.json"
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP TOOL HOOKS ONLY (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Configures only the tool hooks (PreToolUse, PostToolUse) for monitoring
+# which tools the agent is using. Useful for:
+#   - Detecting when agent writes files
+#   - Monitoring tool usage patterns
+#   - Triggering actions based on specific tool calls
+#
+# Usage in workflows:
+#   [[main.steps]]
+#   id = "setup-hooks"
+#   executor = "expand"
+#   template = "lib/claude-events#setup-tool-hooks"
+#   variables = { worktree = "{{create-worktree.outputs.path}}" }
+#   needs = ["create-worktree"]
+
+[setup-tool-hooks]
+name = "setup-tool-hooks"
+description = "Configure tool hooks for tool-starting/completed events"
+
+[setup-tool-hooks.variables]
+worktree = { required = true, description = "Path to worktree where .claude/settings.json will be created" }
+
+[[setup-tool-hooks.steps]]
+id = "configure"
+executor = "shell"
+command = """
+mkdir -p "{{worktree}}/.claude"
+
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+# New Claude Code hook format uses matcher + hooks structure
+cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-starting --data tool=$TOOL_NAME"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event tool-completed --data tool=$TOOL_NAME"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+echo "Configured tool hooks in {{worktree}}/.claude/settings.json"
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP CUSTOM HOOKS (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Configures a custom combination of hooks based on the 'hooks' variable.
+# Accepts a comma-separated list: "stop", "tools", or "stop,tools" (same as "all").
+#
+# Usage in workflows:
+#   [[main.steps]]
+#   id = "setup-hooks"
+#   executor = "expand"
+#   template = "lib/claude-events#setup-custom"
+#   variables = { worktree = "{{worktree}}", hooks = "stop" }
+
+[setup-custom]
+name = "setup-custom"
+description = "Configure a custom combination of Claude Code hooks"
+
+[setup-custom.variables]
+worktree = { required = true, description = "Path to worktree" }
+hooks = { default = "all", description = "Hooks to configure: all | stop | tools | stop,tools" }
+
+[[setup-custom.steps]]
+id = "configure"
+executor = "shell"
+command = """
+mkdir -p "{{worktree}}/.claude"
+
+# Create .gitignore to prevent accidentally committing hooks to main
+cat > "{{worktree}}/.claude/.gitignore" << 'EOF'
+# MEOW-generated hooks - do not commit
+settings.json
+EOF
+
+HOOKS="{{hooks}}"
+
+# Normalize: "stop,tools" or "tools,stop" → "all"
+if [[ "$HOOKS" == *","* ]]; then
+    HOOKS="all"
+fi
+
+# New Claude Code hook format uses matcher + hooks structure
+case "$HOOKS" in
+    all)
+        cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "meow event agent-stopped"}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]}]
+  }
+}
+EOF
+        echo "Configured all hooks"
+        ;;
+    stop)
+        cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "meow event agent-stopped"}]}]}}
+EOF
+        echo "Configured Stop hook"
+        ;;
+    tools)
+        cat > "{{worktree}}/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-starting --data tool=$TOOL_NAME"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "meow event tool-completed --data tool=$TOOL_NAME"}]}]
+  }
+}
+EOF
+        echo "Configured tool hooks"
+        ;;
+    *)
+        echo "Unknown hooks value: $HOOKS (expected: all, stop, tools)" >&2
+        exit 1
+        ;;
+esac
+"""

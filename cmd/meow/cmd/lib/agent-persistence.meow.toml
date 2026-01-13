@@ -1,0 +1,275 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# MEOW Library: Agent Persistence (Ralph Wiggum Pattern)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Monitors an agent and re-injects prompts when it stops unexpectedly.
+# Named after Ralph Wiggum's famous "I'm helping!" persistence.
+#
+# The pattern ensures agent persistence by:
+#   1. Listening for agent-stopped events
+#   2. Re-injecting a nudge prompt when the agent stops
+#   3. Checking if the main task is complete
+#   4. Looping until the task completes or max_loops is reached
+#
+# This is agent-agnostic - works with any agent that emits agent-stopped events
+# (configure via lib/claude-events#setup-stop-hook for Claude Code).
+#
+# USAGE:
+#
+#   Start monitoring in parallel with your main task:
+#
+#   [[main.steps]]
+#   id = "spawn"
+#   executor = "spawn"
+#   agent = "worker"
+#
+#   # Main task
+#   [[main.steps]]
+#   id = "work"
+#   executor = "agent"
+#   agent = "worker"
+#   prompt = "Implement the feature..."
+#   needs = ["spawn"]
+#
+#   # Start persistence monitor in parallel
+#   [[main.steps]]
+#   id = "persistence"
+#   executor = "expand"
+#   template = "lib/agent-persistence#monitor"
+#   needs = ["spawn"]
+#   variables = {
+#     agent = "worker",
+#     nudge_prompt = "Continue with your task. When complete, run: meow done",
+#     check_step = "work"
+#   }
+#
+#   # Kill only needs main task, not the monitor
+#   [[main.steps]]
+#   id = "kill"
+#   executor = "kill"
+#   agent = "worker"
+#   needs = ["work"]
+#
+# VARIABLES:
+#
+#   agent (required): Agent ID to monitor for agent-stopped events
+#   nudge_prompt (required): Prompt to re-inject when agent stops unexpectedly
+#   check_step (required): Step ID to check for completion (exits loop when done)
+#   timeout (default "60"): Seconds to wait between event checks
+#   max_loops (default "10"): Safety kill switch - max nudges before force-completing
+#
+# PREREQUISITES:
+#
+#   The agent must emit agent-stopped events. For Claude Code, use:
+#     template = "lib/claude-events#setup-stop-hook"
+#     variables = { worktree = "{{workdir}}" }
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MONITOR (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Starts the persistence monitor loop. Expand this in parallel with your main
+# agent task to ensure the agent stays on track.
+
+[monitor]
+name = "agent-persistence-monitor"
+description = "Monitor agent for unexpected stops and re-inject prompts"
+
+[monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
+check_step = { required = true, description = "Step ID to check for completion" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
+max_loops = { default = "10", description = "Max nudges before force-completing (safety kill switch)" }
+
+[[monitor.steps]]
+id = "monitor-loop"
+executor = "shell"
+command = """
+AGENT="{{agent}}"
+CHECK_STEP="{{check_step}}"
+TIMEOUT="{{timeout}}"
+MAX_LOOPS="{{max_loops}}"
+SESSION="meow-${MEOW_WORKFLOW}-${AGENT}"
+LOOP_COUNT=0
+
+# Escape special characters in nudge prompt for shell
+NUDGE_PROMPT=$(cat <<'NUDGE_EOF'
+{{nudge_prompt}}
+NUDGE_EOF
+)
+
+echo "Starting persistence monitor for agent $AGENT, watching step $CHECK_STEP (max $MAX_LOOPS nudges)"
+
+while [ $LOOP_COUNT -lt $MAX_LOOPS ]; do
+    # Check if session still exists
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "Session $SESSION no longer exists, monitor exiting"
+        exit 0
+    fi
+
+    # Wait for agent-stopped event with timeout
+    echo "Waiting for agent-stopped event (timeout: ${TIMEOUT}s)..."
+    if meow await-event agent-stopped --filter agent=${AGENT} --timeout ${TIMEOUT}s 2>/dev/null; then
+        # Event received - agent stopped unexpectedly
+        LOOP_COUNT=$((LOOP_COUNT + 1))
+        echo "Agent $AGENT stopped unexpectedly. Nudge #$LOOP_COUNT of $MAX_LOOPS"
+
+        # Re-inject the prompt via tmux (use -l for literal mode, then Enter separately)
+        tmux send-keys -t "$SESSION" -l "$NUDGE_PROMPT"
+        sleep 0.1  # Small delay before Enter (like adapter post_delay)
+        tmux send-keys -t "$SESSION" Enter
+
+        # Small delay to let the nudge take effect
+        sleep 2
+    fi
+
+    # Check if main task step is done
+    if ! meow step-status "$CHECK_STEP" --is-not done 2>/dev/null; then
+        echo "Persistence monitor exiting - step $CHECK_STEP is done (after $LOOP_COUNT nudges)"
+        exit 0
+    fi
+done
+
+# Max loops reached - force complete
+echo "WARNING: Agent $AGENT hit max nudge limit ($LOOP_COUNT nudges). Force completing..."
+FORCE_PROMPT="SYSTEM OVERRIDE: You have been nudged $LOOP_COUNT times without completing your task.
+
+This is an automatic safety intervention. Please run meow done NOW to signal completion, even if your work is incomplete.
+
+Run this command immediately:
+meow done"
+
+tmux send-keys -t "$SESSION" -l "$FORCE_PROMPT"
+sleep 0.1
+tmux send-keys -t "$SESSION" Enter
+echo "Force-complete sent to agent $AGENT. Monitor exiting."
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPTIONAL MONITOR (Public Entry Point - Modular)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A modular wrapper around the monitor that can be easily dropped into any
+# workflow. Includes enable/disable toggle and sensible defaults.
+#
+# This is the RECOMMENDED way to add RW persistence to workflows.
+
+[optional-monitor]
+name = "optional-agent-persistence"
+description = "Optionally enabled persistence monitor - modular drop-in for any workflow"
+
+[optional-monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+check_step = { required = true, description = "Step ID to check for completion (monitor exits when this step is done)" }
+enable = { default = "true", description = "Enable monitoring (true/false) - use for conditional RW" }
+nudge_prompt = { default = "You stopped unexpectedly. Continue with your assigned task.\n\nWhen complete, run: meow done", description = "Prompt to re-inject on unexpected stop" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
+max_loops = { default = "10", description = "Max nudges before force-completing (safety limit)" }
+
+[[optional-monitor.steps]]
+id = "check-enabled"
+executor = "branch"
+condition = "test '{{enable}}' = 'true'"
+
+[optional-monitor.steps.on_true]
+template = "#monitor"
+variables = { agent = "{{agent}}", check_step = "{{check_step}}", nudge_prompt = "{{nudge_prompt}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}" }
+
+[optional-monitor.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Persistence monitor disabled for agent {{agent}}'" }
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGGRESSIVE MONITOR (Public Entry Point)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A more aggressive variant that sends Escape before the nudge prompt.
+# Useful when you want to interrupt an agent that might be stuck.
+
+[aggressive-monitor]
+name = "aggressive-agent-persistence"
+description = "Monitor with aggressive interrupt before nudge"
+
+[aggressive-monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+nudge_prompt = { required = true, description = "Prompt to re-inject on unexpected stop" }
+check_step = { required = true, description = "Step ID to check for completion" }
+timeout = { default = "60", description = "Seconds to wait between event checks" }
+max_loops = { default = "10", description = "Max nudges before force-completing (safety kill switch)" }
+
+[[aggressive-monitor.steps]]
+id = "monitor-loop"
+executor = "shell"
+command = """
+AGENT="{{agent}}"
+CHECK_STEP="{{check_step}}"
+TIMEOUT="{{timeout}}"
+MAX_LOOPS="{{max_loops}}"
+SESSION="meow-${MEOW_WORKFLOW}-${AGENT}"
+LOOP_COUNT=0
+
+# Escape special characters in nudge prompt for shell
+NUDGE_PROMPT=$(cat <<'NUDGE_EOF'
+{{nudge_prompt}}
+NUDGE_EOF
+)
+
+echo "Starting AGGRESSIVE persistence monitor for agent $AGENT, watching step $CHECK_STEP (max $MAX_LOOPS nudges)"
+
+while [ $LOOP_COUNT -lt $MAX_LOOPS ]; do
+    # Check if session still exists
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "Session $SESSION no longer exists, aggressive monitor exiting"
+        exit 0
+    fi
+
+    # Wait for agent-stopped event with timeout
+    echo "Waiting for agent-stopped event (timeout: ${TIMEOUT}s)..."
+    if meow await-event agent-stopped --filter agent=${AGENT} --timeout ${TIMEOUT}s 2>/dev/null; then
+        # Event received - agent stopped unexpectedly
+        LOOP_COUNT=$((LOOP_COUNT + 1))
+        echo "Agent $AGENT stopped unexpectedly (aggressive). Nudge #$LOOP_COUNT of $MAX_LOOPS"
+
+        # Send Escape first to ensure agent is in clean state
+        tmux send-keys -t "$SESSION" Escape
+        sleep 0.5
+
+        # Then send the nudge prompt (use -l for literal mode, then Enter separately)
+        tmux send-keys -t "$SESSION" -l "$NUDGE_PROMPT"
+        sleep 0.1
+        tmux send-keys -t "$SESSION" Enter
+
+        # Small delay to let the nudge take effect
+        sleep 2
+    fi
+
+    # Check if main task step is done
+    if ! meow step-status "$CHECK_STEP" --is-not done 2>/dev/null; then
+        echo "Aggressive monitor exiting - step $CHECK_STEP is done (after $LOOP_COUNT nudges)"
+        exit 0
+    fi
+done
+
+# Max loops reached - force complete
+echo "WARNING: Agent $AGENT hit max nudge limit ($LOOP_COUNT nudges). Force completing..."
+tmux send-keys -t "$SESSION" Escape
+sleep 0.5
+
+FORCE_PROMPT="SYSTEM OVERRIDE: You have been nudged $LOOP_COUNT times without completing your task.
+
+This is an automatic safety intervention. Please run meow done NOW to signal completion, even if your work is incomplete.
+
+Run this command immediately:
+meow done"
+
+tmux send-keys -t "$SESSION" -l "$FORCE_PROMPT"
+sleep 0.1
+tmux send-keys -t "$SESSION" Enter
+echo "Force-complete sent to agent $AGENT. Aggressive monitor exiting."
+"""
