@@ -100,6 +100,49 @@ meow run .meow/templates/simple.meow.toml --var agent=my-agent
 
 MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
 
+```mermaid
+flowchart TB
+    subgraph setup["Setup"]
+        parse["parse-tasks<br/><i>shell: jq .tasks</i>"]
+    end
+
+    subgraph parallel["Parallel Workers"]
+        subgraph worker1["Worker 1 (worktree)"]
+            spawn1["spawn"]
+            work1["implement task"]
+            monitor1["ralph wiggum<br/><i>nudge if stuck</i>"]
+            work1 <-.->|"event loop"| monitor1
+        end
+
+        subgraph worker2["Worker 2 (worktree)"]
+            spawn2["spawn"]
+            work2["implement task"]
+            monitor2["ralph wiggum<br/><i>nudge if stuck</i>"]
+            work2 <-.->|"event loop"| monitor2
+        end
+    end
+
+    subgraph review["Quality Gate"]
+        spawn3["spawn reviewer"]
+        cr["code-review<br/><i>validate changes</i>"]
+    end
+
+    subgraph integrate["Finalize"]
+        spawn4["spawn integrator"]
+        merge["merge to main"]
+        cleanup["kill all agents"]
+    end
+
+    parse --> spawn1 & spawn2
+    spawn1 --> work1
+    spawn2 --> work2
+    work1 & work2 --> spawn3
+    spawn3 --> cr
+    cr --> spawn4
+    spawn4 --> merge
+    merge --> cleanup
+```
+
 ```
 Templates = Programs (version-controlled .meow.toml files)
 Steps     = Instructions within a template
