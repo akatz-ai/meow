@@ -8,14 +8,14 @@ REPO="akatz-ai/meow-machine"
 BINARY="meow"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
-# Detect OS
+# Detect OS (Linux/macOS only)
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
   darwin) OS="darwin" ;;
   linux) OS="linux" ;;
-  mingw*|msys*|cygwin*) OS="windows" ;;
   *)
     echo "Error: Unsupported operating system: $OS"
+    echo "meow currently supports Linux and macOS only"
     exit 1
     ;;
 esac
@@ -47,11 +47,7 @@ fi
 echo "Installing meow v${VERSION} for ${OS}/${ARCH}..."
 
 # Construct download URL
-EXT="tar.gz"
-if [ "$OS" = "windows" ]; then
-  EXT="zip"
-fi
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}_${VERSION}_${OS}_${ARCH}.${EXT}"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}_${VERSION}_${OS}_${ARCH}.tar.gz"
 
 # Create temp directory
 TMP_DIR="$(mktemp -d)"
@@ -61,16 +57,12 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 echo "Downloading from ${DOWNLOAD_URL}..."
 cd "$TMP_DIR"
 
-if ! curl -fsSL -o "archive.${EXT}" "$DOWNLOAD_URL"; then
+if ! curl -fsSL -o "archive.tar.gz" "$DOWNLOAD_URL"; then
   echo "Error: Failed to download. Check if version v${VERSION} exists."
   exit 1
 fi
 
-if [ "$EXT" = "tar.gz" ]; then
-  tar -xzf "archive.${EXT}"
-else
-  unzip -q "archive.${EXT}"
-fi
+tar -xzf "archive.tar.gz"
 
 # Install binary
 if [ -w "$INSTALL_DIR" ]; then
