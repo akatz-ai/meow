@@ -254,7 +254,7 @@ cd "{{workdir}}"
 #   - .meow-branch: workflow metadata tracking current branch
 #   - .beads/daemon.*: beads daemon lock/log files that change during operation
 #   - .beads/issues.jsonl: beads database that syncs separately
-CHANGES=$(git status --porcelain | grep -v -E '^\?\? \.meow-branch$|^\?\? \.beads/daemon\.|^\?\? \.beads/issues\.jsonl$|^ M \.beads/daemon\.|^ M \.beads/issues\.jsonl$' || true)
+CHANGES=$(git status --porcelain | grep -v -E '^\\?\\? \\.meow-branch$|^\\?\\? \\.beads/daemon\\.|^\\?\\? \\.beads/issues\\.jsonl$|^ M \\.beads/daemon\\.|^ M \\.beads/issues\\.jsonl$' || true)
 if [ -n "$CHANGES" ]; then
     echo "ERROR: Uncommitted changes in {{track_name}} track!" >&2
     echo "$CHANGES" >&2
