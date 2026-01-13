@@ -516,6 +516,7 @@ func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.Branch
 			typesInlineStep := types.InlineStep{
 				ID:       inlineStep.ID,
 				Executor: types.ExecutorType(inlineStep.Executor),
+				Command:  inlineStep.Command,
 				Prompt:   inlineStep.Prompt,
 				Agent:    inlineStep.Agent,
 				Needs:    inlineStep.Needs,
