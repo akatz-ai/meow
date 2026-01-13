@@ -97,6 +97,14 @@ func TestTmuxWrapper_SendKeysLiteral_EmptySession(t *testing.T) {
 	}
 }
 
+func TestTmuxWrapper_SendKeysSpecial_EmptySession(t *testing.T) {
+	w := NewTmuxWrapper()
+	err := w.SendKeysSpecial(context.Background(), "", "C-c")
+	if err == nil {
+		t.Error("SendKeysSpecial() should fail with empty session")
+	}
+}
+
 func TestTmuxWrapper_CapturePane_EmptySession(t *testing.T) {
 	w := NewTmuxWrapper()
 	_, err := w.CapturePane(context.Background(), "")

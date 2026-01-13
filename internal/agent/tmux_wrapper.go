@@ -172,25 +172,41 @@ func (w *TmuxWrapper) ListSessions(ctx context.Context, prefix string) ([]string
 }
 
 // SendKeys sends keystrokes to a tmux session, followed by Enter.
+// Keys are sent literally (using -l flag), preventing interpretation of special chars.
 // This is the typical way to send commands to a session.
 func (w *TmuxWrapper) SendKeys(ctx context.Context, session, keys string) error {
-	return w.sendKeysInternal(ctx, session, keys, true)
+	return w.sendKeysInternal(ctx, session, keys, true, true)
 }
 
 // SendKeysLiteral sends keystrokes to a tmux session without pressing Enter.
-// Use this for control sequences (like "C-c") or partial input.
+// Keys are sent literally (using -l flag), preventing interpretation of special chars.
+// Use this for partial input or text that should not be interpreted.
 func (w *TmuxWrapper) SendKeysLiteral(ctx context.Context, session, keys string) error {
-	return w.sendKeysInternal(ctx, session, keys, false)
+	return w.sendKeysInternal(ctx, session, keys, false, true)
+}
+
+// SendKeysSpecial sends special key sequences to a tmux session (like "C-c", "Enter").
+// Keys are NOT sent literally, allowing tmux to interpret special sequences.
+// Does not automatically press Enter - if you want to send Enter, use "Enter" as the keys.
+func (w *TmuxWrapper) SendKeysSpecial(ctx context.Context, session, keys string) error {
+	return w.sendKeysInternal(ctx, session, keys, false, false)
 }
 
 // sendKeysInternal sends keystrokes to a tmux session.
-func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string, pressEnter bool) error {
+// If useLiteralFlag is true, uses -l flag to send keys literally.
+// If pressEnter is true, sends Enter separately after the keys.
+func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string, pressEnter, useLiteralFlag bool) error {
 	if session == "" {
 		return fmt.Errorf("session name is required")
 	}
 
-	// Use -l flag to send keys literally (prevents interpretation of special chars)
-	args := []string{"send-keys", "-t", session, "-l", keys}
+	// Build args based on literal flag
+	args := []string{"send-keys", "-t", session}
+	if useLiteralFlag {
+		args = append(args, "-l")
+	}
+	args = append(args, keys)
+
 	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("send-keys: %w: %s", err, output)
