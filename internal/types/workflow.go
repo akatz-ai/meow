@@ -36,10 +36,10 @@ func (s WorkflowStatus) IsTerminal() bool {
 // AgentInfo tracks persisted state for an agent.
 type AgentInfo struct {
 	TmuxSession   string `yaml:"tmux_session"`
-	Status        string `yaml:"status"`                    // active, idle
-	Workdir       string `yaml:"workdir"`                   // Working directory for file_path validation
-	CurrentStep   string `yaml:"current_step,omitempty"`    // Step currently assigned to agent
-	ClaudeSession string `yaml:"claude_session,omitempty"`  // Session ID for resume
+	Status        string `yaml:"status"`                   // active, idle
+	Workdir       string `yaml:"workdir"`                  // Working directory for file_path validation
+	CurrentStep   string `yaml:"current_step,omitempty"`   // Step currently assigned to agent
+	ClaudeSession string `yaml:"claude_session,omitempty"` // Session ID for resume
 }
 
 // Workflow represents a running workflow instance.
