@@ -44,6 +44,20 @@ make install
 **Manual download:**
 Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow/releases).
 
+### Claude Code Skill
+
+If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), install the MEOW skill to get contextual help with workflows, templates, and debugging:
+
+```bash
+# Add the marketplace
+/plugin marketplace add akatz-ai/meow-skill
+
+# Install the skill
+/plugin install meow
+```
+
+Once installed, Claude will automatically understand MEOW concepts when working in projects with a `.meow/` directory. Ask Claude to help you set up MEOW, create workflows, or debug issues.
+
 ## Getting Started
 
 Initialize MEOW in your project:
