@@ -94,12 +94,19 @@ func ParseModuleString(content string, path string) (*Module, error) {
 			continue
 		}
 
-		workflow, err := parseWorkflow(name, workflowMap)
+		// Strip leading dot from workflow names (the dot prefix is for local
+		// reference syntax in templates, not part of the actual workflow name)
+		workflowName := name
+		if strings.HasPrefix(workflowName, ".") {
+			workflowName = workflowName[1:]
+		}
+
+		workflow, err := parseWorkflow(workflowName, workflowMap)
 		if err != nil {
 			return nil, fmt.Errorf("parse workflow %q: %w", name, err)
 		}
 
-		module.Workflows[name] = workflow
+		module.Workflows[workflowName] = workflow
 	}
 
 	if len(module.Workflows) == 0 {
@@ -919,6 +926,8 @@ func validateModuleVariableReferences(m *Module, workflowName string, w *Workflo
 
 	// Check all string fields in steps for variable references
 	for _, step := range w.Steps {
+		checkModuleVarRefs(step.Command, workflowName, step.ID, "command", defined, result)
+		checkModuleVarRefs(step.Prompt, workflowName, step.ID, "prompt", defined, result)
 		checkModuleVarRefs(step.Condition, workflowName, step.ID, "condition", defined, result)
 
 		for k, v := range step.Variables {

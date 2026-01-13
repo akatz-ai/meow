@@ -562,6 +562,11 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Ste
 			step.Agent.Agent = resolve(step.Agent.Agent)
 			step.Agent.Prompt = resolve(step.Agent.Prompt)
 		}
+	case types.ExecutorForeach:
+		if step.Foreach != nil {
+			step.Foreach.Items = resolve(step.Foreach.Items)
+			step.Foreach.ItemsFile = resolve(step.Foreach.ItemsFile)
+		}
 	}
 }
 

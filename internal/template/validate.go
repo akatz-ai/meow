@@ -259,6 +259,8 @@ func validateVariableReferences(t *Template, name string, result *ValidationResu
 
 	// Check all string fields in steps for variable references
 	for _, step := range t.Steps {
+		checkVarRefs(step.Command, name, step.ID, "command", defined, t, result)
+		checkVarRefs(step.Prompt, name, step.ID, "prompt", defined, t, result)
 		checkVarRefs(step.Condition, name, step.ID, "condition", defined, t, result)
 		checkVarRefs(step.Template, name, step.ID, "template", defined, t, result)
 

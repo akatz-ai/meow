@@ -23,9 +23,9 @@ agent = { required = true, type = "string", description = "Agent ID" }
 
 [[main.steps]]
 id = "select-work"
-type = "task"
-title = "Select next work bead"
-assignee = "{{agent}}"
+executor = "agent"
+prompt = "Select next work bead"
+agent = "{{agent}}"
 
 # TDD Implementation workflow (ephemeral = wisps)
 [implement]
@@ -41,33 +41,29 @@ agent = { required = true, type = "string" }
 
 [[implement.steps]]
 id = "load-context"
-type = "task"
-title = "Load context for {{work_bead}}"
-instructions = "Read the bead and understand the requirements"
-assignee = "{{agent}}"
+executor = "agent"
+prompt = "Load context for {{work_bead}} - Read the bead and understand the requirements"
+agent = "{{agent}}"
 
 [[implement.steps]]
 id = "write-tests"
-type = "task"
-title = "Write failing tests"
-instructions = "Write tests that define expected behavior"
-assignee = "{{agent}}"
+executor = "agent"
+prompt = "Write failing tests that define expected behavior"
+agent = "{{agent}}"
 needs = ["load-context"]
 
 [[implement.steps]]
 id = "implement"
-type = "task"
-title = "Implement to pass tests"
-instructions = "Write minimum code to pass tests"
-assignee = "{{agent}}"
+executor = "agent"
+prompt = "Implement to pass tests - Write minimum code to pass tests"
+agent = "{{agent}}"
 needs = ["write-tests"]
 
 [[implement.steps]]
 id = "review"
-type = "collaborative"
-title = "Design review"
-instructions = "Review implementation with user"
-assignee = "{{agent}}"
+executor = "agent"
+prompt = "Design review - Review implementation with user"
+agent = "{{agent}}"
 needs = ["implement"]
 `
 
@@ -191,21 +187,22 @@ needs = ["implement"]
 		}
 	})
 
-	t.Run("ExecutorTypeDetectionByStepType", func(t *testing.T) {
-		// Test that legacy types map to correct executors
+	t.Run("ExecutorTypeDetection", func(t *testing.T) {
+		// Test that executor field is properly parsed and preserved
 		orchestratorModule := `
 [main]
 name = "with-orchestrator"
 
 [[main.steps]]
 id = "check-ready"
-type = "condition"
+executor = "branch"
 condition = "test -f /tmp/ready"
 
 [[main.steps]]
 id = "do-work"
-type = "task"
-title = "Do work"
+executor = "agent"
+prompt = "Do work"
+agent = "test-agent"
 `
 		module, err := ParseModuleString(orchestratorModule, "test.meow.toml")
 		if err != nil {
@@ -221,17 +218,16 @@ title = "Do work"
 			t.Fatalf("BakeWorkflow failed: %v", err)
 		}
 
-		// condition type maps to branch executor
-		// task type maps to agent executor
+		// Verify executors are preserved from template
 		for _, step := range result.Steps {
 			switch step.ID {
 			case "check-ready":
 				if step.Executor != types.ExecutorBranch {
-					t.Errorf("condition step: expected branch executor, got %s", step.Executor)
+					t.Errorf("branch step: expected branch executor, got %s", step.Executor)
 				}
 			case "do-work":
 				if step.Executor != types.ExecutorAgent {
-					t.Errorf("task step: expected agent executor, got %s", step.Executor)
+					t.Errorf("agent step: expected agent executor, got %s", step.Executor)
 				}
 			}
 		}
@@ -262,17 +258,18 @@ title = "Do work"
 	})
 }
 
-// TestGateStepMapping verifies that legacy gate type maps to branch executor
+// TestGateAsConditionStep verifies that gates are implemented as branch executor
 // with await-approval condition (per MVP-SPEC-v2)
-func TestGateStepMapping(t *testing.T) {
+func TestGateAsConditionStep(t *testing.T) {
+	// Gates are now implemented as branch steps with meow await-approval condition
 	gateModule := `
 [main]
 name = "with-gate"
 
 [[main.steps]]
 id = "await-approval"
-type = "gate"
-title = "Human approval"
+executor = "branch"
+condition = "meow await-approval await-approval"
 `
 	module, err := ParseModuleString(gateModule, "test.meow.toml")
 	if err != nil {
@@ -281,7 +278,6 @@ title = "Human approval"
 
 	main := module.GetWorkflow("main")
 	baker := NewBaker("meow-gate-test")
-	baker.Assignee = "should-be-cleared" // Gate shouldn't use assignee
 	baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	result, err := baker.BakeWorkflow(main, nil)
@@ -294,7 +290,7 @@ title = "Human approval"
 	}
 
 	gateStep := result.Steps[0]
-	// Gate type should map to branch executor
+	// Gate should be branch executor
 	if gateStep.Executor != types.ExecutorBranch {
 		t.Errorf("expected branch executor for gate, got %s", gateStep.Executor)
 	}
@@ -315,14 +311,16 @@ name = "work-loop"
 
 [[main.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 
 [other]
 name = "other-workflow"
 
 [[other.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 `
 	module, err := ParseModuleString(moduleToml, "test.meow.toml")
 	if err != nil {
@@ -347,7 +345,8 @@ internal = true
 
 [[internal-workflow.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 
 [public-workflow]
 name = "public"
@@ -355,7 +354,8 @@ internal = false
 
 [[public-workflow.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 `
 	module, err := ParseModuleString(moduleToml, "test.meow.toml")
 	if err != nil {
@@ -441,7 +441,8 @@ func TestParseModuleString_StepMissingID(t *testing.T) {
 name = "test"
 
 [[main.steps]]
-type = "task"
+executor = "shell"
+command = "echo test"
 `, "test.toml")
 	if err == nil {
 		t.Fatal("expected error for step missing ID")
@@ -556,12 +557,14 @@ name = "cycle-test"
 
 [[main.steps]]
 id = "a"
-type = "task"
+executor = "shell"
+command = "echo a"
 needs = ["b"]
 
 [[main.steps]]
 id = "b"
-type = "task"
+executor = "shell"
+command = "echo b"
 needs = ["a"]
 `
 	_, err := ParseModuleString(moduleToml, "test.toml")
@@ -580,7 +583,8 @@ name = "self-ref-test"
 
 [[main.steps]]
 id = "self"
-type = "task"
+executor = "shell"
+command = "echo self"
 needs = ["self"]
 `
 	_, err := ParseModuleString(moduleToml, "test.toml")
@@ -599,17 +603,20 @@ name = "long-cycle-test"
 
 [[main.steps]]
 id = "a"
-type = "task"
+executor = "shell"
+command = "echo a"
 needs = ["c"]
 
 [[main.steps]]
 id = "b"
-type = "task"
+executor = "shell"
+command = "echo b"
 needs = ["a"]
 
 [[main.steps]]
 id = "c"
-type = "task"
+executor = "shell"
+command = "echo c"
 needs = ["b"]
 `
 	_, err := ParseModuleString(moduleToml, "test.toml")
@@ -628,7 +635,7 @@ name = "condition-test"
 
 [[main.steps]]
 id = "check"
-type = "condition"
+executor = "branch"
 condition = "test -f /tmp/ready"
 timeout = "30s"
 
@@ -645,7 +652,8 @@ variables = { reason = "timed out" }
 
 [[main.steps]]
 id = "end"
-type = "task"
+executor = "shell"
+command = "echo done"
 needs = ["check"]
 `
 	module, err := ParseModuleString(moduleToml, "test.toml")
@@ -691,18 +699,18 @@ name = "inline-test"
 
 [[main.steps]]
 id = "check"
-type = "condition"
+executor = "branch"
 condition = "test -f /tmp/ready"
 
 [[main.steps.on_true.inline]]
 id = "action-1"
-type = "task"
-description = "First action"
+executor = "shell"
+command = "echo action 1"
 
 [[main.steps.on_true.inline]]
 id = "action-2"
-type = "task"
-description = "Second action"
+executor = "shell"
+command = "echo action 2"
 needs = ["action-1"]
 `
 	module, err := ParseModuleString(moduleToml, "test.toml")

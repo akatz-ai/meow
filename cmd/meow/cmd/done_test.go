@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,9 +22,9 @@ func TestDoneUsesOrchSockEnvVar(t *testing.T) {
 	customSockPath := filepath.Join(tmpDir, "custom.sock")
 	derivedSockPath := filepath.Join(tmpDir, "derived.sock")
 
-	// Track which socket received the message
-	receivedOnCustom := false
-	receivedOnDerived := false
+	// Track which socket received the message (use atomics for thread safety)
+	var receivedOnCustom atomic.Bool
+	var receivedOnDerived atomic.Bool
 
 	// Start a listener on the custom socket
 	customListener, err := net.Listen("unix", customSockPath)
@@ -45,7 +46,7 @@ func TestDoneUsesOrchSockEnvVar(t *testing.T) {
 		if err != nil {
 			return
 		}
-		receivedOnCustom = true
+		receivedOnCustom.Store(true)
 
 		// Send acknowledgement
 		ack := &ipc.AckMessage{Type: ipc.MsgAck, Success: true}
@@ -60,7 +61,7 @@ func TestDoneUsesOrchSockEnvVar(t *testing.T) {
 		if err != nil {
 			return
 		}
-		receivedOnDerived = true
+		receivedOnDerived.Store(true)
 
 		// Send acknowledgement
 		ack := &ipc.AckMessage{Type: ipc.MsgAck, Success: true}
@@ -114,12 +115,12 @@ func TestDoneUsesOrchSockEnvVar(t *testing.T) {
 	// Since we can't easily mock the socket path derivation, this test
 	// documents the expected behavior. The real validation happens in integration tests.
 
-	if !receivedOnCustom {
+	if !receivedOnCustom.Load() {
 		t.Errorf("Expected message on custom socket (MEOW_ORCH_SOCK), but didn't receive it")
 		t.Logf("This indicates the command is NOT using the MEOW_ORCH_SOCK environment variable")
 	}
 
-	if receivedOnDerived {
+	if receivedOnDerived.Load() {
 		t.Errorf("Received message on derived socket, but should have used MEOW_ORCH_SOCK")
 		t.Logf("This indicates the bug: ignoring MEOW_ORCH_SOCK")
 	}
@@ -138,7 +139,7 @@ func TestSessionIDUsesEnvSock(t *testing.T) {
 	}
 	defer listener.Close()
 
-	received := false
+	var received atomic.Bool
 
 	// Handle connection
 	go func() {
@@ -146,7 +147,7 @@ func TestSessionIDUsesEnvSock(t *testing.T) {
 		if err != nil {
 			return
 		}
-		received = true
+		received.Store(true)
 
 		// Send acknowledgement with session ID
 		resp := &ipc.SessionIDMessage{
@@ -174,7 +175,7 @@ func TestSessionIDUsesEnvSock(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	if !received && err != nil {
+	if !received.Load() && err != nil {
 		t.Logf("Command failed to connect to custom socket: %v", err)
 		t.Logf("This indicates session-id is also ignoring MEOW_ORCH_SOCK")
 	}

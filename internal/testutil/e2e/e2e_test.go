@@ -3807,10 +3807,11 @@ command = "echo 'Processing: {{fruit}}'"
 		t.Errorf("expected workflow to complete\nstderr: %s", stderr)
 	}
 
-	// Verify all 3 items were processed
-	for _, item := range []string{"apple", "banana", "cherry"} {
-		if !strings.Contains(stderr, "process."+item) {
-			t.Errorf("expected iteration for item %s", item)
+	// Verify all 3 iterations were dispatched (foreach uses numeric indices)
+	for i := 0; i < 3; i++ {
+		expectedID := fmt.Sprintf("process.%d", i)
+		if !strings.Contains(stderr, expectedID) {
+			t.Errorf("expected iteration %d with ID prefix %s", i, expectedID)
 		}
 	}
 
@@ -3861,12 +3862,11 @@ command = "echo 'Running {{task.name}} with priority {{task.priority}}'"
 		t.Errorf("expected workflow to complete")
 	}
 
-	// Verify object fields were accessible in iterations
-	// The iteration IDs should contain the name field
-	for _, task := range []string{"task1", "task2"} {
-		// Look for evidence that the iteration happened
-		if !strings.Contains(stderr, "execute."+task) {
-			t.Errorf("expected iteration for task %s", task)
+	// Verify both iterations were dispatched (foreach uses numeric indices)
+	for i := 0; i < 2; i++ {
+		expectedID := fmt.Sprintf("execute.%d", i)
+		if !strings.Contains(stderr, expectedID) {
+			t.Errorf("expected iteration %d with ID prefix %s", i, expectedID)
 		}
 	}
 
@@ -3991,8 +3991,8 @@ command = "echo 'Processing number {{num}}' && sleep 0.1"
 		t.Errorf("foreach took too long: %v (expected < 2000ms with concurrency)", duration)
 	}
 
-	// Verify all items were processed
-	for i := 1; i <= 10; i++ {
+	// Verify all items were processed (foreach uses 0-indexed iterations)
+	for i := 0; i < 10; i++ {
 		itemID := fmt.Sprintf("process.%d", i)
 		if !strings.Contains(stderr, itemID) {
 			t.Errorf("expected iteration for item %d", i)

@@ -78,12 +78,11 @@ func TestVarContext_OutputReferences(t *testing.T) {
 		input    string
 		expected string
 	}{
-		// bead.outputs.field format
+		// step.outputs.field format
 		{"Path: {{create-worktree.outputs.path}}", "Path: /tmp/worktree"},
 		{"Branch: {{create-worktree.outputs.branch}}", "Branch: feature-x"},
-		// output.bead.field format
-		{"{{output.run-build.stdout}}", "Build successful"},
-		{"Exit: {{output.run-build.exit_code}}", "Exit: 0"},
+		{"{{run-build.outputs.stdout}}", "Build successful"},
+		{"Exit: {{run-build.outputs.exit_code}}", "Exit: 0"},
 	}
 
 	for _, tt := range tests {
@@ -259,7 +258,7 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 	step := &Step{
 		ID:        "test-step",
 		Executor:  ExecutorBranch,
-		Condition: "{{output.analyze.selected}} != ''",
+		Condition: "{{analyze.outputs.selected}} != ''",
 		Prompt:    "Testing {{task_id}} with {{framework}}",
 		Template:  "impl-{{task_id}}",
 		Variables: map[string]string{
@@ -763,8 +762,8 @@ func TestVarContext_BeadLookup_ResolvesOutputsFromStore(t *testing.T) {
 		t.Errorf("expected 'Path: /tmp/worktree', got %q", result)
 	}
 
-	// Test using output.bead.field format
-	result, err = ctx.Substitute("Branch: {{output.create-worktree.branch}}")
+	// Test using step.outputs.field format
+	result, err = ctx.Substitute("Branch: {{create-worktree.outputs.branch}}")
 	if err != nil {
 		t.Fatalf("Substitute failed: %v", err)
 	}
