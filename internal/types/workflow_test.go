@@ -126,6 +126,61 @@ func TestWorkflowGetReadySteps(t *testing.T) {
 	}
 }
 
+func TestWorkflowGetReadyStepsDeterministic(t *testing.T) {
+	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+
+	// Add multiple ready steps with different IDs
+	// Maps in Go have non-deterministic iteration order,
+	// so we need to verify GetReadySteps returns consistent order
+	wf.Steps["zebra"] = &Step{
+		ID:     "zebra",
+		Status: StepStatusPending,
+	}
+	wf.Steps["apple"] = &Step{
+		ID:     "apple",
+		Status: StepStatusPending,
+	}
+	wf.Steps["middle"] = &Step{
+		ID:     "middle",
+		Status: StepStatusPending,
+	}
+	wf.Steps["banana"] = &Step{
+		ID:     "banana",
+		Status: StepStatusPending,
+	}
+
+	// Get ready steps multiple times
+	firstCall := wf.GetReadySteps()
+	secondCall := wf.GetReadySteps()
+	thirdCall := wf.GetReadySteps()
+
+	// Should return same number of steps
+	if len(firstCall) != 4 {
+		t.Errorf("expected 4 ready steps, got %d", len(firstCall))
+	}
+
+	// Should return steps in same order every time
+	for i := 0; i < len(firstCall); i++ {
+		if firstCall[i].ID != secondCall[i].ID {
+			t.Errorf("order changed between calls: first[%d]=%s, second[%d]=%s",
+				i, firstCall[i].ID, i, secondCall[i].ID)
+		}
+		if firstCall[i].ID != thirdCall[i].ID {
+			t.Errorf("order changed between calls: first[%d]=%s, third[%d]=%s",
+				i, firstCall[i].ID, i, thirdCall[i].ID)
+		}
+	}
+
+	// Should be sorted alphabetically by ID
+	expected := []string{"apple", "banana", "middle", "zebra"}
+	for i, step := range firstCall {
+		if step.ID != expected[i] {
+			t.Errorf("steps not sorted: expected[%d]=%s, got %s",
+				i, expected[i], step.ID)
+		}
+	}
+}
+
 func TestWorkflowAllDone(t *testing.T) {
 	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
 
