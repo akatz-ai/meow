@@ -42,6 +42,37 @@ make install
 **Manual download:**
 Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow-machine/releases).
 
+## Getting Started
+
+Initialize MEOW in your project:
+
+```bash
+cd your-project
+meow init
+```
+
+This creates the following structure:
+
+```
+.meow/
+├── config.toml      # Project configuration
+├── templates/       # Workflow templates (starter templates included)
+│   ├── simple.meow.toml
+│   └── tdd.meow.toml
+├── adapters/        # Agent adapter configs
+│   ├── claude/
+│   ├── codex/
+│   └── opencode/
+├── runs/            # Runtime state (gitignored)
+└── logs/            # Per-run logs (gitignored)
+```
+
+Run your first workflow:
+
+```bash
+meow run .meow/templates/simple.meow.toml --var agent=my-agent
+```
+
 ## How It Works
 
 MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.

@@ -34,8 +34,22 @@ var initCmd = &cobra.Command{
 	Short: "Initialize a MEOW project",
 	Long: `Initialize a new MEOW project in the current directory.
 
-Creates the .meow directory structure with default configuration,
-templates, and optionally Claude Code hooks for automation.`,
+Creates the following structure:
+
+  .meow/
+  ├── config.toml      # Project configuration
+  ├── templates/       # Workflow templates (starter templates included)
+  │   ├── simple.meow.toml
+  │   └── tdd.meow.toml
+  ├── adapters/        # Agent adapter configs (claude, codex, opencode)
+  ├── runs/            # Runtime state for active runs (gitignored)
+  └── logs/            # Per-run log files (gitignored)
+
+The runs/ and logs/ directories should be added to .gitignore as they
+contain ephemeral runtime state.
+
+Use --hooks to also create .claude/settings.json with MEOW hooks for
+agent automation (typically only needed in agent worktrees).`,
 	RunE: runInit,
 }
 
