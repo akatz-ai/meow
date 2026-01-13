@@ -201,6 +201,17 @@ spawn_args = { default = "", description = "Extra CLI args for claude" }
 merge_model = { default = "opus", description = "Model for integration agent (opus, sonnet, haiku)" }
 target_branch = { default = "main", description = "Target branch to merge into" }
 skip_merge_to_target = { default = "false", description = "If true, skip final merge to target (just merge tracks)" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor" }
+max_nudges = { default = "10", description = "Max nudges before force-completing" }
+
+# Setup stop hook for RW monitoring
+[[integration.steps]]
+id = "setup-hooks"
+executor = "expand"
+template = "lib/claude-events#setup-stop-hook"
+
+[integration.steps.variables]
+worktree = ".meow/worktrees/sprint-integration-track"
 
 [[integration.steps]]
 id = "spawn"
@@ -208,6 +219,21 @@ executor = "spawn"
 agent = "agent-integration"
 workdir = ".meow/worktrees/sprint-integration-track"
 spawn_args = "--model {{merge_model}} {{spawn_args}}"
+needs = ["setup-hooks"]
+
+# Ralph Wiggum persistence monitor (parallel with work/review)
+[[integration.steps]]
+id = "persistence"
+executor = "expand"
+template = "lib/agent-persistence#optional-monitor"
+needs = ["spawn"]
+
+[integration.steps.variables]
+agent = "agent-integration"
+check_step = "review"
+enable = "{{enable_rw}}"
+max_loops = "{{max_nudges}}"
+nudge_prompt = "You stopped unexpectedly. Continue with your integration task.\n\nRemember:\n- Merge all track branches\n- Resolve any conflicts\n- Run tests to verify\n- Push to target branch\n- When fully done, run: `meow done`"
 
 [[integration.steps]]
 id = "work"

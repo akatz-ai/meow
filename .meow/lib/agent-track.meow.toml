@@ -85,18 +85,16 @@ needs = ["setup-hooks"]
 
 [[main.steps]]
 id = "persistence"
-executor = "branch"
-condition = "test '{{enable_rw}}' = 'true'"
+executor = "expand"
+template = "lib/agent-persistence#optional-monitor"
 needs = ["spawn"]
 
-[main.steps.on_true]
-template = "lib/agent-persistence#monitor"
-variables = { agent = "{{agent_name}}", check_step = "verify-clean", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`" }
-
-[main.steps.on_false]
-inline = [
-  { id = "skip", executor = "shell", command = "echo 'Ralph Wiggum monitor disabled (enable_rw=false)'" }
-]
+[main.steps.variables]
+agent = "{{agent_name}}"
+check_step = "verify-clean"
+enable = "{{enable_rw}}"
+max_loops = "{{max_nudges}}"
+nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`"
 
 # ============================================================================
 # Step 4: Context Monitor (runs in parallel, optional)

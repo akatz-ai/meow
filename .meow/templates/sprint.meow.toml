@@ -137,6 +137,8 @@ spawn_args = "{{spawn_args}}"
 merge_model = "{{merge_model}}"
 target_branch = "{{target_branch}}"
 skip_merge_to_target = "{{skip_merge_to_target}}"
+enable_rw = "{{enable_rw}}"
+max_nudges = "{{max_nudges}}"
 
 # ============================================================================
 # PHASE 4: Done

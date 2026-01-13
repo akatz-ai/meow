@@ -148,6 +148,93 @@ loop_count = "0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# OPTIONAL MONITOR (Public Entry Point - Modular)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A modular wrapper around the monitor that can be easily dropped into any
+# workflow. Includes enable/disable toggle and sensible defaults.
+#
+# This is the RECOMMENDED way to add RW persistence to workflows.
+#
+# Example:
+#   [[main.steps]]
+#   id = "persistence"
+#   executor = "expand"
+#   template = "lib/agent-persistence#optional-monitor"
+#   needs = ["spawn"]
+#
+#   [main.steps.variables]
+#   agent = "{{agent_name}}"
+#   check_step = "work"
+#   # Optional: enable = "{{enable_rw}}", max_loops = "10", nudge_prompt = "..."
+
+[optional-monitor]
+name = "optional-agent-persistence"
+description = "Optionally enabled persistence monitor - modular drop-in for any workflow"
+
+[optional-monitor.variables]
+agent = { required = true, description = "Agent ID to monitor" }
+check_step = { required = true, description = "Step ID to check for completion (monitor exits when this step is done)" }
+enable = { default = "true", description = "Enable monitoring (true/false) - use for conditional RW" }
+nudge_prompt = { default = "You stopped unexpectedly. Continue with your assigned task.\n\nWhen complete, run: `meow done`", description = "Prompt to re-inject on unexpected stop" }
+timeout = { default = "60s", description = "How long to wait between event checks" }
+max_loops = { default = "10", description = "Max nudges before force-completing (safety limit)" }
+
+[[optional-monitor.steps]]
+id = "check-enabled"
+executor = "branch"
+condition = "test '{{enable}}' = 'true'"
+
+[optional-monitor.steps.on_true]
+template = ".monitor-impl"
+variables = { agent = "{{agent}}", check_step = "{{check_step}}", nudge_prompt = "{{nudge_prompt}}", timeout = "{{timeout}}", max_loops = "{{max_loops}}" }
+
+[optional-monitor.steps.on_false]
+inline = [
+  { id = "skip", executor = "shell", command = "echo 'Persistence monitor disabled for agent {{agent}}'" }
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MONITOR IMPL (Internal - used by optional-monitor)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Internal implementation that starts the actual monitor. Separated so the
+# branch in optional-monitor can expand to it.
+
+[monitor-impl]
+name = "monitor-impl"
+description = "Internal: Actual monitor start (use optional-monitor or monitor instead)"
+internal = true
+
+[monitor-impl.variables]
+agent = { required = true }
+check_step = { required = true }
+nudge_prompt = { required = true }
+timeout = { default = "60s" }
+max_loops = { default = "10" }
+
+[[monitor-impl.steps]]
+id = "start"
+executor = "shell"
+command = "echo 'Starting persistence monitor for agent {{agent}}, watching step {{check_step}} (max {{max_loops}} nudges)'"
+
+[[monitor-impl.steps]]
+id = "loop"
+executor = "expand"
+template = ".monitor-loop"
+needs = ["start"]
+
+[monitor-impl.steps.variables]
+agent = "{{agent}}"
+nudge_prompt = "{{nudge_prompt}}"
+check_step = "{{check_step}}"
+timeout = "{{timeout}}"
+max_loops = "{{max_loops}}"
+loop_count = "0"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MONITOR LOOP (Internal)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
