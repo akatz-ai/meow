@@ -1,4 +1,4 @@
-# MEOW
+![shimmer_meow_logo](https://github.com/user-attachments/assets/7df96ff8-e305-473d-b1ed-8f3c7341ce2e)
 
 **Meow Executors Orchestrate Work** — The Makefile of agent orchestration.
 
