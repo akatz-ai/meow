@@ -22,6 +22,7 @@ dist/
 *.out
 coverage.html
 coverage.txt
+test-*.txt
 
 # Go module cache (local)
 vendor/
