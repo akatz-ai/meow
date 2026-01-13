@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -113,6 +114,7 @@ func (w *Workflow) GetAgentWorkdir(agentID string) (string, bool) {
 }
 
 // GetReadySteps returns all steps that are ready to execute.
+// Steps are returned in deterministic order (sorted by ID).
 func (w *Workflow) GetReadySteps() []*Step {
 	var ready []*Step
 	for _, step := range w.Steps {
@@ -120,6 +122,12 @@ func (w *Workflow) GetReadySteps() []*Step {
 			ready = append(ready, step)
 		}
 	}
+
+	// Sort by step ID for deterministic ordering
+	sort.Slice(ready, func(i, j int) bool {
+		return ready[i].ID < ready[j].ID
+	})
+
 	return ready
 }
 
