@@ -15,7 +15,7 @@ import (
 	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
 	"github.com/spf13/cobra"
 )
@@ -104,7 +104,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load module file
-	module, err := template.ParseModuleFile(templatePath)
+	module, err := workflow.ParseModuleFile(templatePath)
 	if err != nil {
 		return fmt.Errorf("parsing template: %w", err)
 	}
@@ -127,7 +127,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create baker
-	baker := template.NewBaker(workflowID)
+	baker := workflow.NewBaker(workflowID)
 
 	// Bake the workflow into steps
 	result, err := baker.BakeWorkflow(templateWorkflow, vars)

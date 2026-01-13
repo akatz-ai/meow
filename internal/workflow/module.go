@@ -1,5 +1,5 @@
-// Package template provides TOML template parsing and baking for MEOW workflows.
-package template
+// Package workflow provides TOML template parsing and baking for MEOW workflows.
+package workflow
 
 import (
 	"fmt"

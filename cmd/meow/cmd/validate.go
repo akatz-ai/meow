@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -50,7 +50,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Validating template: %s\n", templatePath)
 
 	// Parse the module file
-	module, err := template.ParseModuleFile(templatePath)
+	module, err := workflow.ParseModuleFile(templatePath)
 	if err != nil {
 		fmt.Printf("\n%s Parsing failed:\n", errorMark())
 		fmt.Printf("  %v\n", err)
@@ -60,7 +60,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%s Syntax OK\n", checkMark())
 
 	// Run full validation
-	result := template.ValidateFullModule(module)
+	result := workflow.ValidateFullModule(module)
 
 	if result.HasErrors() {
 		fmt.Printf("\n%s Validation errors:\n", errorMark())

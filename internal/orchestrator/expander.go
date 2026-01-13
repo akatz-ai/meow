@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -96,7 +96,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	}
 
 	templateRef := config.Template
-	var workflow *template.Workflow
+	var wf *workflow.Workflow
 	var workflowID string
 	var resolvedModulePath string // Track which module file was resolved, for local refs in nested templates
 
@@ -121,22 +121,22 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 
 		// Load the source module
-		module, err := template.ParseModuleFile(modulePath)
+		module, err := workflow.ParseModuleFile(modulePath)
 		if err != nil {
 			return nil, fmt.Errorf("loading source module %s: %w", modulePath, err)
 		}
 
 		// Get the referenced workflow (strip the leading dot)
 		workflowName := templateRef[1:]
-		workflow = module.GetWorkflow(workflowName)
-		if workflow == nil {
+		wf = module.GetWorkflow(workflowName)
+		if wf == nil {
 			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, modulePath)
 		}
 		resolvedModulePath = modulePath
 	}
 
 	// Check for file#workflow format
-	if workflow != nil {
+	if wf != nil {
 		// Already resolved (local reference)
 	} else if strings.Contains(templateRef, "#") {
 		parts := strings.SplitN(templateRef, "#", 2)
@@ -173,13 +173,13 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 
 		// Load the module
-		module, err := template.ParseModuleFile(filePath)
+		module, err := workflow.ParseModuleFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
 		}
 
-		workflow = module.GetWorkflow(workflowName)
-		if workflow == nil {
+		wf = module.GetWorkflow(workflowName)
+		if wf == nil {
 			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, filePath)
 		}
 		resolvedModulePath = filePath
@@ -201,20 +201,20 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 
 		// Load the module
-		module, err := template.ParseModuleFile(filePath)
+		module, err := workflow.ParseModuleFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("loading library module %s: %w", filePath, err)
 		}
 
-		workflow = module.DefaultWorkflow()
-		if workflow == nil {
+		wf = module.DefaultWorkflow()
+		if wf == nil {
 			// Try to get any workflow
 			for _, w := range module.Workflows {
-				workflow = w
+				wf = w
 				break
 			}
 		}
-		if workflow == nil {
+		if wf == nil {
 			return nil, fmt.Errorf("no workflow found in library %s", filePath)
 		}
 		resolvedModulePath = filePath
@@ -235,20 +235,20 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 
 		// Load the module
-		module, err := template.ParseModuleFile(filePath)
+		module, err := workflow.ParseModuleFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
 		}
 
-		workflow = module.DefaultWorkflow()
-		if workflow == nil {
+		wf = module.DefaultWorkflow()
+		if wf == nil {
 			// Try to get any workflow
 			for _, w := range module.Workflows {
-				workflow = w
+				wf = w
 				break
 			}
 		}
-		if workflow == nil {
+		if wf == nil {
 			return nil, fmt.Errorf("no workflow found in %s", filePath)
 		}
 		resolvedModulePath = filePath
@@ -258,7 +258,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	}
 
 	// Create the baker
-	baker := template.NewBaker(workflowID)
+	baker := workflow.NewBaker(workflowID)
 
 	// Apply options
 	if opts != nil && opts.DeferUndefinedVariables {
@@ -266,7 +266,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	}
 
 	// Bake the workflow
-	result, err := baker.BakeWorkflow(workflow, config.Variables)
+	result, err := baker.BakeWorkflow(wf, config.Variables)
 	if err != nil {
 		return nil, fmt.Errorf("baking workflow: %w", err)
 	}

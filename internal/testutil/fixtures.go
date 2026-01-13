@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/config"
-	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -62,26 +62,26 @@ func NewTestConfig(t *testing.T) *config.Config {
 }
 
 // NewTestTemplate creates a test template with the given name and steps.
-func NewTestTemplate(t *testing.T, name string) *template.Template {
+func NewTestTemplate(t *testing.T, name string) *workflow.Template {
 	t.Helper()
-	return &template.Template{
-		Meta: template.Meta{
+	return &workflow.Template{
+		Meta: workflow.Meta{
 			Name:        name,
 			Version:     "1.0.0",
 			Description: fmt.Sprintf("Test template: %s", name),
 		},
-		Variables: map[string]template.Var{
+		Variables: map[string]workflow.Var{
 			"test_var": {
 				Required:    false,
 				Default:     "default_value",
-				Type:        template.VarTypeString,
+				Type:        workflow.VarTypeString,
 				Description: "A test variable",
 			},
 		},
-		Steps: []template.Step{
+		Steps: []workflow.Step{
 			{
 				ID:      "step-1",
-				Executor: template.ExecutorShell,
+				Executor: workflow.ExecutorShell,
 				Command: "echo test",
 			},
 		},
@@ -89,7 +89,7 @@ func NewTestTemplate(t *testing.T, name string) *template.Template {
 }
 
 // NewTestTemplateWithSteps creates a test template with custom steps.
-func NewTestTemplateWithSteps(t *testing.T, name string, steps []template.Step) *template.Template {
+func NewTestTemplateWithSteps(t *testing.T, name string, steps []workflow.Step) *workflow.Template {
 	t.Helper()
 	tmpl := NewTestTemplate(t, name)
 	tmpl.Steps = steps

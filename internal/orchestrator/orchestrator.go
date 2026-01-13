@@ -19,7 +19,7 @@ import (
 
 	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/ipc"
-	"github.com/meow-stack/meow-machine/internal/template"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -1396,14 +1396,14 @@ func (o *Orchestrator) completeBranchCondition(
 	// Capture defined outputs (stdout, stderr, file:path)
 	// Create a source substitution function that resolves step output references
 	substituteSource := func(source string) (string, error) {
-		vc := template.NewVarContext()
+		vc := workflow.NewVarContext()
 		// Set up step lookup from the workflow
-		vc.SetStepLookup(func(lookupStepID string) (*template.StepInfo, error) {
+		vc.SetStepLookup(func(lookupStepID string) (*workflow.StepInfo, error) {
 			s, ok := wf.GetStep(lookupStepID)
 			if !ok {
 				return nil, nil // Not found
 			}
-			return &template.StepInfo{
+			return &workflow.StepInfo{
 				ID:      s.ID,
 				Status:  string(s.Status),
 				Outputs: s.Outputs,
