@@ -15,7 +15,7 @@ func TestStatePersister_SaveLoadState(t *testing.T) {
 
 	state := &OrchestratorState{
 		Version:      "1",
-		WorkflowID:   "wf-001",
+		WorkflowID:   "run-001",
 		TemplateName: "outer-loop",
 		StartedAt:    time.Now().Truncate(time.Second),
 		TickCount:    42,

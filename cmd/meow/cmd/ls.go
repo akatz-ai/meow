@@ -63,15 +63,15 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
 
 	// Apply status filter if specified
-	filter := orchestrator.WorkflowFilter{}
+	filter := orchestrator.RunFilter{}
 	if lsStatus != "" {
-		filter.Status = types.WorkflowStatus(lsStatus)
+		filter.Status = types.RunStatus(lsStatus)
 	}
 
 	workflows, err := store.List(context.Background(), filter)
@@ -90,10 +90,10 @@ func runLs(cmd *cobra.Command, args []string) error {
 	// --stale: show stale (running but no lock)
 	// --status=X: already filtered above
 	if !lsAll && lsStatus == "" {
-		filtered := make([]*types.Workflow, 0, len(workflows))
+		filtered := make([]*types.Run, 0, len(workflows))
 		for _, wf := range workflows {
 			isLocked := store.IsLocked(wf.ID)
-			isRunning := wf.Status == types.WorkflowStatusRunning
+			isRunning := wf.Status == types.RunStatusRunning
 			isStale := isRunning && !isLocked
 
 			if lsStale {
@@ -131,7 +131,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 	return printWorkflowsTable(workflows, store)
 }
 
-func printWorkflowsTable(workflows []*types.Workflow, store *orchestrator.YAMLWorkflowStore) error {
+func printWorkflowsTable(workflows []*types.Run, store *orchestrator.YAMLRunStore) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tSTATUS\tSTARTED\tTEMPLATE")
 
@@ -141,7 +141,7 @@ func printWorkflowsTable(workflows []*types.Workflow, store *orchestrator.YAMLWo
 		status := string(wf.Status)
 
 		// Add stale indicator for non-running "running" workflows
-		if wf.Status == types.WorkflowStatusRunning && !store.IsLocked(wf.ID) {
+		if wf.Status == types.RunStatusRunning && !store.IsLocked(wf.ID) {
 			status = "running (stale)"
 		}
 
@@ -151,7 +151,7 @@ func printWorkflowsTable(workflows []*types.Workflow, store *orchestrator.YAMLWo
 	return w.Flush()
 }
 
-func printWorkflowsJSON(workflows []*types.Workflow, store *orchestrator.YAMLWorkflowStore) error {
+func printWorkflowsJSON(workflows []*types.Run, store *orchestrator.YAMLRunStore) error {
 	type workflowJSON struct {
 		ID        string `json:"id"`
 		Status    string `json:"status"`
@@ -162,7 +162,7 @@ func printWorkflowsJSON(workflows []*types.Workflow, store *orchestrator.YAMLWor
 
 	out := make([]workflowJSON, len(workflows))
 	for i, wf := range workflows {
-		isStale := wf.Status == types.WorkflowStatusRunning && !store.IsLocked(wf.ID)
+		isStale := wf.Status == types.RunStatusRunning && !store.IsLocked(wf.ID)
 		out[i] = workflowJSON{
 			ID:        wf.ID,
 			Status:    string(wf.Status),

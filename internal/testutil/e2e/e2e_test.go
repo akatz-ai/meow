@@ -583,7 +583,7 @@ command = "echo 'done'"
 	}
 
 	// Verify workflow ID was generated
-	if !strings.HasPrefix(workflowID, "wf-") {
+	if !strings.HasPrefix(workflowID, "run-") {
 		t.Errorf("expected workflow ID to start with 'wf-', got %s", workflowID)
 	}
 }
@@ -2575,7 +2575,7 @@ func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
 		},
 	}
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-pending", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-pending", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -2585,13 +2585,13 @@ func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusRunning
+	wf.Status = types.RunStatusRunning
 	if err := h.SaveWorkflow(wf); err != nil {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
 
 	// Resume the workflow
-	proc, err := h.RestartOrchestrator("wf-recovery-pending")
+	proc, err := h.RestartOrchestrator("run-recovery-pending")
 	if err != nil {
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
@@ -2616,7 +2616,7 @@ func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
 		}
 	}
 
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("workflow status = %s, want done", wf.Status)
 	}
 }
@@ -2650,7 +2650,7 @@ func TestE2E_CrashRecovery_RunningShellStep(t *testing.T) {
 		},
 	}
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-shell", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-shell", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -2660,13 +2660,13 @@ func TestE2E_CrashRecovery_RunningShellStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusRunning
+	wf.Status = types.RunStatusRunning
 	if err := h.SaveWorkflow(wf); err != nil {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
 
 	// Resume the workflow
-	proc, err := h.RestartOrchestrator("wf-recovery-shell")
+	proc, err := h.RestartOrchestrator("run-recovery-shell")
 	if err != nil {
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
@@ -2684,7 +2684,7 @@ func TestE2E_CrashRecovery_RunningShellStep(t *testing.T) {
 		t.Fatalf("failed to reload workflow: %v", err)
 	}
 
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("workflow status = %s, want done", wf.Status)
 	}
 
@@ -2737,7 +2737,7 @@ func TestE2E_CrashRecovery_RunningAgentStep_DeadAgent(t *testing.T) {
 	// NOTE: No tmux session is created - simulating that agent died in crash
 	// The orchestrator should detect this and reset the step to pending
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-agent-dead", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-agent-dead", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -2747,7 +2747,7 @@ func TestE2E_CrashRecovery_RunningAgentStep_DeadAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusRunning
+	wf.Status = types.RunStatusRunning
 	wf.RegisterAgent("test-agent", &types.AgentInfo{
 		TmuxSession: "meow-wf-recovery-agent-dead-test-agent",
 		Status:      "active",
@@ -2758,7 +2758,7 @@ func TestE2E_CrashRecovery_RunningAgentStep_DeadAgent(t *testing.T) {
 	}
 
 	// Resume the workflow - this should detect dead agent and reset step
-	proc, err := h.RestartOrchestrator("wf-recovery-agent-dead")
+	proc, err := h.RestartOrchestrator("run-recovery-agent-dead")
 	if err != nil {
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
@@ -2822,7 +2822,7 @@ func TestE2E_CrashRecovery_CompletingStep(t *testing.T) {
 		},
 	}
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completing", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-completing", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -2831,13 +2831,13 @@ func TestE2E_CrashRecovery_CompletingStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusRunning
+	wf.Status = types.RunStatusRunning
 	if err := h.SaveWorkflow(wf); err != nil {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
 
 	// Resume the workflow
-	proc, err := h.RestartOrchestrator("wf-recovery-completing")
+	proc, err := h.RestartOrchestrator("run-recovery-completing")
 	if err != nil {
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
@@ -2855,7 +2855,7 @@ func TestE2E_CrashRecovery_CompletingStep(t *testing.T) {
 		t.Fatalf("failed to reload workflow: %v", err)
 	}
 
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("workflow status = %s, want done", wf.Status)
 	}
 
@@ -2908,7 +2908,7 @@ func TestE2E_CrashRecovery_PartialExpansion(t *testing.T) {
 		},
 	}
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-expand", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-expand", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -2917,7 +2917,7 @@ func TestE2E_CrashRecovery_PartialExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusRunning
+	wf.Status = types.RunStatusRunning
 	if err := h.SaveWorkflow(wf); err != nil {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
@@ -2933,12 +2933,12 @@ id = "real-child"
 executor = "shell"
 command = "echo 'properly expanded'"
 `
-	if err := h.WriteTemplate("wf-recovery-expand.toml", template); err != nil {
+	if err := h.WriteTemplate("run-recovery-expand.toml", template); err != nil {
 		t.Fatalf("failed to write template: %v", err)
 	}
 
 	// Resume the workflow
-	proc, err := h.RestartOrchestrator("wf-recovery-expand")
+	proc, err := h.RestartOrchestrator("run-recovery-expand")
 	if err != nil {
 		t.Fatalf("failed to restart orchestrator: %v", err)
 	}
@@ -2998,7 +2998,7 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 		},
 	}
 
-	run, err := e2e.CreateTestWorkflow(h, "wf-recovery-completed", steps)
+	run, err := e2e.CreateTestWorkflow(h, "run-recovery-completed", steps)
 	if err != nil {
 		t.Fatalf("failed to create test workflow: %v", err)
 	}
@@ -3007,14 +3007,14 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load workflow: %v", err)
 	}
-	wf.Status = types.WorkflowStatusDone
+	wf.Status = types.RunStatusDone
 	wf.Complete()
 	if err := h.SaveWorkflow(wf); err != nil {
 		t.Fatalf("failed to save workflow: %v", err)
 	}
 
 	// Try to resume - should fail with error
-	proc, err := h.RestartOrchestrator("wf-recovery-completed")
+	proc, err := h.RestartOrchestrator("run-recovery-completed")
 	if err != nil {
 		t.Fatalf("failed to start orchestrator: %v", err)
 	}

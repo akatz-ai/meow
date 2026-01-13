@@ -13,7 +13,7 @@ func TestNewTracer(t *testing.T) {
 	dir := t.TempDir()
 	stateDir := filepath.Join(dir, "state")
 
-	tracer, err := NewTracer(stateDir, "wf-001")
+	tracer, err := NewTracer(stateDir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestNewTracer(t *testing.T) {
 
 func TestTracer_Log(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestTracer_Log(t *testing.T) {
 	if e.StepID != "step-123" {
 		t.Errorf("StepID = %s, want step-123", e.StepID)
 	}
-	if e.WorkflowID != "wf-001" {
+	if e.WorkflowID != "run-001" {
 		t.Errorf("WorkflowID = %s, want wf-001", e.WorkflowID)
 	}
 	if e.Timestamp.IsZero() {
@@ -72,7 +72,7 @@ func TestTracer_Log(t *testing.T) {
 
 func TestTracer_LogStart(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestTracer_LogStart(t *testing.T) {
 
 func TestTracer_LogResume(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestTracer_LogResume(t *testing.T) {
 
 func TestTracer_LogDispatch(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestTracer_LogDispatch(t *testing.T) {
 
 func TestTracer_LogConditionEval(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestTracer_LogConditionEval(t *testing.T) {
 
 func TestTracer_LogExpand(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestTracer_LogExpand(t *testing.T) {
 
 func TestTracer_LogClose(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestTracer_LogClose(t *testing.T) {
 
 func TestTracer_LogError(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestTracer_LogError(t *testing.T) {
 
 func TestTracer_MultipleEntries(t *testing.T) {
 	dir := t.TempDir()
-	tracer, err := NewTracer(dir, "wf-001")
+	tracer, err := NewTracer(dir, "run-001")
 	if err != nil {
 		t.Fatalf("NewTracer failed: %v", err)
 	}

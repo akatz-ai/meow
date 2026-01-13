@@ -319,7 +319,7 @@ func NewTemplateExpanderAdapter(baseDir string) *TemplateExpanderAdapter {
 
 // Expand implements TemplateExpander interface.
 // It expands a template and inserts the resulting steps into the workflow.
-func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Expand == nil {
 		return fmt.Errorf("step %s missing expand config", step.ID)
 	}

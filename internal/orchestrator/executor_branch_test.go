@@ -479,7 +479,7 @@ func TestSimpleConditionExecutor_Timeout(t *testing.T) {
 func TestSimpleConditionExecutor_InjectsMeowVars(t *testing.T) {
 	exec := &SimpleConditionExecutor{
 		SocketPath: "/tmp/meow-test.sock",
-		WorkflowID: "wf-123",
+		WorkflowID: "run-123",
 		StepID:     "step-456",
 	}
 
@@ -490,7 +490,7 @@ func TestSimpleConditionExecutor_InjectsMeowVars(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := "MEOW_WORKFLOW=wf-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
+	expected := "MEOW_WORKFLOW=run-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
 	if stdout != expected {
 		t.Errorf("expected MEOW_* vars: %q, got: %q", expected, stdout)
 	}

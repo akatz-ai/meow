@@ -205,7 +205,7 @@ func TestWithWorkflow(t *testing.T) {
 	handler := slog.NewJSONHandler(&buf, nil)
 	logger := slog.New(handler)
 
-	enriched := WithWorkflow(logger, "wf-001")
+	enriched := WithWorkflow(logger, "run-001")
 	enriched.Info("test")
 
 	var result map[string]any
@@ -213,7 +213,7 @@ func TestWithWorkflow(t *testing.T) {
 		t.Fatalf("JSON unmarshal failed: %v", err)
 	}
 
-	if result["workflow_id"] != "wf-001" {
+	if result["workflow_id"] != "run-001" {
 		t.Errorf("workflow_id = %v, want wf-001", result["workflow_id"])
 	}
 }

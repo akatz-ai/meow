@@ -22,7 +22,7 @@ func TestEventRouter_RegisterAndRoute(t *testing.T) {
 			"exit_code": 0,
 		},
 		Agent:     "worker-1",
-		Workflow:  "wf-123",
+		Workflow:  "run-123",
 		Timestamp: time.Now().Unix(),
 	}
 

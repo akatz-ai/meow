@@ -10,10 +10,10 @@ import (
 func TestNewWorkflowSummary(t *testing.T) {
 	now := time.Now()
 
-	wf := &types.Workflow{
-		ID:        "wf-test",
+	wf := &types.Run{
+		ID:        "run-test",
 		Template:  "test.meow.toml",
-		Status:    types.WorkflowStatusRunning,
+		Status:    types.RunStatusRunning,
 		StartedAt: now,
 		Variables: map[string]string{"env": "test"},
 		Steps: map[string]*types.Step{
@@ -44,7 +44,7 @@ func TestNewWorkflowSummary(t *testing.T) {
 
 	summary := NewWorkflowSummary(wf)
 
-	if summary.ID != "wf-test" {
+	if summary.ID != "run-test" {
 		t.Errorf("expected ID wf-test, got %s", summary.ID)
 	}
 
@@ -52,7 +52,7 @@ func TestNewWorkflowSummary(t *testing.T) {
 		t.Errorf("expected template test.meow.toml, got %s", summary.Template)
 	}
 
-	if summary.Status != types.WorkflowStatusRunning {
+	if summary.Status != types.RunStatusRunning {
 		t.Errorf("expected status running, got %s", summary.Status)
 	}
 
@@ -124,7 +124,7 @@ func TestComputeStepStats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wf := &types.Workflow{Steps: tt.steps}
+			wf := &types.Run{Steps: tt.steps}
 			stats := computeStepStats(wf)
 
 			if stats.Total != tt.expected.Total {
@@ -150,10 +150,10 @@ func TestComputeStepStats(t *testing.T) {
 }
 
 func TestWorkflowSummaryWithErrors(t *testing.T) {
-	wf := &types.Workflow{
-		ID:       "wf-test",
+	wf := &types.Run{
+		ID:       "run-test",
 		Template: "test.meow.toml",
-		Status:   types.WorkflowStatusFailed,
+		Status:   types.RunStatusFailed,
 		Steps: map[string]*types.Step{
 			"step1": {
 				ID:     "step1",

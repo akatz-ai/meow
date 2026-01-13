@@ -11,9 +11,9 @@ import (
 func TestFormatDetailedWorkflow(t *testing.T) {
 	now := time.Now()
 	summary := &WorkflowSummary{
-		ID:        "wf-test-123",
+		ID:        "run-test-123",
 		Template:  "test.meow.toml",
-		Status:    types.WorkflowStatusRunning,
+		Status:    types.RunStatusRunning,
 		StartedAt: now,
 		Variables: map[string]string{"env": "production"},
 		StepStats: StepStats{
@@ -45,7 +45,7 @@ func TestFormatDetailedWorkflow(t *testing.T) {
 	output := FormatDetailedWorkflow(summary, opts)
 
 	// Check key components are present
-	if !strings.Contains(output, "wf-test-123") {
+	if !strings.Contains(output, "run-test-123") {
 		t.Error("output should contain workflow ID")
 	}
 	if !strings.Contains(output, "test.meow.toml") {
@@ -75,16 +75,16 @@ func TestFormatWorkflowList(t *testing.T) {
 	now := time.Now()
 	summaries := []*WorkflowSummary{
 		{
-			ID:        "wf-001",
+			ID:        "run-001",
 			Template:  "sprint.meow.toml",
-			Status:    types.WorkflowStatusRunning,
+			Status:    types.RunStatusRunning,
 			StartedAt: now.Add(-1 * time.Hour),
 			StepStats: StepStats{Total: 10, Done: 5},
 		},
 		{
-			ID:        "wf-002",
+			ID:        "run-002",
 			Template:  "build.meow.toml",
-			Status:    types.WorkflowStatusDone,
+			Status:    types.RunStatusDone,
 			StartedAt: now.Add(-30 * time.Minute),
 			DoneAt:    timePtr(now.Add(-10 * time.Minute)),
 			StepStats: StepStats{Total: 5, Done: 5},
@@ -97,10 +97,10 @@ func TestFormatWorkflowList(t *testing.T) {
 	if !strings.Contains(output, "Found 2 workflow(s)") {
 		t.Error("output should show workflow count")
 	}
-	if !strings.Contains(output, "wf-001") {
+	if !strings.Contains(output, "run-001") {
 		t.Error("output should contain first workflow ID")
 	}
-	if !strings.Contains(output, "wf-002") {
+	if !strings.Contains(output, "run-002") {
 		t.Error("output should contain second workflow ID")
 	}
 	if !strings.Contains(output, "sprint.meow.toml") {
@@ -137,7 +137,7 @@ func TestFormatProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			summary := &WorkflowSummary{
-				ID:        "wf-test",
+				ID:        "run-test",
 				StepStats: tt.stats,
 			}
 			opts := FormatOptions{NoColor: true}
@@ -152,15 +152,15 @@ func TestFormatProgress(t *testing.T) {
 
 func TestGetStatusIcon(t *testing.T) {
 	tests := []struct {
-		status types.WorkflowStatus
+		status types.RunStatus
 		want   string
 	}{
-		{types.WorkflowStatusRunning, "●"},
-		{types.WorkflowStatusDone, "✓"},
-		{types.WorkflowStatusFailed, "✗"},
-		{types.WorkflowStatusStopped, "■"},
-		{types.WorkflowStatusPending, "○"},
-		{types.WorkflowStatusCleaningUp, "◐"},
+		{types.RunStatusRunning, "●"},
+		{types.RunStatusDone, "✓"},
+		{types.RunStatusFailed, "✗"},
+		{types.RunStatusStopped, "■"},
+		{types.RunStatusPending, "○"},
+		{types.RunStatusCleaningUp, "◐"},
 	}
 
 	for _, tt := range tests {

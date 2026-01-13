@@ -26,7 +26,7 @@ func TestBakeWorkflow_ReturnsSteps(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-001")
+	baker := NewBaker("run-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -66,7 +66,7 @@ func TestBakeWorkflow_ShellExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-shell-001")
+	baker := NewBaker("run-shell-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -119,7 +119,7 @@ func TestBakeWorkflow_SpawnExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-spawn-001")
+	baker := NewBaker("run-spawn-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -164,7 +164,7 @@ func TestBakeWorkflow_KillExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-kill-001")
+	baker := NewBaker("run-kill-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -201,7 +201,7 @@ func TestBakeWorkflow_ExpandExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-expand-001")
+	baker := NewBaker("run-expand-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -240,7 +240,7 @@ func TestBakeWorkflow_BranchExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-branch-001")
+	baker := NewBaker("run-branch-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -288,7 +288,7 @@ func TestBakeWorkflow_AgentExecutor(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-agent-001")
+	baker := NewBaker("run-agent-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -349,7 +349,7 @@ func TestBakeWorkflow_Dependencies(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-deps-001")
+	baker := NewBaker("run-deps-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -409,7 +409,7 @@ func TestBakeWorkflow_VariableSubstitution(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-var-001")
+	baker := NewBaker("run-var-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, map[string]string{
@@ -478,7 +478,7 @@ func TestBakeWorkflow_StepValidation(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-valid-001")
+	baker := NewBaker("run-valid-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -496,7 +496,7 @@ func TestBakeWorkflow_StepValidation(t *testing.T) {
 
 // TestBakeWorkflow_NilWorkflow tests error handling for nil workflow
 func TestBakeWorkflow_NilWorkflow(t *testing.T) {
-	baker := NewBaker("wf-nil-001")
+	baker := NewBaker("run-nil-001")
 	_, err := baker.BakeWorkflow(nil, nil)
 	if err == nil {
 		t.Fatal("expected error for nil workflow")
@@ -518,7 +518,7 @@ func TestBakeWorkflow_MissingRequiredVariable(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-var-001")
+	baker := NewBaker("run-var-001")
 	baker.Now = fixedTime
 
 	_, err := baker.BakeWorkflow(workflow, nil)
@@ -542,7 +542,7 @@ func TestBakeWorkflow_DefaultVariable(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-default-001")
+	baker := NewBaker("run-default-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -575,7 +575,7 @@ func TestBakeWorkflow_VariableOverride(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-override-001")
+	baker := NewBaker("run-override-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, map[string]string{
@@ -611,7 +611,7 @@ func TestBakeWorkflow_ShellStep(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-shell-001")
+	baker := NewBaker("run-shell-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -654,7 +654,7 @@ func TestBakeWorkflow_SpawnKillSteps(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-agent-001")
+	baker := NewBaker("run-agent-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -707,7 +707,7 @@ func TestBakeWorkflow_ExpandStep(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-expand-001")
+	baker := NewBaker("run-expand-001")
 	baker.Now = fixedTime
 	baker.Assignee = "default-agent"
 
@@ -751,7 +751,7 @@ func TestBakeWorkflow_ConditionStep(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-cond-001")
+	baker := NewBaker("run-cond-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -802,7 +802,7 @@ func TestBakeWorkflow_ConditionWithVariable(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-cond-var-001")
+	baker := NewBaker("run-cond-var-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, map[string]string{
@@ -841,7 +841,7 @@ func TestBakeWorkflow_CodeWithVariable(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-code-var-001")
+	baker := NewBaker("run-code-var-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, map[string]string{
@@ -889,7 +889,7 @@ func TestBakeWorkflow_StartStopWithVariableAssignee(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-agent-var-001")
+	baker := NewBaker("run-agent-var-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, map[string]string{
@@ -929,7 +929,7 @@ func TestBakeWorkflow_DependenciesPreserved(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-deps-001")
+	baker := NewBaker("run-deps-001")
 	baker.Now = fixedTime
 
 	// Baking doesn't validate dependencies - they're preserved as-is
@@ -1024,7 +1024,7 @@ func TestBakeWorkflow_EmptyStringNotOverriddenByDefault(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-001")
+	baker := NewBaker("run-001")
 
 	// Explicitly set the variable to empty string
 	vars := map[string]string{
@@ -1067,7 +1067,7 @@ func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
 		},
 	}
 
-	baker := NewBaker("wf-001")
+	baker := NewBaker("run-001")
 
 	// Test 1: Required variable set to empty string should be valid
 	vars := map[string]string{
@@ -1080,7 +1080,7 @@ func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
 	}
 
 	// Test 2: Required variable not provided should fail
-	baker2 := NewBaker("wf-002")
+	baker2 := NewBaker("run-002")
 	_, err = baker2.BakeWorkflow(workflow, map[string]string{})
 	if err == nil {
 		t.Error("BakeWorkflow should fail when required var is not provided")

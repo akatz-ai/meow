@@ -6,31 +6,31 @@ import (
 	"time"
 )
 
-// WorkflowStatus represents the lifecycle state of a workflow.
-type WorkflowStatus string
+// RunStatus represents the lifecycle state of a run.
+type RunStatus string
 
 const (
-	WorkflowStatusPending    WorkflowStatus = "pending"     // Created but not started
-	WorkflowStatusRunning    WorkflowStatus = "running"     // Orchestrator is processing
-	WorkflowStatusCleaningUp WorkflowStatus = "cleaning_up" // Running cleanup script
-	WorkflowStatusDone       WorkflowStatus = "done"        // All steps completed
-	WorkflowStatusFailed     WorkflowStatus = "failed"      // A step failed
-	WorkflowStatusStopped    WorkflowStatus = "stopped"     // Manually stopped via meow stop
+	RunStatusPending    RunStatus = "pending"     // Created but not started
+	RunStatusRunning    RunStatus = "running"     // Orchestrator is processing
+	RunStatusCleaningUp RunStatus = "cleaning_up" // Running cleanup script
+	RunStatusDone       RunStatus = "done"        // All steps completed
+	RunStatusFailed     RunStatus = "failed"      // A step failed
+	RunStatusStopped    RunStatus = "stopped"     // Manually stopped via meow stop
 )
 
-// Valid returns true if this is a recognized workflow status.
-func (s WorkflowStatus) Valid() bool {
+// Valid returns true if this is a recognized run status.
+func (s RunStatus) Valid() bool {
 	switch s {
-	case WorkflowStatusPending, WorkflowStatusRunning, WorkflowStatusCleaningUp,
-		WorkflowStatusDone, WorkflowStatusFailed, WorkflowStatusStopped:
+	case RunStatusPending, RunStatusRunning, RunStatusCleaningUp,
+		RunStatusDone, RunStatusFailed, RunStatusStopped:
 		return true
 	}
 	return false
 }
 
 // IsTerminal returns true if this status is final (done, failed, or stopped).
-func (s WorkflowStatus) IsTerminal() bool {
-	return s == WorkflowStatusDone || s == WorkflowStatusFailed || s == WorkflowStatusStopped
+func (s RunStatus) IsTerminal() bool {
+	return s == RunStatusDone || s == RunStatusFailed || s == RunStatusStopped
 }
 
 // AgentInfo tracks persisted state for an agent.
@@ -42,23 +42,23 @@ type AgentInfo struct {
 	ClaudeSession string `yaml:"claude_session,omitempty"` // Session ID for resume
 }
 
-// Workflow represents a running workflow instance.
-type Workflow struct {
+// Run represents a running workflow instance.
+type Run struct {
 	// Identity
-	ID       string `yaml:"id"`       // Unique identifier (e.g., "wf-abc123")
+	ID       string `yaml:"id"`       // Unique identifier (e.g., "run-abc123")
 	Template string `yaml:"template"` // Source template path
 
 	// Lifecycle
-	Status    WorkflowStatus `yaml:"status"`
-	StartedAt time.Time      `yaml:"started_at"`
-	DoneAt    *time.Time     `yaml:"done_at,omitempty"`
+	Status    RunStatus  `yaml:"status"`
+	StartedAt time.Time  `yaml:"started_at"`
+	DoneAt    *time.Time `yaml:"done_at,omitempty"`
 
 	// Orchestrator tracking
 	OrchestratorPID int `yaml:"orchestrator_pid,omitempty"` // Process ID of running orchestrator (0 if not running)
 
 	// Configuration
 	Variables      map[string]string `yaml:"variables,omitempty"`
-	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Workflow-level default adapter
+	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Run-level default adapter
 
 	// Conditional cleanup scripts (from template) - all are opt-in, no cleanup by default
 	// Each runs on the specified trigger, kills agents, then executes the script
@@ -67,7 +67,7 @@ type Workflow struct {
 	CleanupOnStop    string `yaml:"cleanup_on_stop,omitempty"`    // Runs on SIGINT/SIGTERM or meow stop
 
 	// Prior status before cleanup - used to determine final status after cleanup
-	PriorStatus WorkflowStatus `yaml:"prior_status,omitempty"`
+	PriorStatus RunStatus `yaml:"prior_status,omitempty"`
 
 	// Agent state - tracked for crash recovery and file_path validation
 	Agents map[string]*AgentInfo `yaml:"agents,omitempty"`
@@ -76,12 +76,12 @@ type Workflow struct {
 	Steps map[string]*Step `yaml:"steps"`
 }
 
-// NewWorkflow creates a new workflow instance.
-func NewWorkflow(id, template string, vars map[string]string) *Workflow {
-	return &Workflow{
+// NewRun creates a new run instance.
+func NewRun(id, template string, vars map[string]string) *Run {
+	return &Run{
 		ID:        id,
 		Template:  template,
-		Status:    WorkflowStatusPending,
+		Status:    RunStatusPending,
 		StartedAt: time.Now(),
 		Variables: vars,
 		Agents:    make(map[string]*AgentInfo),
@@ -89,27 +89,27 @@ func NewWorkflow(id, template string, vars map[string]string) *Workflow {
 	}
 }
 
-// AddStep adds a step to the workflow.
-func (w *Workflow) AddStep(step *Step) error {
-	if _, exists := w.Steps[step.ID]; exists {
+// AddStep adds a step to the run.
+func (r *Run) AddStep(step *Step) error {
+	if _, exists := r.Steps[step.ID]; exists {
 		return fmt.Errorf("step %s already exists", step.ID)
 	}
-	w.Steps[step.ID] = step
+	r.Steps[step.ID] = step
 	return nil
 }
 
 // RegisterAgent adds or updates agent state.
-func (w *Workflow) RegisterAgent(id string, info *AgentInfo) {
-	if w.Agents == nil {
-		w.Agents = make(map[string]*AgentInfo)
+func (r *Run) RegisterAgent(id string, info *AgentInfo) {
+	if r.Agents == nil {
+		r.Agents = make(map[string]*AgentInfo)
 	}
-	w.Agents[id] = info
+	r.Agents[id] = info
 }
 
 // GetAgentWorkdir returns the working directory for an agent.
 // Used for file_path output validation.
-func (w *Workflow) GetAgentWorkdir(agentID string) (string, bool) {
-	agent, ok := w.Agents[agentID]
+func (r *Run) GetAgentWorkdir(agentID string) (string, bool) {
+	agent, ok := r.Agents[agentID]
 	if !ok {
 		return "", false
 	}
@@ -118,10 +118,10 @@ func (w *Workflow) GetAgentWorkdir(agentID string) (string, bool) {
 
 // GetReadySteps returns all steps that are ready to execute.
 // Steps are returned in deterministic order (sorted by ID).
-func (w *Workflow) GetReadySteps() []*Step {
+func (r *Run) GetReadySteps() []*Step {
 	var ready []*Step
-	for _, step := range w.Steps {
-		if step.IsReady(w.Steps) {
+	for _, step := range r.Steps {
+		if step.IsReady(r.Steps) {
 			ready = append(ready, step)
 		}
 	}
@@ -135,8 +135,8 @@ func (w *Workflow) GetReadySteps() []*Step {
 }
 
 // AllDone returns true if all steps are in terminal state.
-func (w *Workflow) AllDone() bool {
-	for _, step := range w.Steps {
+func (r *Run) AllDone() bool {
+	for _, step := range r.Steps {
 		if !step.Status.IsTerminal() {
 			return false
 		}
@@ -145,8 +145,8 @@ func (w *Workflow) AllDone() bool {
 }
 
 // HasFailed returns true if any step has failed.
-func (w *Workflow) HasFailed() bool {
-	for _, step := range w.Steps {
+func (r *Run) HasFailed() bool {
+	for _, step := range r.Steps {
 		if step.Status == StepStatusFailed {
 			return true
 		}
@@ -154,89 +154,89 @@ func (w *Workflow) HasFailed() bool {
 	return false
 }
 
-// Complete marks the workflow as done.
-func (w *Workflow) Complete() {
+// Complete marks the run as done.
+func (r *Run) Complete() {
 	now := time.Now()
-	w.Status = WorkflowStatusDone
-	w.DoneAt = &now
+	r.Status = RunStatusDone
+	r.DoneAt = &now
 }
 
-// Fail marks the workflow as failed.
-func (w *Workflow) Fail() {
+// Fail marks the run as failed.
+func (r *Run) Fail() {
 	now := time.Now()
-	w.Status = WorkflowStatusFailed
-	w.DoneAt = &now
+	r.Status = RunStatusFailed
+	r.DoneAt = &now
 }
 
-// StartCleanup transitions the workflow to the cleaning_up state.
+// StartCleanup transitions the run to the cleaning_up state.
 // Records the prior status for determining final status after cleanup.
-func (w *Workflow) StartCleanup(reason WorkflowStatus) error {
-	if w.Status == WorkflowStatusCleaningUp {
+func (r *Run) StartCleanup(reason RunStatus) error {
+	if r.Status == RunStatusCleaningUp {
 		return nil // Already cleaning up
 	}
-	if w.Status.IsTerminal() {
-		return fmt.Errorf("cannot start cleanup for workflow in terminal status %s", w.Status)
+	if r.Status.IsTerminal() {
+		return fmt.Errorf("cannot start cleanup for run in terminal status %s", r.Status)
 	}
-	w.PriorStatus = reason
-	w.Status = WorkflowStatusCleaningUp
+	r.PriorStatus = reason
+	r.Status = RunStatusCleaningUp
 	return nil
 }
 
 // FinishCleanup transitions from cleaning_up to the final status.
 // Uses PriorStatus to determine the appropriate final status.
-func (w *Workflow) FinishCleanup() {
-	if w.Status != WorkflowStatusCleaningUp {
+func (r *Run) FinishCleanup() {
+	if r.Status != RunStatusCleaningUp {
 		return
 	}
 	now := time.Now()
-	w.DoneAt = &now
+	r.DoneAt = &now
 
 	// Determine final status based on prior status
-	switch w.PriorStatus {
-	case WorkflowStatusStopped:
-		w.Status = WorkflowStatusStopped
-	case WorkflowStatusFailed:
-		w.Status = WorkflowStatusFailed
+	switch r.PriorStatus {
+	case RunStatusStopped:
+		r.Status = RunStatusStopped
+	case RunStatusFailed:
+		r.Status = RunStatusFailed
 	default:
-		w.Status = WorkflowStatusDone
+		r.Status = RunStatusDone
 	}
 }
 
-// Stop marks the workflow as stopped (manual stop via meow stop).
-func (w *Workflow) Stop() {
+// Stop marks the run as stopped (manual stop via meow stop).
+func (r *Run) Stop() {
 	now := time.Now()
-	w.Status = WorkflowStatusStopped
-	w.DoneAt = &now
+	r.Status = RunStatusStopped
+	r.DoneAt = &now
 }
 
-// GetAgentIDs returns all agent IDs registered in this workflow.
-func (w *Workflow) GetAgentIDs() []string {
-	ids := make([]string, 0, len(w.Agents))
-	for id := range w.Agents {
+// GetAgentIDs returns all agent IDs registered in this run.
+func (r *Run) GetAgentIDs() []string {
+	ids := make([]string, 0, len(r.Agents))
+	for id := range r.Agents {
 		ids = append(ids, id)
 	}
 	return ids
 }
 
-// Start marks the workflow as running.
-func (w *Workflow) Start() error {
-	if w.Status != WorkflowStatusPending {
-		return fmt.Errorf("cannot start workflow in status %s", w.Status)
+// Start marks the run as running.
+func (r *Run) Start() error {
+	if r.Status != RunStatusPending {
+		return fmt.Errorf("cannot start run in status %s", r.Status)
 	}
-	w.Status = WorkflowStatusRunning
+	r.Status = RunStatusRunning
 	return nil
 }
 
 // GetStep retrieves a step by ID.
-func (w *Workflow) GetStep(id string) (*Step, bool) {
-	step, ok := w.Steps[id]
+func (r *Run) GetStep(id string) (*Step, bool) {
+	step, ok := r.Steps[id]
 	return step, ok
 }
 
 // GetStepsForAgent returns steps assigned to the given agent.
-func (w *Workflow) GetStepsForAgent(agentID string) []*Step {
+func (r *Run) GetStepsForAgent(agentID string) []*Step {
 	var result []*Step
-	for _, step := range w.Steps {
+	for _, step := range r.Steps {
 		if step.Executor == ExecutorAgent && step.Agent != nil && step.Agent.Agent == agentID {
 			result = append(result, step)
 		}
@@ -248,8 +248,8 @@ func (w *Workflow) GetStepsForAgent(agentID string) []*Step {
 // This includes steps in both "running" and "completing" states, since a completing
 // step is still conceptually "active" (the orchestrator is processing its completion).
 // Callers should check the step.Status to determine which state it's in.
-func (w *Workflow) GetRunningStepForAgent(agentID string) *Step {
-	for _, step := range w.Steps {
+func (r *Run) GetRunningStepForAgent(agentID string) *Step {
+	for _, step := range r.Steps {
 		if step.Executor == ExecutorAgent &&
 			step.Agent != nil &&
 			step.Agent.Agent == agentID &&
@@ -261,12 +261,12 @@ func (w *Workflow) GetRunningStepForAgent(agentID string) *Step {
 }
 
 // GetNextReadyStepForAgent returns the next ready step for the given agent, if any.
-func (w *Workflow) GetNextReadyStepForAgent(agentID string) *Step {
-	for _, step := range w.Steps {
+func (r *Run) GetNextReadyStepForAgent(agentID string) *Step {
+	for _, step := range r.Steps {
 		if step.Executor == ExecutorAgent &&
 			step.Agent != nil &&
 			step.Agent.Agent == agentID &&
-			step.IsReady(w.Steps) {
+			step.IsReady(r.Steps) {
 			return step
 		}
 	}
@@ -276,8 +276,8 @@ func (w *Workflow) GetNextReadyStepForAgent(agentID string) *Step {
 // AgentIsIdle returns true if no step assigned to the agent is currently running or completing.
 // The completing check prevents injecting a new prompt while the orchestrator is still
 // processing the previous step's completion (prevents race conditions).
-func (w *Workflow) AgentIsIdle(agentID string) bool {
-	for _, step := range w.Steps {
+func (r *Run) AgentIsIdle(agentID string) bool {
+	for _, step := range r.Steps {
 		if step.Executor == ExecutorAgent &&
 			step.Agent != nil &&
 			step.Agent.Agent == agentID &&
@@ -290,25 +290,25 @@ func (w *Workflow) AgentIsIdle(agentID string) bool {
 
 // GetCleanupScript returns the cleanup script for the given reason, or empty string if none defined.
 // Cleanup is opt-in: returns empty string unless a cleanup script is explicitly defined for this trigger.
-func (w *Workflow) GetCleanupScript(reason WorkflowStatus) string {
+func (r *Run) GetCleanupScript(reason RunStatus) string {
 	switch reason {
-	case WorkflowStatusDone:
-		return w.CleanupOnSuccess
-	case WorkflowStatusFailed:
-		return w.CleanupOnFailure
-	case WorkflowStatusStopped:
-		return w.CleanupOnStop
+	case RunStatusDone:
+		return r.CleanupOnSuccess
+	case RunStatusFailed:
+		return r.CleanupOnFailure
+	case RunStatusStopped:
+		return r.CleanupOnStop
 	default:
 		return ""
 	}
 }
 
 // HasCleanup returns true if any cleanup script is defined for the given reason.
-func (w *Workflow) HasCleanup(reason WorkflowStatus) bool {
-	return w.GetCleanupScript(reason) != ""
+func (r *Run) HasCleanup(reason RunStatus) bool {
+	return r.GetCleanupScript(reason) != ""
 }
 
 // HasAnyCleanup returns true if any cleanup script is defined.
-func (w *Workflow) HasAnyCleanup() bool {
-	return w.CleanupOnSuccess != "" || w.CleanupOnFailure != "" || w.CleanupOnStop != ""
+func (r *Run) HasAnyCleanup() bool {
+	return r.CleanupOnSuccess != "" || r.CleanupOnFailure != "" || r.CleanupOnStop != ""
 }

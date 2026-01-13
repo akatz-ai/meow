@@ -83,8 +83,8 @@ func (h *mockHandler) HandleGetStepStatus(ctx context.Context, msg *GetStepStatu
 }
 
 func TestSocketPath(t *testing.T) {
-	path := SocketPath("wf-abc123")
-	expected := filepath.Join(os.TempDir(), "meow-wf-abc123.sock")
+	path := SocketPath("run-abc123")
+	expected := filepath.Join(os.TempDir(), "meow-run-abc123.sock")
 	if path != expected {
 		t.Errorf("SocketPath() = %q, want %q", path, expected)
 	}
@@ -150,7 +150,7 @@ func TestServer_HandleStepDone(t *testing.T) {
 	client := NewClient(socketPath)
 	client.SetTimeout(5 * time.Second)
 
-	response, err := client.SendStepDone("wf-test", "agent-1", "step-1", map[string]any{"key": "value"}, "test notes")
+	response, err := client.SendStepDone("run-test", "agent-1", "step-1", map[string]any{"key": "value"}, "test notes")
 	if err != nil {
 		t.Fatalf("SendStepDone() error: %v", err)
 	}
@@ -173,8 +173,8 @@ func TestServer_HandleStepDone(t *testing.T) {
 	}
 
 	call := handler.stepDoneCalls[0]
-	if call.Workflow != "wf-test" {
-		t.Errorf("Workflow = %q, want %q", call.Workflow, "wf-test")
+	if call.Workflow != "run-test" {
+		t.Errorf("Workflow = %q, want %q", call.Workflow, "run-test")
 	}
 	if call.Agent != "agent-1" {
 		t.Errorf("Agent = %q, want %q", call.Agent, "agent-1")
@@ -242,7 +242,7 @@ func TestServer_HandleApproval(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 
 			client := NewClient(socketPath)
-			err := client.SendApproval("wf-test", "gate-1", tt.approved, tt.notes, tt.reason)
+			err := client.SendApproval("run-test", "gate-1", tt.approved, tt.notes, tt.reason)
 			if err != nil {
 				t.Fatalf("SendApproval() error: %v", err)
 			}

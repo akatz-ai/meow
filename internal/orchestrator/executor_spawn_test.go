@@ -32,7 +32,7 @@ func TestExecuteSpawn_Basic(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	result, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -41,8 +41,8 @@ func TestExecuteSpawn_Basic(t *testing.T) {
 		t.Error("expected Start to be called")
 	}
 
-	if result.TmuxSession != "meow-wf-123-worker-1" {
-		t.Errorf("expected session 'meow-wf-123-worker-1', got %q", result.TmuxSession)
+	if result.TmuxSession != "meow-run-123-worker-1" {
+		t.Errorf("expected session 'meow-run-123-worker-1', got %q", result.TmuxSession)
 	}
 
 	if starter.lastStartCfg.AgentID != "worker-1" {
@@ -69,7 +69,7 @@ func TestExecuteSpawn_EnvironmentVariables(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	result, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -92,7 +92,7 @@ func TestExecuteSpawn_EnvironmentVariables(t *testing.T) {
 	if cfg.Env["MEOW_AGENT"] != "worker-1" {
 		t.Errorf("expected MEOW_AGENT 'worker-1', got %q", cfg.Env["MEOW_AGENT"])
 	}
-	if cfg.Env["MEOW_WORKFLOW"] != "wf-123" {
+	if cfg.Env["MEOW_WORKFLOW"] != "run-123" {
 		t.Errorf("expected MEOW_WORKFLOW 'wf-123', got %q", cfg.Env["MEOW_WORKFLOW"])
 	}
 }
@@ -112,7 +112,7 @@ func TestExecuteSpawn_OrchestratorEnvOverridesUser(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	_, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -123,7 +123,7 @@ func TestExecuteSpawn_OrchestratorEnvOverridesUser(t *testing.T) {
 	if cfg.Env["MEOW_AGENT"] != "worker-1" {
 		t.Errorf("MEOW_AGENT should be 'worker-1', got %q", cfg.Env["MEOW_AGENT"])
 	}
-	if cfg.Env["MEOW_WORKFLOW"] != "wf-123" {
+	if cfg.Env["MEOW_WORKFLOW"] != "run-123" {
 		t.Errorf("MEOW_WORKFLOW should be 'wf-123', got %q", cfg.Env["MEOW_WORKFLOW"])
 	}
 }
@@ -139,7 +139,7 @@ func TestExecuteSpawn_ResumeSession(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	_, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -157,7 +157,7 @@ func TestExecuteSpawn_MissingConfig(t *testing.T) {
 		Spawn:    nil,
 	}
 
-	_, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	_, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr == nil {
 		t.Fatal("expected error for missing config")
 	}
@@ -181,7 +181,7 @@ func TestExecuteSpawn_MissingAgent(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	_, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr == nil {
 		t.Fatal("expected error for missing agent")
 	}
@@ -203,7 +203,7 @@ func TestExecuteSpawn_StartError(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	_, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr == nil {
 		t.Fatal("expected error from Start failure")
 	}
@@ -244,7 +244,7 @@ func TestExecuteSpawn_SpawnArgs(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteSpawn(context.Background(), step, "wf-123", starter)
+	result, stepErr := ExecuteSpawn(context.Background(), step, "run-123", starter)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -269,7 +269,7 @@ func TestBuildTmuxSessionName(t *testing.T) {
 		agentID    string
 		expected   string
 	}{
-		{"wf-123", "worker-1", "meow-wf-123-worker-1"},
+		{"run-123", "worker-1", "meow-run-123-worker-1"},
 		{"abc", "def", "meow-abc-def"},
 		{"workflow-with-dashes", "agent_with_underscore", "meow-workflow-with-dashes-agent_with_underscore"},
 	}

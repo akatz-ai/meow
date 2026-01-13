@@ -87,7 +87,7 @@ func (m *TmuxAgentManager) SetTmuxSocket(socket string) {
 
 // Start spawns an agent in a tmux session using the configured adapter.
 // The adapter determines the spawn command, environment, and startup timing.
-func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Spawn == nil {
 		return fmt.Errorf("spawn step missing config")
 	}
@@ -207,7 +207,7 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 
 // Stop kills an agent's tmux session using the configured adapter.
 // The adapter determines the graceful stop keys and wait duration.
-func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Kill == nil {
 		return fmt.Errorf("kill step missing config")
 	}
@@ -400,7 +400,7 @@ func (m *TmuxAgentManager) Interrupt(ctx context.Context, agentID string) error 
 
 // KillAll kills all agent sessions for a workflow.
 // This is used during cleanup to ensure all agents are stopped.
-func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Workflow) error {
+func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

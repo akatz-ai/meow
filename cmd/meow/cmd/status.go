@@ -88,7 +88,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	workflowsDir := filepath.Join(".meow", "workflows")
 
 	// Create workflow store
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		return fmt.Errorf("creating workflow store: %w", err)
 	}
@@ -119,7 +119,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-func runStatusWatch(ctx context.Context, store *orchestrator.YAMLWorkflowStore, workflowID string) error {
+func runStatusWatch(ctx context.Context, store *orchestrator.YAMLRunStore, workflowID string) error {
 	ticker := time.NewTicker(statusInterval)
 	defer ticker.Stop()
 
@@ -145,7 +145,7 @@ func runStatusWatch(ctx context.Context, store *orchestrator.YAMLWorkflowStore, 
 	}
 }
 
-func displayStatus(ctx context.Context, store *orchestrator.YAMLWorkflowStore, workflowID string) error {
+func displayStatus(ctx context.Context, store *orchestrator.YAMLRunStore, workflowID string) error {
 	// If workflow ID specified, show detailed view
 	if workflowID != "" {
 		return displayWorkflowDetail(ctx, store, workflowID)
@@ -155,7 +155,7 @@ func displayStatus(ctx context.Context, store *orchestrator.YAMLWorkflowStore, w
 	return displayWorkflowList(ctx, store)
 }
 
-func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLWorkflowStore, workflowID string) error {
+func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLRunStore, workflowID string) error {
 	wf, err := store.Get(ctx, workflowID)
 	if err != nil {
 		return &StatusExitError{Code: ExitWorkflowNotFound, Message: fmt.Sprintf("workflow not found: %s", workflowID)}
@@ -183,11 +183,11 @@ func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLWorkflow
 	return nil
 }
 
-func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLWorkflowStore) error {
+func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) error {
 	// Build filter
-	filter := orchestrator.WorkflowFilter{}
+	filter := orchestrator.RunFilter{}
 	if statusFilter != "" {
-		filter.Status = types.WorkflowStatus(statusFilter)
+		filter.Status = types.RunStatus(statusFilter)
 		if !filter.Status.Valid() {
 			return fmt.Errorf("invalid status filter: %s (use: pending, running, done, failed, stopped)", statusFilter)
 		}
@@ -201,9 +201,9 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLWorkflowSt
 	// Apply active filter by default (unless --all or --filter specified)
 	// Active = status=running AND lock held
 	if !statusAll && statusFilter == "" {
-		active := make([]*types.Workflow, 0, len(workflows))
+		active := make([]*types.Run, 0, len(workflows))
 		for _, wf := range workflows {
-			if wf.Status == types.WorkflowStatusRunning && store.IsLocked(wf.ID) {
+			if wf.Status == types.RunStatusRunning && store.IsLocked(wf.ID) {
 				active = append(active, wf)
 			}
 		}

@@ -227,20 +227,20 @@ func (h *Harness) RunWorkflow(templatePath string) (*WorkflowRun, error) {
 	// TODO: Integrate with orchestrator.Run
 	// For now, return a stub that can be filled in later
 	return &WorkflowRun{
-		ID:        fmt.Sprintf("wf-%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("run-%d", time.Now().UnixNano()),
 		harness:   h,
 		startTime: time.Now(),
 	}, nil
 }
 
 // LoadWorkflow loads an existing workflow from state.
-func (h *Harness) LoadWorkflow(id string) (*types.Workflow, error) {
+func (h *Harness) LoadWorkflow(id string) (*types.Run, error) {
 	path := filepath.Join(h.StateDir, "workflows", id+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read workflow: %w", err)
 	}
-	var wf types.Workflow
+	var wf types.Run
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("unmarshal workflow: %w", err)
 	}
@@ -248,7 +248,7 @@ func (h *Harness) LoadWorkflow(id string) (*types.Workflow, error) {
 }
 
 // SaveWorkflow saves a workflow to state.
-func (h *Harness) SaveWorkflow(wf *types.Workflow) error {
+func (h *Harness) SaveWorkflow(wf *types.Run) error {
 	dir := filepath.Join(h.StateDir, "workflows")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err

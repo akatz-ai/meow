@@ -14,7 +14,7 @@ import (
 // proper mutex coordination and avoid race conditions.
 type IPCHandler struct {
 	orch        *Orchestrator     // Reference to orchestrator for state mutations
-	store       WorkflowStore     // Read-only access for queries
+	store       RunStore     // Read-only access for queries
 	agents      *TmuxAgentManager // For agent workdir lookups
 	eventRouter *EventRouter
 	logger      *slog.Logger
@@ -23,7 +23,7 @@ type IPCHandler struct {
 // NewIPCHandler creates a new IPC handler.
 // The orchestrator reference is used for all state-mutating operations (HandleStepDone,
 // HandleApproval) to ensure proper mutex coordination.
-func NewIPCHandler(orch *Orchestrator, store WorkflowStore, agents *TmuxAgentManager, logger *slog.Logger) *IPCHandler {
+func NewIPCHandler(orch *Orchestrator, store RunStore, agents *TmuxAgentManager, logger *slog.Logger) *IPCHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}

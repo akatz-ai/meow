@@ -34,15 +34,15 @@ func (l *WorkflowLock) Release() error {
 	return err
 }
 
-// YAMLWorkflowStore persists workflows as YAML files with atomic writes.
+// YAMLRunStore persists workflows as YAML files with atomic writes.
 // Multiple stores can be created for the same directory - locking is per-workflow.
-type YAMLWorkflowStore struct {
+type YAMLRunStore struct {
 	dir string // .meow/workflows
 }
 
-// NewYAMLWorkflowStore creates a new store.
+// NewYAMLRunStore creates a new store.
 // The store does not acquire any locks - use AcquireWorkflowLock for per-workflow locking.
-func NewYAMLWorkflowStore(dir string) (*YAMLWorkflowStore, error) {
+func NewYAMLRunStore(dir string) (*YAMLRunStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating workflow dir: %w", err)
 	}
@@ -52,13 +52,13 @@ func NewYAMLWorkflowStore(dir string) (*YAMLWorkflowStore, error) {
 		return nil, fmt.Errorf("recovering interrupted writes: %w", err)
 	}
 
-	return &YAMLWorkflowStore{dir: dir}, nil
+	return &YAMLRunStore{dir: dir}, nil
 }
 
 // AcquireWorkflowLock acquires an exclusive lock for a specific workflow.
 // This prevents multiple orchestrators from running the same workflow concurrently.
 // Other workflows are not affected and can run in parallel.
-func (s *YAMLWorkflowStore) AcquireWorkflowLock(workflowID string) (*WorkflowLock, error) {
+func (s *YAMLRunStore) AcquireWorkflowLock(workflowID string) (*WorkflowLock, error) {
 	lockPath := filepath.Join(s.dir, workflowID+".yaml.lock")
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
@@ -79,7 +79,7 @@ func (s *YAMLWorkflowStore) AcquireWorkflowLock(workflowID string) (*WorkflowLoc
 
 // IsLocked checks if a workflow is currently locked (orchestrator running).
 // Returns true if another process holds the lock, false otherwise.
-func (s *YAMLWorkflowStore) IsLocked(workflowID string) bool {
+func (s *YAMLRunStore) IsLocked(workflowID string) bool {
 	lockPath := filepath.Join(s.dir, workflowID+".yaml.lock")
 
 	// Try to open the lock file
@@ -101,7 +101,7 @@ func (s *YAMLWorkflowStore) IsLocked(workflowID string) bool {
 }
 
 // Close is a no-op for compatibility. Use WorkflowLock.Release() to release locks.
-func (s *YAMLWorkflowStore) Close() error {
+func (s *YAMLRunStore) Close() error {
 	return nil
 }
 
@@ -133,7 +133,7 @@ func recoverInterruptedWrites(dir string) error {
 }
 
 // Create persists a new workflow.
-func (s *YAMLWorkflowStore) Create(ctx context.Context, wf *types.Workflow) error {
+func (s *YAMLRunStore) Create(ctx context.Context, wf *types.Run) error {
 	path := filepath.Join(s.dir, wf.ID+".yaml")
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("workflow already exists: %s", wf.ID)
@@ -142,7 +142,7 @@ func (s *YAMLWorkflowStore) Create(ctx context.Context, wf *types.Workflow) erro
 }
 
 // Get retrieves a workflow by ID.
-func (s *YAMLWorkflowStore) Get(ctx context.Context, id string) (*types.Workflow, error) {
+func (s *YAMLRunStore) Get(ctx context.Context, id string) (*types.Run, error) {
 	path := filepath.Join(s.dir, id+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *YAMLWorkflowStore) Get(ctx context.Context, id string) (*types.Workflow
 		return nil, err
 	}
 
-	var wf types.Workflow
+	var wf types.Run
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("parsing workflow %s: %w", id, err)
 	}
@@ -160,7 +160,7 @@ func (s *YAMLWorkflowStore) Get(ctx context.Context, id string) (*types.Workflow
 }
 
 // Save persists workflow state atomically (write-then-rename).
-func (s *YAMLWorkflowStore) Save(ctx context.Context, wf *types.Workflow) error {
+func (s *YAMLRunStore) Save(ctx context.Context, wf *types.Run) error {
 	data, err := yaml.Marshal(wf)
 	if err != nil {
 		return fmt.Errorf("marshaling workflow: %w", err)
@@ -184,7 +184,7 @@ func (s *YAMLWorkflowStore) Save(ctx context.Context, wf *types.Workflow) error 
 }
 
 // Delete removes a workflow.
-func (s *YAMLWorkflowStore) Delete(ctx context.Context, id string) error {
+func (s *YAMLRunStore) Delete(ctx context.Context, id string) error {
 	path := filepath.Join(s.dir, id+".yaml")
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
@@ -196,13 +196,13 @@ func (s *YAMLWorkflowStore) Delete(ctx context.Context, id string) error {
 }
 
 // List returns all workflows matching filter.
-func (s *YAMLWorkflowStore) List(ctx context.Context, filter WorkflowFilter) ([]*types.Workflow, error) {
+func (s *YAMLRunStore) List(ctx context.Context, filter RunFilter) ([]*types.Run, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
 	}
 
-	var workflows []*types.Workflow
+	var workflows []*types.Run
 	for _, entry := range entries {
 		name := entry.Name()
 		// Skip non-YAML files (including .yaml.tmp which ends in .tmp, not .yaml)
@@ -225,13 +225,13 @@ func (s *YAMLWorkflowStore) List(ctx context.Context, filter WorkflowFilter) ([]
 }
 
 // GetByAgent returns workflows with steps assigned to agent.
-func (s *YAMLWorkflowStore) GetByAgent(ctx context.Context, agentID string) ([]*types.Workflow, error) {
-	all, err := s.List(ctx, WorkflowFilter{})
+func (s *YAMLRunStore) GetByAgent(ctx context.Context, agentID string) ([]*types.Run, error) {
+	all, err := s.List(ctx, RunFilter{})
 	if err != nil {
 		return nil, err
 	}
 
-	var result []*types.Workflow
+	var result []*types.Run
 	for _, wf := range all {
 		for _, step := range wf.Steps {
 			if step.Agent != nil && step.Agent.Agent == agentID {
@@ -243,5 +243,5 @@ func (s *YAMLWorkflowStore) GetByAgent(ctx context.Context, agentID string) ([]*
 	return result, nil
 }
 
-// Ensure YAMLWorkflowStore implements WorkflowStore
-var _ WorkflowStore = (*YAMLWorkflowStore)(nil)
+// Ensure YAMLRunStore implements RunStore
+var _ RunStore = (*YAMLRunStore)(nil)

@@ -37,7 +37,7 @@ func TestExecuteKill_Basic(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	result, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -66,7 +66,7 @@ func TestExecuteKill_DefaultTimeout(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -87,7 +87,7 @@ func TestExecuteKill_CustomTimeout(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -108,7 +108,7 @@ func TestExecuteKill_GracefulTrue(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -129,7 +129,7 @@ func TestExecuteKill_GracefulFalse(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -148,7 +148,7 @@ func TestExecuteKill_MissingConfig(t *testing.T) {
 		Kill:     nil,
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr == nil {
 		t.Fatal("expected error for missing config")
 	}
@@ -172,7 +172,7 @@ func TestExecuteKill_MissingAgent(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr == nil {
 		t.Fatal("expected error for missing agent")
 	}
@@ -196,7 +196,7 @@ func TestExecuteKill_StopError(t *testing.T) {
 		},
 	}
 
-	_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr == nil {
 		t.Fatal("expected error from Stop failure")
 	}
@@ -228,7 +228,7 @@ func TestExecuteKill_AlreadyStoppedNotAnError(t *testing.T) {
 			},
 		}
 
-		_, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+		_, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 		if stepErr != nil {
 			t.Errorf("error %q should be treated as 'already stopped', not a failure: %v", errMsg, stepErr)
 		}
@@ -247,7 +247,7 @@ func TestExecuteKill_AgentNotRunning(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	result, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -274,7 +274,7 @@ func TestExecuteKill_IsRunningError(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteKill(context.Background(), step, "wf-123", stopper)
+	result, stepErr := ExecuteKill(context.Background(), step, "run-123", stopper)
 	if stepErr != nil {
 		t.Fatalf("should not fail on IsRunning error: %v", stepErr)
 	}
@@ -322,7 +322,7 @@ func TestExecuteKill_AllFieldsPassed(t *testing.T) {
 		},
 	}
 
-	result, stepErr := ExecuteKill(context.Background(), step, "wf-abc", stopper)
+	result, stepErr := ExecuteKill(context.Background(), step, "run-abc", stopper)
 	if stepErr != nil {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
@@ -331,7 +331,7 @@ func TestExecuteKill_AllFieldsPassed(t *testing.T) {
 	if cfg.AgentID != "worker-1" {
 		t.Errorf("AgentID: expected 'worker-1', got %q", cfg.AgentID)
 	}
-	if cfg.WorkflowID != "wf-abc" {
+	if cfg.WorkflowID != "run-abc" {
 		t.Errorf("WorkflowID: expected 'wf-abc', got %q", cfg.WorkflowID)
 	}
 	if cfg.Graceful != true {

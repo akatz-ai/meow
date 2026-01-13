@@ -66,7 +66,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create workflow store
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
@@ -195,7 +195,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 
 	// Print final status
 	fmt.Printf("\nWorkflow %s: %s\n", workflowID, wf.Status)
-	if verbose || wf.Status == types.WorkflowStatusFailed {
+	if verbose || wf.Status == types.RunStatusFailed {
 		fmt.Println("\nStep results:")
 		for _, step := range wf.Steps {
 			status := string(step.Status)

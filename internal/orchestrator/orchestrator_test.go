@@ -17,20 +17,20 @@ import (
 
 // --- Mock Implementations ---
 
-// mockWorkflowStore implements WorkflowStore for testing.
-type mockWorkflowStore struct {
+// mockRunStore implements RunStore for testing.
+type mockRunStore struct {
 	mu        sync.Mutex
-	workflows map[string]*types.Workflow
+	workflows map[string]*types.Run
 	calls     []string
 }
 
-func newMockWorkflowStore() *mockWorkflowStore {
-	return &mockWorkflowStore{
-		workflows: make(map[string]*types.Workflow),
+func newMockRunStore() *mockRunStore {
+	return &mockRunStore{
+		workflows: make(map[string]*types.Run),
 	}
 }
 
-func (m *mockWorkflowStore) Create(ctx context.Context, wf *types.Workflow) error {
+func (m *mockRunStore) Create(ctx context.Context, wf *types.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "Create:"+wf.ID)
@@ -38,14 +38,14 @@ func (m *mockWorkflowStore) Create(ctx context.Context, wf *types.Workflow) erro
 	return nil
 }
 
-func (m *mockWorkflowStore) Get(ctx context.Context, id string) (*types.Workflow, error) {
+func (m *mockRunStore) Get(ctx context.Context, id string) (*types.Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "Get:"+id)
 	return m.workflows[id], nil
 }
 
-func (m *mockWorkflowStore) Save(ctx context.Context, wf *types.Workflow) error {
+func (m *mockRunStore) Save(ctx context.Context, wf *types.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "Save:"+wf.ID)
@@ -53,7 +53,7 @@ func (m *mockWorkflowStore) Save(ctx context.Context, wf *types.Workflow) error 
 	return nil
 }
 
-func (m *mockWorkflowStore) Delete(ctx context.Context, id string) error {
+func (m *mockRunStore) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "Delete:"+id)
@@ -61,11 +61,11 @@ func (m *mockWorkflowStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (m *mockWorkflowStore) List(ctx context.Context, filter WorkflowFilter) ([]*types.Workflow, error) {
+func (m *mockRunStore) List(ctx context.Context, filter RunFilter) ([]*types.Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "List")
-	var result []*types.Workflow
+	var result []*types.Run
 	for _, wf := range m.workflows {
 		if filter.Status != "" && wf.Status != filter.Status {
 			continue
@@ -75,11 +75,11 @@ func (m *mockWorkflowStore) List(ctx context.Context, filter WorkflowFilter) ([]
 	return result, nil
 }
 
-func (m *mockWorkflowStore) GetByAgent(ctx context.Context, agentID string) ([]*types.Workflow, error) {
+func (m *mockRunStore) GetByAgent(ctx context.Context, agentID string) ([]*types.Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "GetByAgent:"+agentID)
-	var result []*types.Workflow
+	var result []*types.Run
 	for _, wf := range m.workflows {
 		for _, step := range wf.Steps {
 			if step.Agent != nil && step.Agent.Agent == agentID {
@@ -107,7 +107,7 @@ func newMockAgentManager() *mockAgentManager {
 	}
 }
 
-func (m *mockAgentManager) Start(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (m *mockAgentManager) Start(ctx context.Context, wf *types.Run, step *types.Step) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	agentID := step.Spawn.Agent
@@ -116,7 +116,7 @@ func (m *mockAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 	return nil
 }
 
-func (m *mockAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (m *mockAgentManager) Stop(ctx context.Context, wf *types.Run, step *types.Step) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	agentID := step.Kill.Agent
@@ -145,7 +145,7 @@ func (m *mockAgentManager) Interrupt(ctx context.Context, agentID string) error 
 	return nil
 }
 
-func (m *mockAgentManager) KillAll(ctx context.Context, wf *types.Workflow) error {
+func (m *mockAgentManager) KillAll(ctx context.Context, wf *types.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for agentID := range m.running {
@@ -189,7 +189,7 @@ type mockTemplateExpander struct {
 	expanded []string
 }
 
-func (m *mockTemplateExpander) Expand(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (m *mockTemplateExpander) Expand(ctx context.Context, wf *types.Run, step *types.Step) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.expanded = append(m.expanded, step.Expand.Template)
@@ -211,7 +211,7 @@ func testLogger() *slog.Logger {
 // --- Tests ---
 
 func TestOrchestrator_NoWorkflows_CompletesImmediately(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -229,15 +229,15 @@ func TestOrchestrator_NoWorkflows_CompletesImmediately(t *testing.T) {
 }
 
 func TestOrchestrator_SingleWorkflow_CompletesAllSteps(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create a workflow with a single shell step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
 		Executor: types.ExecutorShell,
@@ -268,13 +268,13 @@ func TestOrchestrator_SingleWorkflow_CompletesAllSteps(t *testing.T) {
 	}
 
 	// Check workflow is done
-	if wf.Status != types.WorkflowStatusDone {
-		t.Errorf("Workflow status = %v, want %v", wf.Status, types.WorkflowStatusDone)
+	if wf.Status != types.RunStatusDone {
+		t.Errorf("Workflow status = %v, want %v", wf.Status, types.RunStatusDone)
 	}
 }
 
 func TestOrchestrator_DependencyOrdering(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -282,8 +282,8 @@ func TestOrchestrator_DependencyOrdering(t *testing.T) {
 
 	// Create a workflow with dependent steps
 	// step-2 depends on step-1
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
 		Executor: types.ExecutorShell,
@@ -324,7 +324,7 @@ func TestOrchestrator_DependencyOrdering(t *testing.T) {
 }
 
 func TestOrchestrator_Dispatch_SixExecutors(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -332,8 +332,8 @@ func TestOrchestrator_Dispatch_SixExecutors(t *testing.T) {
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	tests := []struct {
 		name     string
@@ -414,15 +414,15 @@ func TestOrchestrator_Dispatch_SixExecutors(t *testing.T) {
 }
 
 func TestOrchestrator_OrchestratorExecutorsFirst(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with both orchestrator and agent steps ready
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Add steps - agent step first (alphabetically), then shell step
 	wf.Steps["agent-step"] = &types.Step{
@@ -468,15 +468,15 @@ func TestOrchestrator_OrchestratorExecutorsFirst(t *testing.T) {
 }
 
 func TestOrchestrator_AgentIdleCheck(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with two agent steps for the same agent
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	wf.Steps["agent-step-1"] = &types.Step{
 		ID:       "agent-step-1",
@@ -519,15 +519,15 @@ func TestOrchestrator_AgentIdleCheck(t *testing.T) {
 }
 
 func TestOrchestrator_HandleStepDone(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a running agent step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	now := time.Now()
 	wf.Steps["agent-step"] = &types.Step{
 		ID:        "agent-step",
@@ -567,7 +567,7 @@ func TestOrchestrator_HandleStepDone(t *testing.T) {
 }
 
 func TestOrchestrator_OutputValidation(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -582,8 +582,8 @@ func TestOrchestrator_OutputValidation(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	// Create workflow with agent step requiring outputs
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	now := time.Now()
 	wf.Steps["agent-step"] = &types.Step{
 		ID:        "agent-step",
@@ -644,15 +644,15 @@ func TestOrchestrator_OutputValidation(t *testing.T) {
 }
 
 func TestOrchestrator_WorkflowCompletion(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow that will complete
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
 		Executor: types.ExecutorShell,
@@ -669,8 +669,8 @@ func TestOrchestrator_WorkflowCompletion(t *testing.T) {
 		t.Fatalf("processWorkflow error = %v", err)
 	}
 
-	if wf.Status != types.WorkflowStatusDone {
-		t.Errorf("Workflow status = %v, want %v", wf.Status, types.WorkflowStatusDone)
+	if wf.Status != types.RunStatusDone {
+		t.Errorf("Workflow status = %v, want %v", wf.Status, types.RunStatusDone)
 	}
 	if wf.DoneAt == nil {
 		t.Error("Workflow DoneAt should be set")
@@ -678,15 +678,15 @@ func TestOrchestrator_WorkflowCompletion(t *testing.T) {
 }
 
 func TestOrchestrator_WorkflowFailure(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a failed step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
 		Executor: types.ExecutorShell,
@@ -704,21 +704,21 @@ func TestOrchestrator_WorkflowFailure(t *testing.T) {
 		t.Fatalf("processWorkflow error = %v", err)
 	}
 
-	if wf.Status != types.WorkflowStatusFailed {
-		t.Errorf("Workflow status = %v, want %v", wf.Status, types.WorkflowStatusFailed)
+	if wf.Status != types.RunStatusFailed {
+		t.Errorf("Workflow status = %v, want %v", wf.Status, types.RunStatusFailed)
 	}
 }
 
 func TestOrchestrator_SpawnAndKill(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with spawn -> kill sequence
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["spawn-step"] = &types.Step{
 		ID:       "spawn-step",
 		Executor: types.ExecutorSpawn,
@@ -766,15 +766,15 @@ func TestOrchestrator_SpawnAndKill(t *testing.T) {
 // HandleStepDone calls do not result in lost updates. This is the critical test
 // for the race condition fix (meow-ilr).
 func TestOrchestrator_ConcurrentStepCompletion(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with 3 running agent steps (each assigned to different agent)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	now := time.Now()
 
 	for i := 1; i <= 3; i++ {
@@ -850,15 +850,15 @@ func TestOrchestrator_ConcurrentStepCompletion(t *testing.T) {
 
 // TestOrchestrator_StepTimeout tests that agent steps are interrupted and failed after timeout.
 func TestOrchestrator_StepTimeout(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a running agent step that has a very short timeout
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Set started time in the past to simulate elapsed time
 	startedAt := time.Now().Add(-2 * time.Second) // Started 2 seconds ago
@@ -918,15 +918,15 @@ func TestOrchestrator_StepTimeout(t *testing.T) {
 
 // TestOrchestrator_StepNoTimeoutIfCompleted tests that steps that complete before timeout are not affected.
 func TestOrchestrator_StepNoTimeoutIfCompleted(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a completed agent step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	startedAt := time.Now().Add(-2 * time.Second)
 	doneAt := time.Now().Add(-1 * time.Second)
@@ -962,15 +962,15 @@ func TestOrchestrator_StepNoTimeoutIfCompleted(t *testing.T) {
 
 // TestOrchestrator_CleanupOnCompletion tests that cleanup runs when workflow completes.
 func TestOrchestrator_CleanupOnCompletion(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with cleanup_on_success script (opt-in cleanup)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.CleanupOnSuccess = "echo cleanup executed"
 	wf.Steps["step-1"] = &types.Step{
 		ID:       "step-1",
@@ -993,22 +993,22 @@ func TestOrchestrator_CleanupOnCompletion(t *testing.T) {
 
 	// Workflow should be done (cleanup was successful)
 	finalWf, _ := store.Get(ctx, wf.ID)
-	if finalWf.Status != types.WorkflowStatusDone {
+	if finalWf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", finalWf.Status)
 	}
 }
 
 // TestOrchestrator_RunCleanup tests the RunCleanup method directly.
 func TestOrchestrator_RunCleanup(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with cleanup_on_success script (testing RunCleanup with Done reason)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.CleanupOnSuccess = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
@@ -1019,13 +1019,13 @@ func TestOrchestrator_RunCleanup(t *testing.T) {
 	orch := New(testConfig(), store, agents, shell, expander, logger)
 
 	ctx := context.Background()
-	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusDone)
+	err := orch.RunCleanup(ctx, wf, types.RunStatusDone)
 	if err != nil {
 		t.Fatalf("RunCleanup error = %v", err)
 	}
 
 	// Workflow should be in done state
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", wf.Status)
 	}
 
@@ -1044,54 +1044,54 @@ func TestOrchestrator_RunCleanup(t *testing.T) {
 
 // TestOrchestrator_RunCleanup_FailedWorkflow tests cleanup for failed workflows.
 func TestOrchestrator_RunCleanup_FailedWorkflow(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.CleanupOnFailure = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)
 
 	ctx := context.Background()
-	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusFailed)
+	err := orch.RunCleanup(ctx, wf, types.RunStatusFailed)
 	if err != nil {
 		t.Fatalf("RunCleanup error = %v", err)
 	}
 
 	// Workflow should be in failed state (final status matches reason)
-	if wf.Status != types.WorkflowStatusFailed {
+	if wf.Status != types.RunStatusFailed {
 		t.Errorf("Workflow status = %v, want failed", wf.Status)
 	}
 }
 
 // TestOrchestrator_RunCleanup_Stopped tests cleanup for stopped workflows.
 func TestOrchestrator_RunCleanup_Stopped(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.CleanupOnStop = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
 	orch := New(testConfig(), store, agents, shell, expander, logger)
 
 	ctx := context.Background()
-	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusStopped)
+	err := orch.RunCleanup(ctx, wf, types.RunStatusStopped)
 	if err != nil {
 		t.Fatalf("RunCleanup error = %v", err)
 	}
 
 	// Workflow should be in stopped state
-	if wf.Status != types.WorkflowStatusStopped {
+	if wf.Status != types.RunStatusStopped {
 		t.Errorf("Workflow status = %v, want stopped", wf.Status)
 	}
 }
@@ -1100,15 +1100,15 @@ func TestOrchestrator_RunCleanup_Stopped(t *testing.T) {
 
 // TestOrchestrator_Recover_ResetOrchestratorSteps tests that running orchestrator steps are reset to pending.
 func TestOrchestrator_Recover_ResetOrchestratorSteps(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with running orchestrator steps
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 	wf.Steps["shell-step"] = &types.Step{
@@ -1151,15 +1151,15 @@ func TestOrchestrator_Recover_ResetOrchestratorSteps(t *testing.T) {
 
 // TestOrchestrator_Recover_PartialExpansion tests cleanup of partial expansions.
 func TestOrchestrator_Recover_PartialExpansion(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with partial expansion
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 	// Expand step that was running when crash occurred
@@ -1217,15 +1217,15 @@ func TestOrchestrator_Recover_PartialExpansion(t *testing.T) {
 
 // TestOrchestrator_Recover_AgentStepDeadAgent tests resetting agent steps when agent is dead.
 func TestOrchestrator_Recover_AgentStepDeadAgent(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with running agent step, but agent is dead
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 	wf.Steps["agent-step"] = &types.Step{
@@ -1256,15 +1256,15 @@ func TestOrchestrator_Recover_AgentStepDeadAgent(t *testing.T) {
 
 // TestOrchestrator_Recover_AgentStepAliveAgent tests keeping agent steps running when agent is alive.
 func TestOrchestrator_Recover_AgentStepAliveAgent(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with running agent step, agent is alive
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 	wf.Steps["agent-step"] = &types.Step{
@@ -1300,15 +1300,15 @@ func TestOrchestrator_Recover_AgentStepAliveAgent(t *testing.T) {
 
 // TestOrchestrator_Recover_AgentStepCompletingToRunning tests that completing agent steps revert to running.
 func TestOrchestrator_Recover_AgentStepCompletingToRunning(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with completing agent step, agent is alive
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 	wf.Steps["agent-step"] = &types.Step{
@@ -1339,16 +1339,16 @@ func TestOrchestrator_Recover_AgentStepCompletingToRunning(t *testing.T) {
 
 // TestOrchestrator_Recover_CleaningUpWorkflow tests resuming cleanup for workflows in cleaning_up state.
 func TestOrchestrator_Recover_CleaningUpWorkflow(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow that was in cleaning_up state (prior status determines which cleanup script to use)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusCleaningUp
-	wf.PriorStatus = types.WorkflowStatusDone
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusCleaningUp
+	wf.PriorStatus = types.RunStatusDone
 	wf.CleanupOnSuccess = "echo cleanup"
 	store.workflows[wf.ID] = wf
 
@@ -1362,7 +1362,7 @@ func TestOrchestrator_Recover_CleaningUpWorkflow(t *testing.T) {
 
 	// Workflow should now be in final state (done)
 	finalWf, _ := store.Get(ctx, wf.ID)
-	if finalWf.Status != types.WorkflowStatusDone {
+	if finalWf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", finalWf.Status)
 	}
 
@@ -1374,7 +1374,7 @@ func TestOrchestrator_Recover_CleaningUpWorkflow(t *testing.T) {
 
 // TestOrchestrator_Recover_NoWorkflows tests recovery with no workflows.
 func TestOrchestrator_Recover_NoWorkflows(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -1393,14 +1393,14 @@ func TestOrchestrator_Recover_NoWorkflows(t *testing.T) {
 
 // TestOrchestrator_RunCleanup_NoCleanupScript tests cleanup without a script.
 func TestOrchestrator_RunCleanup_NoCleanupScript(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	// No cleanup script
 	store.workflows[wf.ID] = wf
 
@@ -1409,13 +1409,13 @@ func TestOrchestrator_RunCleanup_NoCleanupScript(t *testing.T) {
 	orch := New(testConfig(), store, agents, shell, expander, logger)
 
 	ctx := context.Background()
-	err := orch.RunCleanup(ctx, wf, types.WorkflowStatusDone)
+	err := orch.RunCleanup(ctx, wf, types.RunStatusDone)
 	if err != nil {
 		t.Fatalf("RunCleanup error = %v", err)
 	}
 
 	// Workflow should be done
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", wf.Status)
 	}
 
@@ -1429,15 +1429,15 @@ func TestOrchestrator_RunCleanup_NoCleanupScript(t *testing.T) {
 
 // TestOrchestrator_StepNoTimeoutIfNoTimeoutConfigured tests that steps without timeout are not affected.
 func TestOrchestrator_StepNoTimeoutIfNoTimeoutConfigured(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a running agent step WITHOUT timeout
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	startedAt := time.Now().Add(-1 * time.Hour) // Running for an hour
 	wf.Steps["agent-step"] = &types.Step{
@@ -1472,15 +1472,15 @@ func TestOrchestrator_StepNoTimeoutIfNoTimeoutConfigured(t *testing.T) {
 // TestOrchestrator_ConcurrentStepCompletionWithOrchTick tests that HandleStepDone
 // and the orchestrator tick don't race with each other.
 func TestOrchestrator_ConcurrentStepCompletionWithOrchTick(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a mix of pending and running steps
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	now := time.Now()
 
 	// 2 running agent steps
@@ -1571,7 +1571,7 @@ func TestOrchestrator_ConcurrentStepCompletionWithOrchTick(t *testing.T) {
 // This is a regression test for the bug where branch steps marked themselves as
 // "done" immediately after expanding, causing dependent steps to run prematurely.
 func TestOrchestrator_BranchWaitsForChildren(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -1580,8 +1580,8 @@ func TestOrchestrator_BranchWaitsForChildren(t *testing.T) {
 	// Create workflow with:
 	// - A branch step that has expanded into child steps (simulating post-expansion state)
 	// - A "done" step that depends on the branch step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	now := time.Now()
 
@@ -1664,7 +1664,7 @@ func TestOrchestrator_BranchWaitsForChildren(t *testing.T) {
 		t.Errorf("done-step status = %v, want done", wf.Steps["done-step"].Status)
 	}
 	// Workflow should be done
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", wf.Status)
 	}
 }
@@ -1683,15 +1683,15 @@ func getStepIDs(steps []*types.Step) []string {
 // TestHandleBranch_ReturnsImmediately verifies that handleBranch returns immediately
 // even when the condition command takes a long time to execute.
 func TestHandleBranch_ReturnsImmediately(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a branch step that has a slow condition (sleeps 5 seconds)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -1732,15 +1732,15 @@ func TestHandleBranch_ReturnsImmediately(t *testing.T) {
 // TestHandleBranch_StepStaysRunning verifies that the step status is "running"
 // after handleBranch returns, not "done".
 func TestHandleBranch_StepStaysRunning(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a branch step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -1782,15 +1782,15 @@ func TestHandleBranch_StepStaysRunning(t *testing.T) {
 // TestHandleBranch_TracksPendingCommand verifies that handleBranch stores the
 // cancel function in pendingCommands.
 func TestHandleBranch_TracksPendingCommand(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a branch step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -1830,15 +1830,15 @@ func TestHandleBranch_TracksPendingCommand(t *testing.T) {
 // TestParallelBranchSteps verifies that multiple branch steps with the same
 // dependencies start in the same orchestrator tick (parallel execution).
 func TestParallelBranchSteps(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with two branch steps that both need "init" step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Initial step that's already done
 	wf.Steps["init"] = &types.Step{
@@ -1916,7 +1916,7 @@ func TestParallelBranchSteps(t *testing.T) {
 // TestBranchCondition_TrueOutcome tests that exit code 0 results in "true" outcome
 // and on_true is expanded.
 func TestBranchCondition_TrueOutcome(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -1924,8 +1924,8 @@ func TestBranchCondition_TrueOutcome(t *testing.T) {
 
 	// Create workflow with branch step
 	// Branch conditions execute real shell commands (not mocked)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -1978,7 +1978,7 @@ func TestBranchCondition_TrueOutcome(t *testing.T) {
 // TestBranchCondition_FalseOutcome tests that non-zero exit code results in
 // "false" outcome and on_false is expanded.
 func TestBranchCondition_FalseOutcome(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -1986,8 +1986,8 @@ func TestBranchCondition_FalseOutcome(t *testing.T) {
 
 	// Create workflow with branch step
 	// Branch conditions execute real shell commands (not mocked)
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2040,7 +2040,7 @@ func TestBranchCondition_FalseOutcome(t *testing.T) {
 // TestBranchCondition_TimeoutOutcome tests that timeout results in "timeout" outcome
 // and on_timeout is expanded.
 func TestBranchCondition_TimeoutOutcome(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -2048,8 +2048,8 @@ func TestBranchCondition_TimeoutOutcome(t *testing.T) {
 
 	// Create workflow with branch step with timeout
 	// Use a command that will take longer than the timeout
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2103,7 +2103,7 @@ func TestBranchCondition_TimeoutOutcome(t *testing.T) {
 // TestBranchCondition_OutputCapture tests that stdout/stderr are captured
 // in step outputs.
 func TestBranchCondition_OutputCapture(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -2111,8 +2111,8 @@ func TestBranchCondition_OutputCapture(t *testing.T) {
 
 	// Create workflow with branch step that captures outputs
 	// Using a real shell command since branch conditions execute actual commands
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2167,7 +2167,7 @@ func TestBranchCondition_OutputCapture(t *testing.T) {
 // TestBranchCondition_NoTargets_Completes tests that a branch with no targets
 // (shell pattern) completes with outputs.
 func TestBranchCondition_NoTargets_Completes(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -2176,8 +2176,8 @@ func TestBranchCondition_NoTargets_Completes(t *testing.T) {
 	// Create workflow with branch step with on_true but no on_false
 	// Condition will exit 1, so outcome is "false" but no on_false target
 	// Use on_error: continue so it doesn't fail the step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2229,7 +2229,7 @@ func TestBranchCondition_NoTargets_Completes(t *testing.T) {
 	}
 
 	// Verify workflow is done
-	if wf.Status != types.WorkflowStatusDone {
+	if wf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", wf.Status)
 	}
 }
@@ -2238,7 +2238,7 @@ func TestBranchCondition_NoTargets_Completes(t *testing.T) {
 
 // TestCancelPendingCommands_CancelsAll tests that cancelling multiple pending commands works correctly.
 func TestCancelPendingCommands_CancelsAll(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -2274,7 +2274,7 @@ func TestCancelPendingCommands_CancelsAll(t *testing.T) {
 
 // TestCancelPendingCommands_EmptyMap tests that cancelling with no pending commands doesn't panic.
 func TestCancelPendingCommands_EmptyMap(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
@@ -2290,15 +2290,15 @@ func TestCancelPendingCommands_EmptyMap(t *testing.T) {
 
 // TestConditionCancelledMidExecution tests that pending commands are tracked and can be cancelled.
 func TestConditionCancelledMidExecution(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a branch step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2352,15 +2352,15 @@ func TestConditionCancelledMidExecution(t *testing.T) {
 
 // TestSignalTriggersCleanShutdown tests that signal handling cancels commands and waits for goroutines.
 func TestSignalTriggersCleanShutdown(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
 	// Create workflow with a branch step
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 	wf.Steps["branch-step"] = &types.Step{
 		ID:       "branch-step",
 		Executor: types.ExecutorBranch,
@@ -2424,14 +2424,14 @@ func TestSignalTriggersCleanShutdown(t *testing.T) {
 // TestHandleShell_DelegatesToBranch verifies that handleShell converts
 // shell config to branch config and delegates to handleBranch.
 func TestHandleShell_DelegatesToBranch(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create shell step
 	wf.Steps["shell-step"] = &types.Step{
@@ -2484,14 +2484,14 @@ func TestHandleShell_DelegatesToBranch(t *testing.T) {
 // TestHandleShell_RunsAsync verifies that handleShell returns immediately
 // without waiting for command completion.
 func TestHandleShell_RunsAsync(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create shell step with slow command
 	wf.Steps["slow-step"] = &types.Step{
@@ -2538,14 +2538,14 @@ func TestHandleShell_RunsAsync(t *testing.T) {
 // TestShellConfigConversion verifies that all ShellConfig fields
 // are correctly transferred to BranchConfig.
 func TestShellConfigConversion(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create shell step with all fields populated
 	wf.Steps["full-step"] = &types.Step{
@@ -2625,14 +2625,14 @@ func TestShellConfigConversion(t *testing.T) {
 // TestHandleShell_CapturesOutputs verifies that shell step outputs
 // are captured correctly after command execution.
 func TestHandleShell_CapturesOutputs(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create shell step with output definitions
 	wf.Steps["output-step"] = &types.Step{
@@ -2678,14 +2678,14 @@ func TestHandleShell_CapturesOutputs(t *testing.T) {
 // TestHandleShell_OnErrorFail verifies that shell steps with on_error: fail
 // mark the step as failed when the command exits non-zero.
 func TestHandleShell_OnErrorFail(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create shell step with failing command and on_error: fail
 	wf.Steps["fail-step"] = &types.Step{
@@ -2726,7 +2726,7 @@ func TestHandleShell_OnErrorFail(t *testing.T) {
 	}
 
 	// Workflow should be failed
-	if finalWf.Status != types.WorkflowStatusFailed {
+	if finalWf.Status != types.RunStatusFailed {
 		t.Errorf("Workflow status = %v, want failed", finalWf.Status)
 	}
 }
@@ -2734,14 +2734,14 @@ func TestHandleShell_OnErrorFail(t *testing.T) {
 // TestHandleShell_OnErrorContinue verifies that shell steps with on_error: continue
 // mark the step as done even when the command fails.
 func TestHandleShell_OnErrorContinue(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create two steps: one that fails with continue, one that depends on it
 	wf.Steps["continue-step"] = &types.Step{
@@ -2797,7 +2797,7 @@ func TestHandleShell_OnErrorContinue(t *testing.T) {
 	}
 
 	// Workflow should be done (not failed)
-	if finalWf.Status != types.WorkflowStatusDone {
+	if finalWf.Status != types.RunStatusDone {
 		t.Errorf("Workflow status = %v, want done", finalWf.Status)
 	}
 }
@@ -2805,14 +2805,14 @@ func TestHandleShell_OnErrorContinue(t *testing.T) {
 // TestParallelShellSteps verifies that shell steps with the same dependencies
 // run in parallel rather than sequentially.
 func TestParallelShellSteps(t *testing.T) {
-	store := newMockWorkflowStore()
+	store := newMockRunStore()
 	agents := newMockAgentManager()
 	shell := newMockShellRunner()
 	expander := &mockTemplateExpander{}
 	logger := testLogger()
 
-	wf := types.NewWorkflow("test-wf", "test-template", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
 
 	// Create three steps: one setup, two parallel sleeps
 	wf.Steps["setup"] = &types.Step{

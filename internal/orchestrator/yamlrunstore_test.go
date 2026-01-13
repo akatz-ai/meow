@@ -9,19 +9,19 @@ import (
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
-func TestYAMLWorkflowStore(t *testing.T) {
+func TestYAMLRunStore(t *testing.T) {
 	// Create temp directory for tests
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	store, err := NewYAMLWorkflowStore(dir)
+	store, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	defer store.Close()
 
 	t.Run("Create and Get", func(t *testing.T) {
-		wf := types.NewWorkflow("wf-test-1", "test.meow.toml", map[string]string{"key": "value"})
+		wf := types.NewRun("run-test-1", "test.meow.toml", map[string]string{"key": "value"})
 		wf.AddStep(&types.Step{
 			ID:       "step1",
 			Executor: types.ExecutorShell,
@@ -34,7 +34,7 @@ func TestYAMLWorkflowStore(t *testing.T) {
 		}
 
 		// Get it back
-		retrieved, err := store.Get(ctx, "wf-test-1")
+		retrieved, err := store.Get(ctx, "run-test-1")
 		if err != nil {
 			t.Fatalf("Get failed: %v", err)
 		}
@@ -54,7 +54,7 @@ func TestYAMLWorkflowStore(t *testing.T) {
 	})
 
 	t.Run("Create duplicate fails", func(t *testing.T) {
-		wf := types.NewWorkflow("wf-dup", "test.meow.toml", nil)
+		wf := types.NewRun("run-dup", "test.meow.toml", nil)
 		if err := store.Create(ctx, wf); err != nil {
 			t.Fatalf("first Create failed: %v", err)
 		}
@@ -71,29 +71,29 @@ func TestYAMLWorkflowStore(t *testing.T) {
 	})
 
 	t.Run("Save updates workflow", func(t *testing.T) {
-		wf := types.NewWorkflow("wf-save", "test.meow.toml", nil)
+		wf := types.NewRun("run-save", "test.meow.toml", nil)
 		store.Create(ctx, wf)
 
-		wf.Status = types.WorkflowStatusRunning
+		wf.Status = types.RunStatusRunning
 		if err := store.Save(ctx, wf); err != nil {
 			t.Fatalf("Save failed: %v", err)
 		}
 
-		retrieved, _ := store.Get(ctx, "wf-save")
-		if retrieved.Status != types.WorkflowStatusRunning {
+		retrieved, _ := store.Get(ctx, "run-save")
+		if retrieved.Status != types.RunStatusRunning {
 			t.Errorf("Status not updated: got %s", retrieved.Status)
 		}
 	})
 
 	t.Run("Delete removes workflow", func(t *testing.T) {
-		wf := types.NewWorkflow("wf-delete", "test.meow.toml", nil)
+		wf := types.NewRun("run-delete", "test.meow.toml", nil)
 		store.Create(ctx, wf)
 
-		if err := store.Delete(ctx, "wf-delete"); err != nil {
+		if err := store.Delete(ctx, "run-delete"); err != nil {
 			t.Fatalf("Delete failed: %v", err)
 		}
 
-		_, err := store.Get(ctx, "wf-delete")
+		_, err := store.Get(ctx, "run-delete")
 		if err == nil {
 			t.Error("Get should fail after Delete")
 		}
@@ -107,13 +107,13 @@ func TestYAMLWorkflowStore(t *testing.T) {
 
 	t.Run("List all workflows", func(t *testing.T) {
 		// Clear previous
-		store2, _ := NewYAMLWorkflowStore(t.TempDir())
+		store2, _ := NewYAMLRunStore(t.TempDir())
 		defer store2.Close()
 
-		store2.Create(ctx, types.NewWorkflow("wf-list-1", "test.meow.toml", nil))
-		store2.Create(ctx, types.NewWorkflow("wf-list-2", "test.meow.toml", nil))
+		store2.Create(ctx, types.NewRun("run-list-1", "test.meow.toml", nil))
+		store2.Create(ctx, types.NewRun("run-list-2", "test.meow.toml", nil))
 
-		all, err := store2.List(ctx, WorkflowFilter{})
+		all, err := store2.List(ctx, RunFilter{})
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
@@ -123,30 +123,30 @@ func TestYAMLWorkflowStore(t *testing.T) {
 	})
 
 	t.Run("List with status filter", func(t *testing.T) {
-		store3, _ := NewYAMLWorkflowStore(t.TempDir())
+		store3, _ := NewYAMLRunStore(t.TempDir())
 		defer store3.Close()
 
-		wf1 := types.NewWorkflow("wf-pending", "test.meow.toml", nil)
-		wf2 := types.NewWorkflow("wf-running", "test.meow.toml", nil)
-		wf2.Status = types.WorkflowStatusRunning
+		wf1 := types.NewRun("run-pending", "test.meow.toml", nil)
+		wf2 := types.NewRun("run-running", "test.meow.toml", nil)
+		wf2.Status = types.RunStatusRunning
 
 		store3.Create(ctx, wf1)
 		store3.Create(ctx, wf2)
 
-		running, _ := store3.List(ctx, WorkflowFilter{Status: types.WorkflowStatusRunning})
+		running, _ := store3.List(ctx, RunFilter{Status: types.RunStatusRunning})
 		if len(running) != 1 {
 			t.Errorf("expected 1 running workflow, got %d", len(running))
 		}
-		if running[0].ID != "wf-running" {
+		if running[0].ID != "run-running" {
 			t.Errorf("wrong workflow returned: %s", running[0].ID)
 		}
 	})
 
 	t.Run("GetByAgent", func(t *testing.T) {
-		store4, _ := NewYAMLWorkflowStore(t.TempDir())
+		store4, _ := NewYAMLRunStore(t.TempDir())
 		defer store4.Close()
 
-		wf := types.NewWorkflow("wf-agent", "test.meow.toml", nil)
+		wf := types.NewRun("run-agent", "test.meow.toml", nil)
 		wf.Steps["s1"] = &types.Step{
 			ID:       "s1",
 			Executor: types.ExecutorAgent,
@@ -154,7 +154,7 @@ func TestYAMLWorkflowStore(t *testing.T) {
 		}
 		store4.Create(ctx, wf)
 
-		wf2 := types.NewWorkflow("wf-other", "test.meow.toml", nil)
+		wf2 := types.NewRun("run-other", "test.meow.toml", nil)
 		wf2.Steps["s2"] = &types.Step{
 			ID:       "s2",
 			Executor: types.ExecutorAgent,
@@ -166,23 +166,23 @@ func TestYAMLWorkflowStore(t *testing.T) {
 		if len(results) != 1 {
 			t.Errorf("expected 1 workflow for claude-1, got %d", len(results))
 		}
-		if results[0].ID != "wf-agent" {
+		if results[0].ID != "run-agent" {
 			t.Errorf("wrong workflow: %s", results[0].ID)
 		}
 	})
 }
 
-func TestYAMLWorkflowStoreLocking(t *testing.T) {
+func TestYAMLRunStoreLocking(t *testing.T) {
 	dir := t.TempDir()
 
 	// Multiple stores can be created on the same directory (no directory-level lock)
-	store1, err := NewYAMLWorkflowStore(dir)
+	store1, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("first store failed: %v", err)
 	}
 	defer store1.Close()
 
-	store2, err := NewYAMLWorkflowStore(dir)
+	store2, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("second store should succeed (per-workflow locking): %v", err)
 	}
@@ -293,18 +293,18 @@ func TestYAMLWorkflowStoreLocking(t *testing.T) {
 	})
 }
 
-func TestYAMLWorkflowStoreCrashRecovery(t *testing.T) {
+func TestYAMLRunStoreCrashRecovery(t *testing.T) {
 	dir := t.TempDir()
 
 	// Simulate crash: write .tmp file, no main file
-	tmpPath := filepath.Join(dir, "wf-crash.yaml.tmp")
+	tmpPath := filepath.Join(dir, "run-crash.yaml.tmp")
 	content := []byte("id: wf-crash\ntemplate: test.meow.toml\nstatus: pending\n")
 	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
 		t.Fatalf("failed to write tmp file: %v", err)
 	}
 
 	// Create store - should recover
-	store, err := NewYAMLWorkflowStore(dir)
+	store, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("store creation should recover: %v", err)
 	}
@@ -315,30 +315,30 @@ func TestYAMLWorkflowStoreCrashRecovery(t *testing.T) {
 		t.Error("tmp file should have been removed")
 	}
 
-	mainPath := filepath.Join(dir, "wf-crash.yaml")
+	mainPath := filepath.Join(dir, "run-crash.yaml")
 	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
 		t.Error("main file should have been created from tmp")
 	}
 }
 
-func TestYAMLWorkflowStoreOrphanTmpCleanup(t *testing.T) {
+func TestYAMLRunStoreOrphanTmpCleanup(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create main file
-	mainPath := filepath.Join(dir, "wf-orphan.yaml")
+	mainPath := filepath.Join(dir, "run-orphan.yaml")
 	content := []byte("id: wf-orphan\ntemplate: test.meow.toml\nstatus: pending\n")
 	if err := os.WriteFile(mainPath, content, 0644); err != nil {
 		t.Fatalf("failed to write main file: %v", err)
 	}
 
 	// Create orphan tmp (main exists, so tmp is stale)
-	tmpPath := filepath.Join(dir, "wf-orphan.yaml.tmp")
+	tmpPath := filepath.Join(dir, "run-orphan.yaml.tmp")
 	if err := os.WriteFile(tmpPath, []byte("stale"), 0644); err != nil {
 		t.Fatalf("failed to write tmp file: %v", err)
 	}
 
 	// Create store - should clean up orphan
-	store, err := NewYAMLWorkflowStore(dir)
+	store, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("store creation failed: %v", err)
 	}
@@ -355,29 +355,29 @@ func TestYAMLWorkflowStoreOrphanTmpCleanup(t *testing.T) {
 	}
 }
 
-func TestYAMLWorkflowStoreAtomicWrite(t *testing.T) {
+func TestYAMLRunStoreAtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	store, err := NewYAMLWorkflowStore(dir)
+	store, err := NewYAMLRunStore(dir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	defer store.Close()
 
-	wf := types.NewWorkflow("wf-atomic", "test.meow.toml", nil)
+	wf := types.NewRun("run-atomic", "test.meow.toml", nil)
 	if err := store.Create(ctx, wf); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
 	// Verify no .tmp file left behind
-	tmpPath := filepath.Join(dir, "wf-atomic.yaml.tmp")
+	tmpPath := filepath.Join(dir, "run-atomic.yaml.tmp")
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Error("temp file should not exist after save")
 	}
 
 	// Verify main file exists
-	mainPath := filepath.Join(dir, "wf-atomic.yaml")
+	mainPath := filepath.Join(dir, "run-atomic.yaml")
 	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
 		t.Error("main file should exist")
 	}

@@ -59,7 +59,7 @@ func TestMessageType_IsRequest(t *testing.T) {
 func TestStepDoneMessage_Marshal(t *testing.T) {
 	msg := StepDoneMessage{
 		Type:     MsgStepDone,
-		Workflow: "wf-abc123",
+		Workflow: "run-abc123",
 		Agent:    "worker-1",
 		Step:     "impl.write-tests",
 		Outputs:  map[string]any{"test_file": "src/test.ts"},
@@ -136,7 +136,7 @@ func TestApprovalMessage_Marshal(t *testing.T) {
 			name: "approved",
 			msg: ApprovalMessage{
 				Type:     MsgApproval,
-				Workflow: "wf-abc123",
+				Workflow: "run-abc123",
 				GateID:   "review-gate",
 				Approved: true,
 				Notes:    "LGTM",
@@ -146,7 +146,7 @@ func TestApprovalMessage_Marshal(t *testing.T) {
 			name: "rejected",
 			msg: ApprovalMessage{
 				Type:     MsgApproval,
-				Workflow: "wf-abc123",
+				Workflow: "run-abc123",
 				GateID:   "review-gate",
 				Approved: false,
 				Reason:   "Missing error handling",
@@ -289,7 +289,7 @@ func TestParseMessage_MalformedJSON(t *testing.T) {
 }
 
 func TestParseMessage_MissingType(t *testing.T) {
-	data := []byte(`{"workflow":"wf-123"}`)
+	data := []byte(`{"workflow":"run-123"}`)
 
 	_, err := ParseMessage(data)
 	if err == nil {
@@ -301,7 +301,7 @@ func TestMarshal_SingleLine(t *testing.T) {
 	// Test that complex content with newlines is properly escaped
 	msg := StepDoneMessage{
 		Type:     MsgStepDone,
-		Workflow: "wf-test",
+		Workflow: "run-test",
 		Agent:    "worker",
 		Step:     "step1",
 		Notes:    "Line 1\nLine 2\nLine 3",
@@ -344,7 +344,7 @@ func TestStepDoneMessage_OutputTypes(t *testing.T) {
 	// Test various output value types
 	msg := StepDoneMessage{
 		Type:     MsgStepDone,
-		Workflow: "wf-test",
+		Workflow: "run-test",
 		Agent:    "worker",
 		Step:     "step1",
 		Outputs: map[string]any{
@@ -398,7 +398,7 @@ func TestEventMessage_Marshal(t *testing.T) {
 			"exit_code": 0,
 		},
 		Agent:     "worker-1",
-		Workflow:  "wf-abc123",
+		Workflow:  "run-abc123",
 		Timestamp: 1704825600,
 	}
 
@@ -482,7 +482,7 @@ func TestAwaitEventMessage_Marshal(t *testing.T) {
 func TestGetStepStatusMessage_Marshal(t *testing.T) {
 	msg := GetStepStatusMessage{
 		Type:     MsgGetStepStatus,
-		Workflow: "wf-abc123",
+		Workflow: "run-abc123",
 		StepID:   "impl.write-tests",
 	}
 

@@ -70,7 +70,7 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	}
 
 	// Create workflows with different timestamps
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -78,17 +78,17 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	ctx := context.Background()
 
 	// Create workflows with different start times
-	wf1 := types.NewWorkflow("wf-old", "test1.meow.toml", nil)
+	wf1 := types.NewRun("run-old", "test1.meow.toml", nil)
 	wf1.StartedAt = time.Now().Add(-2 * time.Hour)
-	wf1.Status = types.WorkflowStatusDone
+	wf1.Status = types.RunStatusDone
 
-	wf2 := types.NewWorkflow("wf-recent", "test2.meow.toml", nil)
+	wf2 := types.NewRun("run-recent", "test2.meow.toml", nil)
 	wf2.StartedAt = time.Now().Add(-1 * time.Hour)
-	wf2.Status = types.WorkflowStatusRunning
+	wf2.Status = types.RunStatusRunning
 
-	wf3 := types.NewWorkflow("wf-newest", "test3.meow.toml", nil)
+	wf3 := types.NewRun("run-newest", "test3.meow.toml", nil)
 	wf3.StartedAt = time.Now()
-	wf3.Status = types.WorkflowStatusRunning
+	wf3.Status = types.RunStatusRunning
 
 	store.Create(ctx, wf1)
 	store.Create(ctx, wf2)
@@ -135,13 +135,13 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	oldIdx := -1
 
 	for i, line := range lines {
-		if strings.Contains(line, "wf-newest") {
+		if strings.Contains(line, "run-newest") {
 			newestIdx = i
 		}
-		if strings.Contains(line, "wf-recent") {
+		if strings.Contains(line, "run-recent") {
 			recentIdx = i
 		}
-		if strings.Contains(line, "wf-old") {
+		if strings.Contains(line, "run-old") {
 			oldIdx = i
 		}
 	}
@@ -162,18 +162,18 @@ func TestLsStatusFlag(t *testing.T) {
 		t.Fatalf("failed to create workflows dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
 	ctx := context.Background()
 
-	wfRunning := types.NewWorkflow("wf-running", "test.meow.toml", nil)
-	wfRunning.Status = types.WorkflowStatusRunning
+	wfRunning := types.NewRun("run-running", "test.meow.toml", nil)
+	wfRunning.Status = types.RunStatusRunning
 
-	wfDone := types.NewWorkflow("wf-done", "test.meow.toml", nil)
-	wfDone.Status = types.WorkflowStatusDone
+	wfDone := types.NewRun("run-done", "test.meow.toml", nil)
+	wfDone.Status = types.RunStatusDone
 
 	store.Create(ctx, wfRunning)
 	store.Create(ctx, wfDone)
@@ -206,10 +206,10 @@ func TestLsStatusFlag(t *testing.T) {
 	}
 
 	// Should only show running workflow (note: it will show as stale since no lock)
-	if !strings.Contains(output, "wf-running") {
+	if !strings.Contains(output, "run-running") {
 		t.Errorf("Expected to see wf-running in output, got: %s", output)
 	}
-	if strings.Contains(output, "wf-done") {
+	if strings.Contains(output, "run-done") {
 		t.Error("Should not see wf-done in output with --status=running")
 	}
 }
@@ -221,15 +221,15 @@ func TestLsJSONOutput(t *testing.T) {
 		t.Fatalf("failed to create workflows dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
 	ctx := context.Background()
 
-	wf := types.NewWorkflow("wf-test", "test.meow.toml", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("run-test", "test.meow.toml", nil)
+	wf.Status = types.RunStatusRunning
 	store.Create(ctx, wf)
 
 	origWd, _ := os.Getwd()
@@ -270,7 +270,7 @@ func TestLsJSONOutput(t *testing.T) {
 		t.Errorf("Expected 1 workflow, got %d", len(result))
 	}
 
-	if result[0]["id"] != "wf-test" {
+	if result[0]["id"] != "run-test" {
 		t.Errorf("Expected id 'wf-test', got %v", result[0]["id"])
 	}
 }
@@ -282,7 +282,7 @@ func TestLsStaleDetection(t *testing.T) {
 		t.Fatalf("failed to create workflows dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -290,8 +290,8 @@ func TestLsStaleDetection(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a workflow with running status but no lock held
-	wf := types.NewWorkflow("wf-stale", "test.meow.toml", nil)
-	wf.Status = types.WorkflowStatusRunning
+	wf := types.NewRun("run-stale", "test.meow.toml", nil)
+	wf.Status = types.RunStatusRunning
 	store.Create(ctx, wf)
 
 	origWd, _ := os.Getwd()
@@ -322,7 +322,7 @@ func TestLsStaleDetection(t *testing.T) {
 	}
 
 	// Should show the stale workflow with "(stale)" indicator
-	if !strings.Contains(output, "wf-stale") {
+	if !strings.Contains(output, "run-stale") {
 		t.Errorf("Expected to see wf-stale in output with --stale flag, got: %s", output)
 	}
 	if !strings.Contains(output, "running (stale)") {

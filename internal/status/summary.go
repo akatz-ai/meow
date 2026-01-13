@@ -10,7 +10,7 @@ import (
 type WorkflowSummary struct {
 	ID          string                 `json:"id"`
 	Template    string                 `json:"template"`
-	Status      types.WorkflowStatus   `json:"status"`
+	Status      types.RunStatus   `json:"status"`
 	StartedAt   time.Time              `json:"started_at"`
 	DoneAt      *time.Time             `json:"done_at,omitempty"`
 	Variables   map[string]string      `json:"variables,omitempty"`
@@ -49,7 +49,7 @@ type AgentSummary struct {
 }
 
 // NewWorkflowSummary creates a summary from a workflow.
-func NewWorkflowSummary(wf *types.Workflow) *WorkflowSummary {
+func NewWorkflowSummary(wf *types.Run) *WorkflowSummary {
 	summary := &WorkflowSummary{
 		ID:        wf.ID,
 		Template:  wf.Template,
@@ -99,7 +99,7 @@ func NewWorkflowSummary(wf *types.Workflow) *WorkflowSummary {
 }
 
 // computeStepStats tallies up step statuses.
-func computeStepStats(wf *types.Workflow) StepStats {
+func computeStepStats(wf *types.Run) StepStats {
 	stats := StepStats{
 		Total: len(wf.Steps),
 	}

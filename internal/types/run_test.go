@@ -6,11 +6,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestWorkflowStatus(t *testing.T) {
+func TestRunStatus(t *testing.T) {
 	t.Run("Valid returns true for valid statuses", func(t *testing.T) {
-		valid := []WorkflowStatus{
-			WorkflowStatusPending, WorkflowStatusRunning,
-			WorkflowStatusDone, WorkflowStatusFailed,
+		valid := []RunStatus{
+			RunStatusPending, RunStatusRunning,
+			RunStatusDone, RunStatusFailed,
 		}
 		for _, s := range valid {
 			if !s.Valid() {
@@ -20,44 +20,44 @@ func TestWorkflowStatus(t *testing.T) {
 	})
 
 	t.Run("IsTerminal", func(t *testing.T) {
-		if !WorkflowStatusDone.IsTerminal() {
+		if !RunStatusDone.IsTerminal() {
 			t.Error("done should be terminal")
 		}
-		if !WorkflowStatusFailed.IsTerminal() {
+		if !RunStatusFailed.IsTerminal() {
 			t.Error("failed should be terminal")
 		}
-		if WorkflowStatusRunning.IsTerminal() {
+		if RunStatusRunning.IsTerminal() {
 			t.Error("running should not be terminal")
 		}
 	})
 }
 
-func TestNewWorkflow(t *testing.T) {
+func TestNewRun(t *testing.T) {
 	vars := map[string]string{"agent": "claude-1"}
-	wf := NewWorkflow("wf-123", "test.meow.toml", vars)
+	run := NewRun("run-123", "test.meow.toml", vars)
 
-	if wf.ID != "wf-123" {
-		t.Errorf("ID = %s, want wf-123", wf.ID)
+	if run.ID != "run-123" {
+		t.Errorf("ID = %s, want run-123", run.ID)
 	}
-	if wf.Template != "test.meow.toml" {
-		t.Errorf("Template = %s, want test.meow.toml", wf.Template)
+	if run.Template != "test.meow.toml" {
+		t.Errorf("Template = %s, want test.meow.toml", run.Template)
 	}
-	if wf.Status != WorkflowStatusPending {
-		t.Errorf("Status = %s, want pending", wf.Status)
+	if run.Status != RunStatusPending {
+		t.Errorf("Status = %s, want pending", run.Status)
 	}
-	if wf.Variables["agent"] != "claude-1" {
+	if run.Variables["agent"] != "claude-1" {
 		t.Error("Variables not set")
 	}
-	if wf.Agents == nil {
+	if run.Agents == nil {
 		t.Error("Agents map should be initialized")
 	}
-	if wf.Steps == nil {
+	if run.Steps == nil {
 		t.Error("Steps map should be initialized")
 	}
 }
 
-func TestWorkflowAddStep(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunAddStep(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
 	step := &Step{
 		ID:       "step-1",
@@ -65,28 +65,28 @@ func TestWorkflowAddStep(t *testing.T) {
 		Shell:    &ShellConfig{Command: "echo hello"},
 	}
 
-	if err := wf.AddStep(step); err != nil {
+	if err := run.AddStep(step); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
 	// Try adding duplicate
-	if err := wf.AddStep(step); err == nil {
+	if err := run.AddStep(step); err == nil {
 		t.Error("expected error for duplicate step")
 	}
 }
 
-func TestWorkflowRegisterAgent(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunRegisterAgent(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
 	info := &AgentInfo{
-		TmuxSession: "meow-wf-1-claude",
+		TmuxSession: "meow-run-1-claude",
 		Status:      "active",
 		Workdir:     "/tmp/work",
 	}
 
-	wf.RegisterAgent("claude-1", info)
+	run.RegisterAgent("claude-1", info)
 
-	workdir, ok := wf.GetAgentWorkdir("claude-1")
+	workdir, ok := run.GetAgentWorkdir("claude-1")
 	if !ok {
 		t.Error("agent should exist")
 	}
@@ -94,32 +94,32 @@ func TestWorkflowRegisterAgent(t *testing.T) {
 		t.Errorf("workdir = %s, want /tmp/work", workdir)
 	}
 
-	_, ok = wf.GetAgentWorkdir("nonexistent")
+	_, ok = run.GetAgentWorkdir("nonexistent")
 	if ok {
 		t.Error("nonexistent agent should not be found")
 	}
 }
 
-func TestWorkflowGetReadySteps(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunGetReadySteps(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
 	// Add steps with dependencies
-	wf.Steps["step1"] = &Step{
+	run.Steps["step1"] = &Step{
 		ID:     "step1",
 		Status: StepStatusDone,
 	}
-	wf.Steps["step2"] = &Step{
+	run.Steps["step2"] = &Step{
 		ID:     "step2",
 		Status: StepStatusPending,
 		Needs:  []string{"step1"},
 	}
-	wf.Steps["step3"] = &Step{
+	run.Steps["step3"] = &Step{
 		ID:     "step3",
 		Status: StepStatusPending,
 		Needs:  []string{"step2"}, // Not ready (step2 not done)
 	}
 
-	ready := wf.GetReadySteps()
+	ready := run.GetReadySteps()
 	if len(ready) != 1 {
 		t.Errorf("expected 1 ready step, got %d", len(ready))
 	}
@@ -128,33 +128,33 @@ func TestWorkflowGetReadySteps(t *testing.T) {
 	}
 }
 
-func TestWorkflowGetReadyStepsDeterministic(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunGetReadyStepsDeterministic(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
 	// Add multiple ready steps with different IDs
 	// Maps in Go have non-deterministic iteration order,
 	// so we need to verify GetReadySteps returns consistent order
-	wf.Steps["zebra"] = &Step{
+	run.Steps["zebra"] = &Step{
 		ID:     "zebra",
 		Status: StepStatusPending,
 	}
-	wf.Steps["apple"] = &Step{
+	run.Steps["apple"] = &Step{
 		ID:     "apple",
 		Status: StepStatusPending,
 	}
-	wf.Steps["middle"] = &Step{
+	run.Steps["middle"] = &Step{
 		ID:     "middle",
 		Status: StepStatusPending,
 	}
-	wf.Steps["banana"] = &Step{
+	run.Steps["banana"] = &Step{
 		ID:     "banana",
 		Status: StepStatusPending,
 	}
 
 	// Get ready steps multiple times
-	firstCall := wf.GetReadySteps()
-	secondCall := wf.GetReadySteps()
-	thirdCall := wf.GetReadySteps()
+	firstCall := run.GetReadySteps()
+	secondCall := run.GetReadySteps()
+	thirdCall := run.GetReadySteps()
 
 	// Should return same number of steps
 	if len(firstCall) != 4 {
@@ -183,132 +183,132 @@ func TestWorkflowGetReadyStepsDeterministic(t *testing.T) {
 	}
 }
 
-func TestWorkflowAllDone(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunAllDone(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	// Empty workflow is done
-	if !wf.AllDone() {
-		t.Error("empty workflow should be done")
+	// Empty run is done
+	if !run.AllDone() {
+		t.Error("empty run should be done")
 	}
 
-	wf.Steps["step1"] = &Step{ID: "step1", Status: StepStatusDone}
-	if !wf.AllDone() {
-		t.Error("all steps done, workflow should be done")
+	run.Steps["step1"] = &Step{ID: "step1", Status: StepStatusDone}
+	if !run.AllDone() {
+		t.Error("all steps done, run should be done")
 	}
 
-	wf.Steps["step2"] = &Step{ID: "step2", Status: StepStatusRunning}
-	if wf.AllDone() {
-		t.Error("running step, workflow should not be done")
+	run.Steps["step2"] = &Step{ID: "step2", Status: StepStatusRunning}
+	if run.AllDone() {
+		t.Error("running step, run should not be done")
 	}
 }
 
-func TestWorkflowHasFailed(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunHasFailed(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	wf.Steps["step1"] = &Step{ID: "step1", Status: StepStatusDone}
-	if wf.HasFailed() {
+	run.Steps["step1"] = &Step{ID: "step1", Status: StepStatusDone}
+	if run.HasFailed() {
 		t.Error("no failed steps, should return false")
 	}
 
-	wf.Steps["step2"] = &Step{ID: "step2", Status: StepStatusFailed}
-	if !wf.HasFailed() {
+	run.Steps["step2"] = &Step{ID: "step2", Status: StepStatusFailed}
+	if !run.HasFailed() {
 		t.Error("failed step exists, should return true")
 	}
 }
 
-func TestWorkflowLifecycle(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunLifecycle(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	if err := wf.Start(); err != nil {
+	if err := run.Start(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-	if wf.Status != WorkflowStatusRunning {
-		t.Errorf("expected running, got %s", wf.Status)
+	if run.Status != RunStatusRunning {
+		t.Errorf("expected running, got %s", run.Status)
 	}
 
 	// Can't start again
-	if err := wf.Start(); err == nil {
-		t.Error("expected error starting running workflow")
+	if err := run.Start(); err == nil {
+		t.Error("expected error starting running run")
 	}
 
-	wf.Complete()
-	if wf.Status != WorkflowStatusDone {
-		t.Errorf("expected done, got %s", wf.Status)
+	run.Complete()
+	if run.Status != RunStatusDone {
+		t.Errorf("expected done, got %s", run.Status)
 	}
-	if wf.DoneAt == nil {
+	if run.DoneAt == nil {
 		t.Error("DoneAt should be set")
 	}
 }
 
-func TestWorkflowGetStepsForAgent(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunGetStepsForAgent(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	wf.Steps["step1"] = &Step{
+	run.Steps["step1"] = &Step{
 		ID:       "step1",
 		Executor: ExecutorAgent,
 		Agent:    &AgentConfig{Agent: "claude-1", Prompt: "test"},
 	}
-	wf.Steps["step2"] = &Step{
+	run.Steps["step2"] = &Step{
 		ID:       "step2",
 		Executor: ExecutorAgent,
 		Agent:    &AgentConfig{Agent: "claude-2", Prompt: "test"},
 	}
-	wf.Steps["step3"] = &Step{
+	run.Steps["step3"] = &Step{
 		ID:       "step3",
 		Executor: ExecutorShell,
 		Shell:    &ShellConfig{Command: "echo"},
 	}
 
-	steps := wf.GetStepsForAgent("claude-1")
+	steps := run.GetStepsForAgent("claude-1")
 	if len(steps) != 1 {
 		t.Errorf("expected 1 step for claude-1, got %d", len(steps))
 	}
 }
 
-func TestWorkflowAgentIsIdle(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunAgentIsIdle(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	wf.Steps["step1"] = &Step{
+	run.Steps["step1"] = &Step{
 		ID:       "step1",
 		Executor: ExecutorAgent,
 		Status:   StepStatusPending,
 		Agent:    &AgentConfig{Agent: "claude-1", Prompt: "test"},
 	}
 
-	if !wf.AgentIsIdle("claude-1") {
+	if !run.AgentIsIdle("claude-1") {
 		t.Error("agent should be idle (step pending)")
 	}
 
-	wf.Steps["step1"].Status = StepStatusRunning
-	if wf.AgentIsIdle("claude-1") {
+	run.Steps["step1"].Status = StepStatusRunning
+	if run.AgentIsIdle("claude-1") {
 		t.Error("agent should not be idle (step running)")
 	}
 
 	// Critical: completing status should also make agent not idle
 	// This prevents injecting a new prompt while orchestrator is processing completion
-	wf.Steps["step1"].Status = StepStatusCompleting
-	if wf.AgentIsIdle("claude-1") {
+	run.Steps["step1"].Status = StepStatusCompleting
+	if run.AgentIsIdle("claude-1") {
 		t.Error("agent should not be idle (step completing)")
 	}
 
 	// Done status should make agent idle again
-	wf.Steps["step1"].Status = StepStatusDone
-	if !wf.AgentIsIdle("claude-1") {
+	run.Steps["step1"].Status = StepStatusDone
+	if !run.AgentIsIdle("claude-1") {
 		t.Error("agent should be idle (step done)")
 	}
 }
 
-func TestWorkflowGetRunningStepForAgent(t *testing.T) {
-	wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+func TestRunGetRunningStepForAgent(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
 
-	wf.Steps["step1"] = &Step{
+	run.Steps["step1"] = &Step{
 		ID:       "step1",
 		Executor: ExecutorAgent,
 		Status:   StepStatusRunning,
 		Agent:    &AgentConfig{Agent: "claude-1", Prompt: "test"},
 	}
 
-	step := wf.GetRunningStepForAgent("claude-1")
+	step := run.GetRunningStepForAgent("claude-1")
 	if step == nil {
 		t.Error("should find running step for claude-1")
 	}
@@ -316,15 +316,15 @@ func TestWorkflowGetRunningStepForAgent(t *testing.T) {
 		t.Errorf("expected step1, got %s", step.ID)
 	}
 
-	step = wf.GetRunningStepForAgent("claude-2")
+	step = run.GetRunningStepForAgent("claude-2")
 	if step != nil {
 		t.Error("should not find running step for claude-2")
 	}
 
 	// GetRunningStepForAgent should also return steps in completing status
 	// (the orchestrator is still processing the completion)
-	wf.Steps["step1"].Status = StepStatusCompleting
-	step = wf.GetRunningStepForAgent("claude-1")
+	run.Steps["step1"].Status = StepStatusCompleting
+	step = run.GetRunningStepForAgent("claude-1")
 	if step == nil {
 		t.Error("should find completing step for claude-1")
 	}
@@ -333,41 +333,41 @@ func TestWorkflowGetRunningStepForAgent(t *testing.T) {
 	}
 
 	// Done step should not be returned
-	wf.Steps["step1"].Status = StepStatusDone
-	step = wf.GetRunningStepForAgent("claude-1")
+	run.Steps["step1"].Status = StepStatusDone
+	step = run.GetRunningStepForAgent("claude-1")
 	if step != nil {
 		t.Error("should not find done step")
 	}
 }
 
-func TestWorkflowOrchestratorPID(t *testing.T) {
+func TestRunOrchestratorPID(t *testing.T) {
 	t.Run("marshals and unmarshals with PID", func(t *testing.T) {
-		wf := NewWorkflow("wf-1", "test.meow.toml", nil)
-		wf.OrchestratorPID = 12345
+		run := NewRun("run-1", "test.meow.toml", nil)
+		run.OrchestratorPID = 12345
 
 		// Marshal to YAML
-		data, err := yaml.Marshal(wf)
+		data, err := yaml.Marshal(run)
 		if err != nil {
 			t.Fatalf("failed to marshal: %v", err)
 		}
 
 		// Unmarshal back
-		var wf2 Workflow
-		if err := yaml.Unmarshal(data, &wf2); err != nil {
+		var run2 Run
+		if err := yaml.Unmarshal(data, &run2); err != nil {
 			t.Fatalf("failed to unmarshal: %v", err)
 		}
 
-		if wf2.OrchestratorPID != 12345 {
-			t.Errorf("OrchestratorPID = %d, want 12345", wf2.OrchestratorPID)
+		if run2.OrchestratorPID != 12345 {
+			t.Errorf("OrchestratorPID = %d, want 12345", run2.OrchestratorPID)
 		}
 	})
 
 	t.Run("omits PID when zero (backwards compatibility)", func(t *testing.T) {
-		wf := NewWorkflow("wf-1", "test.meow.toml", nil)
-		wf.OrchestratorPID = 0
+		run := NewRun("run-1", "test.meow.toml", nil)
+		run.OrchestratorPID = 0
 
 		// Marshal to YAML
-		data, err := yaml.Marshal(wf)
+		data, err := yaml.Marshal(run)
 		if err != nil {
 			t.Fatalf("failed to marshal: %v", err)
 		}
@@ -379,25 +379,25 @@ func TestWorkflowOrchestratorPID(t *testing.T) {
 		}
 	})
 
-	t.Run("loads legacy workflows without PID field", func(t *testing.T) {
-		// Simulate legacy workflow YAML without orchestrator_pid field
+	t.Run("loads legacy runs without PID field", func(t *testing.T) {
+		// Simulate legacy run YAML without orchestrator_pid field
 		legacyYAML := `
-id: wf-legacy
+id: run-legacy
 template: test.meow.toml
 status: running
 started_at: 2024-01-01T00:00:00Z
 steps: {}
 `
-		var wf Workflow
-		if err := yaml.Unmarshal([]byte(legacyYAML), &wf); err != nil {
-			t.Fatalf("failed to unmarshal legacy workflow: %v", err)
+		var run Run
+		if err := yaml.Unmarshal([]byte(legacyYAML), &run); err != nil {
+			t.Fatalf("failed to unmarshal legacy run: %v", err)
 		}
 
-		if wf.OrchestratorPID != 0 {
-			t.Errorf("OrchestratorPID should default to 0, got %d", wf.OrchestratorPID)
+		if run.OrchestratorPID != 0 {
+			t.Errorf("OrchestratorPID should default to 0, got %d", run.OrchestratorPID)
 		}
-		if wf.ID != "wf-legacy" {
-			t.Errorf("ID = %s, want wf-legacy", wf.ID)
+		if run.ID != "run-legacy" {
+			t.Errorf("ID = %s, want run-legacy", run.ID)
 		}
 	})
 }

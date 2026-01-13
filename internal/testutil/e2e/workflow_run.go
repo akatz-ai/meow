@@ -89,7 +89,7 @@ func (r *WorkflowRun) WaitForDone(timeout time.Duration) error {
 }
 
 // WaitForStatus waits for the workflow to reach a specific status.
-func (r *WorkflowRun) WaitForStatus(status types.WorkflowStatus, timeout time.Duration) error {
+func (r *WorkflowRun) WaitForStatus(status types.RunStatus, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -186,12 +186,12 @@ func (r *WorkflowRun) StepError(stepID string) (*types.StepError, error) {
 }
 
 // Workflow returns the current workflow state.
-func (r *WorkflowRun) Workflow() (*types.Workflow, error) {
+func (r *WorkflowRun) Workflow() (*types.Run, error) {
 	return r.loadWorkflow()
 }
 
 // loadWorkflow loads the workflow from state.
-func (r *WorkflowRun) loadWorkflow() (*types.Workflow, error) {
+func (r *WorkflowRun) loadWorkflow() (*types.Run, error) {
 	return r.harness.LoadWorkflow(r.ID)
 }
 
@@ -235,7 +235,7 @@ func (r *WorkflowRun) AssertStepFailed(stepID string) error {
 // AssertWorkflowDone asserts that the workflow completed successfully.
 func (r *WorkflowRun) AssertWorkflowDone() error {
 	status := r.Status()
-	if status != string(types.WorkflowStatusDone) {
+	if status != string(types.RunStatusDone) {
 		return fmt.Errorf("workflow is %s, expected done", status)
 	}
 	return nil
@@ -244,7 +244,7 @@ func (r *WorkflowRun) AssertWorkflowDone() error {
 // AssertWorkflowFailed asserts that the workflow failed.
 func (r *WorkflowRun) AssertWorkflowFailed() error {
 	status := r.Status()
-	if status != string(types.WorkflowStatusFailed) {
+	if status != string(types.RunStatusFailed) {
 		return fmt.Errorf("workflow is %s, expected failed", status)
 	}
 	return nil
@@ -266,7 +266,7 @@ func WorkflowRunFromFile(h *Harness, path string) (*WorkflowRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	var wf types.Workflow
+	var wf types.Run
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, err
 	}
@@ -286,7 +286,7 @@ func WorkflowRunFromFile(h *Harness, path string) (*WorkflowRun, error) {
 // CreateTestWorkflow creates a workflow with the given steps for testing.
 // This is useful for tests that need to set up specific workflow state.
 func CreateTestWorkflow(h *Harness, id string, steps map[string]*types.Step) (*WorkflowRun, error) {
-	wf := types.NewWorkflow(id, "test-template", nil)
+	wf := types.NewRun(id, "test-template", nil)
 	for stepID, step := range steps {
 		step.ID = stepID
 		if err := wf.AddStep(step); err != nil {

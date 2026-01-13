@@ -447,7 +447,7 @@ func TestExecuteShell_MeowEnvVarsInjected(t *testing.T) {
 		Shell: &types.ShellConfig{
 			Command: "echo \"MEOW_WORKFLOW=$MEOW_WORKFLOW MEOW_STEP=$MEOW_STEP MEOW_ORCH_SOCK=$MEOW_ORCH_SOCK\"",
 			Env: map[string]string{
-				"MEOW_WORKFLOW":  "wf-123",
+				"MEOW_WORKFLOW":  "run-123",
 				"MEOW_STEP":      "step-456",
 				"MEOW_ORCH_SOCK": "/tmp/meow-test.sock",
 			},
@@ -462,7 +462,7 @@ func TestExecuteShell_MeowEnvVarsInjected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", stepErr)
 	}
 
-	expected := "MEOW_WORKFLOW=wf-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
+	expected := "MEOW_WORKFLOW=run-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
 	if result.Outputs["env_vars"] != expected {
 		t.Errorf("expected %q, got %q", expected, result.Outputs["env_vars"])
 	}

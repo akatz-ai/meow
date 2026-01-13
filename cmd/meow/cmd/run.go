@@ -123,7 +123,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Generate a unique workflow ID (or use passed ID for detached child)
 	workflowID := runWorkflowID
 	if workflowID == "" {
-		workflowID = fmt.Sprintf("wf-%d", time.Now().UnixNano())
+		workflowID = fmt.Sprintf("run-%d", time.Now().UnixNano())
 	}
 
 	// Create baker
@@ -154,7 +154,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create a Workflow object
-	wf := types.NewWorkflow(workflowID, templatePath, vars)
+	wf := types.NewRun(workflowID, templatePath, vars)
 	if wf.DefaultAdapter == "" && cfg.Agent.DefaultAdapter != "" {
 		wf.DefaultAdapter = cfg.Agent.DefaultAdapter
 	}
@@ -172,7 +172,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create workflow store
-	store, err := orchestrator.NewYAMLWorkflowStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
@@ -285,7 +285,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Print final status
 	fmt.Printf("\nWorkflow %s: %s\n", workflowID, wf.Status)
-	if verbose || wf.Status == types.WorkflowStatusFailed {
+	if verbose || wf.Status == types.RunStatusFailed {
 		fmt.Println("\nStep results:")
 		for _, step := range wf.Steps {
 			status := string(step.Status)

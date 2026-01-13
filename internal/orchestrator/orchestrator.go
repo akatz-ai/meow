@@ -66,10 +66,10 @@ func stringifyValue(val any) string {
 // AgentManager manages agent lifecycle (tmux sessions).
 type AgentManager interface {
 	// Start spawns an agent in a tmux session.
-	Start(ctx context.Context, wf *types.Workflow, step *types.Step) error
+	Start(ctx context.Context, wf *types.Run, step *types.Step) error
 
 	// Stop kills an agent's tmux session.
-	Stop(ctx context.Context, wf *types.Workflow, step *types.Step) error
+	Stop(ctx context.Context, wf *types.Run, step *types.Step) error
 
 	// IsRunning checks if an agent is currently running.
 	IsRunning(ctx context.Context, agentID string) (bool, error)
@@ -81,7 +81,7 @@ type AgentManager interface {
 	Interrupt(ctx context.Context, agentID string) error
 
 	// KillAll kills all agent sessions for a workflow.
-	KillAll(ctx context.Context, wf *types.Workflow) error
+	KillAll(ctx context.Context, wf *types.Run) error
 }
 
 // ShellRunner executes shell commands.
@@ -93,7 +93,7 @@ type ShellRunner interface {
 // TemplateExpander expands templates into steps.
 type TemplateExpander interface {
 	// Expand loads a template and inserts steps into the workflow.
-	Expand(ctx context.Context, wf *types.Workflow, step *types.Step) error
+	Expand(ctx context.Context, wf *types.Run, step *types.Step) error
 }
 
 // Orchestrator is the main workflow engine.
@@ -102,7 +102,7 @@ type TemplateExpander interface {
 // changes go through its mutex-protected methods to prevent race conditions.
 type Orchestrator struct {
 	cfg      *config.Config
-	store    WorkflowStore
+	store    RunStore
 	agents   AgentManager
 	shell    ShellRunner
 	expander TemplateExpander
@@ -127,7 +127,7 @@ type Orchestrator struct {
 }
 
 // New creates a new Orchestrator.
-func New(cfg *config.Config, store WorkflowStore, agents AgentManager, shell ShellRunner, expander TemplateExpander, logger *slog.Logger) *Orchestrator {
+func New(cfg *config.Config, store RunStore, agents AgentManager, shell ShellRunner, expander TemplateExpander, logger *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		cfg:      cfg,
 		store:    store,
@@ -216,10 +216,10 @@ func (o *Orchestrator) cleanupOnSignal(ctx context.Context) error {
 	}
 
 	// Check if cleanup_on_stop is defined (opt-in cleanup)
-	if wf.HasCleanup(types.WorkflowStatusStopped) {
+	if wf.HasCleanup(types.RunStatusStopped) {
 		// Use a background context for cleanup since the original may be cancelled
 		cleanupCtx := context.Background()
-		return o.RunCleanup(cleanupCtx, wf, types.WorkflowStatusStopped)
+		return o.RunCleanup(cleanupCtx, wf, types.RunStatusStopped)
 	}
 
 	// No cleanup_on_stop defined - just mark as stopped, preserve agents/state
@@ -239,14 +239,14 @@ func (o *Orchestrator) Shutdown() {
 // tick performs one iteration of the main loop.
 func (o *Orchestrator) tick(ctx context.Context) error {
 	// Get running workflows
-	workflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusRunning})
+	workflows, err := o.store.List(ctx, RunFilter{Status: types.RunStatusRunning})
 	if err != nil {
 		return fmt.Errorf("listing workflows: %w", err)
 	}
 
 	// If single-workflow mode, filter to just that workflow
 	if o.workflowID != "" {
-		filtered := make([]*types.Workflow, 0, 1)
+		filtered := make([]*types.Run, 0, 1)
 		for _, wf := range workflows {
 			if wf.ID == o.workflowID {
 				filtered = append(filtered, wf)
@@ -279,7 +279,7 @@ func (o *Orchestrator) tick(ctx context.Context) error {
 		if err := o.processWorkflow(ctx, wf); err != nil {
 			return err
 		}
-		if wf.Status == types.WorkflowStatusRunning {
+		if wf.Status == types.RunStatusRunning {
 			allComplete = false
 		}
 	}
@@ -291,7 +291,7 @@ func (o *Orchestrator) tick(ctx context.Context) error {
 }
 
 // processWorkflow processes a single workflow, dispatching all ready steps.
-func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) error {
+func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error {
 	// Lock to coordinate with async handlers (handleStepDone, handleKill goroutines)
 	o.wfMu.Lock()
 	defer o.wfMu.Unlock()
@@ -319,9 +319,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 	if len(readySteps) == 0 {
 		if wf.AllDone() {
 			// Determine final status
-			finalStatus := types.WorkflowStatusDone
+			finalStatus := types.RunStatusDone
 			if wf.HasFailed() {
-				finalStatus = types.WorkflowStatusFailed
+				finalStatus = types.RunStatusFailed
 			}
 
 			// Check if cleanup is defined for this trigger (opt-in cleanup)
@@ -339,7 +339,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Workflow) 
 
 			// No cleanup defined for this trigger - set terminal status directly
 			// State/agents are preserved (opt-in cleanup design)
-			if finalStatus == types.WorkflowStatusFailed {
+			if finalStatus == types.RunStatusFailed {
 				wf.Fail()
 				o.logger.Info("workflow failed (no cleanup defined)", "id", wf.ID)
 			} else {
@@ -463,7 +463,7 @@ func stepStatusRank(status types.StepStatus) int {
 
 // dispatch routes a step to the appropriate executor handler.
 // IMPORTANT: Exactly 6 executors. Gate is NOT an executor.
-func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Run, step *types.Step) error {
 	o.logger.Info("dispatching step", "id", step.ID, "executor", step.Executor)
 
 	// Resolve any deferred step output references before executing
@@ -496,7 +496,7 @@ var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_.-]+)\.outputs\.(
 
 // resolveStepOutputRefs substitutes {{step.outputs.field}} references with actual values
 // from completed steps in the workflow.
-func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Step) {
+func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 	// Build a resolver function
 	resolve := func(s string) string {
 		return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
@@ -740,7 +740,7 @@ const CleanupTimeout = 60 * time.Second
 // checkStepTimeouts checks for timed-out agent steps and handles timeout enforcement.
 // Per MVP-SPEC-v2: send C-c, wait 10 seconds, then mark as failed.
 // Returns true if any step state was modified (requires save).
-func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow) bool {
+func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Run) bool {
 	modified := false
 	for _, step := range wf.Steps {
 		if step.Status != types.StepStatusRunning {
@@ -818,7 +818,7 @@ func (o *Orchestrator) checkStepTimeouts(ctx context.Context, wf *types.Workflow
 // checkBlockedSteps marks pending steps as skipped if they have failed dependencies.
 // A step is blocked if any of its dependencies has failed (and that dependency doesn't have on_error=continue).
 // Returns true if any step was modified.
-func (o *Orchestrator) checkBlockedSteps(wf *types.Workflow) bool {
+func (o *Orchestrator) checkBlockedSteps(wf *types.Run) bool {
 	modified := false
 	for _, step := range wf.Steps {
 		if step.Status != types.StepStatusPending {
@@ -866,7 +866,7 @@ func (o *Orchestrator) checkBlockedSteps(wf *types.Workflow) bool {
 
 // checkForeachCompletion checks for foreach steps with implicit join that are ready to complete.
 // When join=true (default) and all child steps are done, the foreach step is marked done.
-func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
+func (o *Orchestrator) checkForeachCompletion(wf *types.Run) {
 	for _, step := range wf.Steps {
 		// Only check running foreach steps with join=true
 		if step.Status != types.StepStatusRunning {
@@ -910,7 +910,7 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Workflow) {
 // children to complete. When all children are done, the branch step is marked done.
 // This is analogous to checkForeachCompletion for foreach steps.
 // Returns true if any step was modified.
-func (o *Orchestrator) checkBranchCompletion(wf *types.Workflow) bool {
+func (o *Orchestrator) checkBranchCompletion(wf *types.Run) bool {
 	modified := false
 	for _, step := range wf.Steps {
 		// Only check running branch steps with expanded children
@@ -1001,7 +1001,7 @@ func IsBranchFailed(branchStep *types.Step, allSteps map[string]*types.Step) boo
 // 2. The number of currently running iterations >= max_concurrent
 //
 // This enables fair scheduling of foreach iterations without spawning all at once.
-func (o *Orchestrator) isForeachThrottled(wf *types.Workflow, step *types.Step) bool {
+func (o *Orchestrator) isForeachThrottled(wf *types.Run, step *types.Step) bool {
 	// Step must have been expanded from a parent step
 	if step.ExpandedFrom == "" {
 		return false
@@ -1055,7 +1055,7 @@ func (o *Orchestrator) isForeachThrottled(wf *types.Workflow, step *types.Step) 
 // 4. Execute cleanup script (60 second timeout)
 // 5. Set final status
 // 6. Persist final state
-func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reason types.WorkflowStatus) error {
+func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Run, reason types.RunStatus) error {
 	cleanupScript := wf.GetCleanupScript(reason)
 	o.logger.Info("starting workflow cleanup",
 		"workflow", wf.ID,
@@ -1105,7 +1105,7 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Workflow, reaso
 }
 
 // runCleanupScript executes a cleanup script with timeout.
-func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Workflow, script string) error {
+func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Run, script string) error {
 	if script == "" {
 		return nil
 	}
@@ -1164,12 +1164,12 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 	o.logger.Info("starting crash recovery")
 
 	// Load all running and cleaning_up workflows
-	runningWorkflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusRunning})
+	runningWorkflows, err := o.store.List(ctx, RunFilter{Status: types.RunStatusRunning})
 	if err != nil {
 		return fmt.Errorf("listing running workflows: %w", err)
 	}
 
-	cleaningUpWorkflows, err := o.store.List(ctx, WorkflowFilter{Status: types.WorkflowStatusCleaningUp})
+	cleaningUpWorkflows, err := o.store.List(ctx, RunFilter{Status: types.RunStatusCleaningUp})
 	if err != nil {
 		return fmt.Errorf("listing cleaning_up workflows: %w", err)
 	}
@@ -1314,7 +1314,7 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 }
 
 // resumeCleanup continues cleanup for a workflow that was in cleaning_up state when crash occurred.
-func (o *Orchestrator) resumeCleanup(ctx context.Context, wf *types.Workflow) error {
+func (o *Orchestrator) resumeCleanup(ctx context.Context, wf *types.Run) error {
 	// Kill any remaining agents (some may have survived the crash)
 	if o.agents != nil {
 		if err := o.agents.KillAll(ctx, wf); err != nil {
@@ -1461,7 +1461,7 @@ func (o *Orchestrator) completeBranchCondition(
 
 // handleShell executes a shell command.
 // Shell is syntactic sugar over branch - this converts the config and delegates.
-func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Shell == nil {
 		return fmt.Errorf("shell step %s missing config", step.ID)
 	}
@@ -1484,7 +1484,7 @@ func (o *Orchestrator) handleShell(ctx context.Context, wf *types.Workflow, step
 }
 
 // handleSpawn starts an agent in a tmux session.
-func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Spawn == nil {
 		return fmt.Errorf("spawn step %s missing config", step.ID)
 	}
@@ -1510,7 +1510,7 @@ func (o *Orchestrator) handleSpawn(ctx context.Context, wf *types.Workflow, step
 
 // handleKill stops an agent's tmux session.
 // Runs asynchronously to avoid blocking parallel step dispatch.
-func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Kill == nil {
 		return fmt.Errorf("kill step %s missing config", step.ID)
 	}
@@ -1577,7 +1577,7 @@ func (o *Orchestrator) handleKill(ctx context.Context, wf *types.Workflow, step 
 }
 
 // handleExpand inlines another workflow template.
-func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Expand == nil {
 		return fmt.Errorf("expand step %s missing config", step.ID)
 	}
@@ -1601,7 +1601,7 @@ func (o *Orchestrator) handleExpand(ctx context.Context, wf *types.Workflow, ste
 }
 
 // handleForeach expands a template for each item in a list.
-func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Foreach == nil {
 		return fmt.Errorf("foreach step %s missing config", step.ID)
 	}
@@ -1672,7 +1672,7 @@ func (o *Orchestrator) handleForeach(ctx context.Context, wf *types.Workflow, st
 
 // handleBranch evaluates a condition and expands the appropriate branch.
 // Launches condition execution asynchronously and returns immediately.
-func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Branch == nil {
 		return fmt.Errorf("branch step %s missing config", step.ID)
 	}
@@ -1824,7 +1824,7 @@ func (o *Orchestrator) cancelPendingCommands() {
 }
 
 // expandBranchTarget expands a branch target (template or inline steps).
-func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Workflow, step *types.Step, target *types.BranchTarget) error {
+func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Run, step *types.Step, target *types.BranchTarget) error {
 	if target.Template != "" {
 		// Create a temporary expand step to reuse the expander
 		// Copy SourceModule from branch step so nested local refs resolve correctly
@@ -1907,7 +1907,7 @@ func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Workflo
 }
 
 // resolveOutputRefs resolves {{step.outputs.field}} references in a string.
-func (o *Orchestrator) resolveOutputRefs(wf *types.Workflow, s string) string {
+func (o *Orchestrator) resolveOutputRefs(wf *types.Run, s string) string {
 	return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
 		parts := stepOutputRefPattern.FindStringSubmatch(match)
 		if len(parts) != 3 {
@@ -1940,7 +1940,7 @@ func (o *Orchestrator) resolveOutputRefs(wf *types.Workflow, s string) string {
 }
 
 // handleAgent injects a prompt into an agent.
-func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Workflow, step *types.Step) error {
+func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *types.Step) error {
 	if step.Agent == nil {
 		return fmt.Errorf("agent step %s missing config", step.ID)
 	}

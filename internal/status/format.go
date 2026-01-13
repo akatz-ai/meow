@@ -275,42 +275,42 @@ func formatWorkflowListItem(summary *WorkflowSummary, opts FormatOptions) string
 
 // Formatting helpers
 
-func getStatusIcon(status types.WorkflowStatus, noColor bool) string {
+func getStatusIcon(status types.RunStatus, noColor bool) string {
 	switch status {
-	case types.WorkflowStatusRunning:
+	case types.RunStatusRunning:
 		return "●"
-	case types.WorkflowStatusDone:
+	case types.RunStatusDone:
 		return "✓"
-	case types.WorkflowStatusFailed:
+	case types.RunStatusFailed:
 		return "✗"
-	case types.WorkflowStatusStopped:
+	case types.RunStatusStopped:
 		return "■"
-	case types.WorkflowStatusPending:
+	case types.RunStatusPending:
 		return "○"
-	case types.WorkflowStatusCleaningUp:
+	case types.RunStatusCleaningUp:
 		return "◐"
 	default:
 		return "?"
 	}
 }
 
-func getStatusColor(status types.WorkflowStatus, noColor bool) string {
+func getStatusColor(status types.RunStatus, noColor bool) string {
 	if noColor {
 		return ""
 	}
 
 	switch status {
-	case types.WorkflowStatusRunning:
+	case types.RunStatusRunning:
 		return "\033[33m" // Yellow
-	case types.WorkflowStatusDone:
+	case types.RunStatusDone:
 		return "\033[32m" // Green
-	case types.WorkflowStatusFailed:
+	case types.RunStatusFailed:
 		return "\033[31m" // Red
-	case types.WorkflowStatusStopped:
+	case types.RunStatusStopped:
 		return "\033[90m" // Gray
-	case types.WorkflowStatusPending:
+	case types.RunStatusPending:
 		return "\033[90m" // Gray
-	case types.WorkflowStatusCleaningUp:
+	case types.RunStatusCleaningUp:
 		return "\033[36m" // Cyan
 	default:
 		return ""

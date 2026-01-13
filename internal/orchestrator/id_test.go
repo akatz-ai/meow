@@ -6,41 +6,41 @@ import (
 	"testing"
 )
 
-func TestGenerateWorkflowID(t *testing.T) {
-	t.Run("format matches wf-{hex}-{hex}", func(t *testing.T) {
-		id := GenerateWorkflowID()
+func TestGenerateRunID(t *testing.T) {
+	t.Run("format matches run-{hex}-{hex}", func(t *testing.T) {
+		id := GenerateRunID()
 
-		// Should start with "wf-"
-		if !strings.HasPrefix(id, "wf-") {
-			t.Errorf("workflow ID should start with 'wf-', got %s", id)
+		// Should start with "run-"
+		if !strings.HasPrefix(id, "run-") {
+			t.Errorf("run ID should start with 'run-', got %s", id)
 		}
 
 		// Should match expected pattern
-		pattern := regexp.MustCompile(`^wf-[0-9a-f]+-[0-9a-f]{8}$`)
+		pattern := regexp.MustCompile(`^run-[0-9a-f]+-[0-9a-f]{8}$`)
 		if !pattern.MatchString(id) {
-			t.Errorf("workflow ID should match pattern 'wf-{hex}-{8hex}', got %s", id)
+			t.Errorf("run ID should match pattern 'run-{hex}-{8hex}', got %s", id)
 		}
 	})
 
 	t.Run("generates unique IDs", func(t *testing.T) {
 		seen := make(map[string]bool)
 		for i := 0; i < 1000; i++ {
-			id := GenerateWorkflowID()
+			id := GenerateRunID()
 			if seen[id] {
-				t.Errorf("duplicate workflow ID generated: %s", id)
+				t.Errorf("duplicate run ID generated: %s", id)
 			}
 			seen[id] = true
 		}
 	})
 
 	t.Run("is filesystem safe", func(t *testing.T) {
-		id := GenerateWorkflowID()
+		id := GenerateRunID()
 
 		// Check for unsafe characters
 		unsafeChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " "}
 		for _, char := range unsafeChars {
 			if strings.Contains(id, char) {
-				t.Errorf("workflow ID contains unsafe character %q: %s", char, id)
+				t.Errorf("run ID contains unsafe character %q: %s", char, id)
 			}
 		}
 	})
