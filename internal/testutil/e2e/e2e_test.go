@@ -576,8 +576,8 @@ command = "echo 'done'"
 		t.Skip("could not determine workflow ID from output")
 	}
 
-	// The meow CLI currently uses its own default state dir (.meow/workflows/)
-	// rather than the harness state dir. Check if workflow completed via output.
+	// The meow CLI currently uses its own default runs dir (.meow/runs/)
+	// rather than the harness runs dir. Check if workflow completed via output.
 	if !strings.Contains(stderr, "workflow completed") {
 		t.Errorf("expected workflow to complete")
 	}

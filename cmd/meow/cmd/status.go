@@ -85,10 +85,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	workflowsDir := filepath.Join(".meow", "workflows")
+	runsDir := filepath.Join(".meow", "runs")
 
-	// Create workflow store
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	// Create run store
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		return fmt.Errorf("creating workflow store: %w", err)
 	}

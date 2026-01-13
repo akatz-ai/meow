@@ -11,33 +11,37 @@ import (
 )
 
 // NewFromConfig creates a new slog.Logger based on configuration.
+// Per-run logs should be created separately using NewForRun.
 func NewFromConfig(cfg *config.Config, baseDir string) (*slog.Logger, io.Closer, error) {
 	level := parseLevel(cfg.Logging.Level)
 	handler := newHandler(cfg.Logging.Format, os.Stderr, level)
+	return slog.New(handler), nil, nil
+}
 
-	// If a file is configured, use a multi-writer
-	var closer io.Closer
-	if cfg.Logging.File != "" {
-		logPath := cfg.LogFile(baseDir)
+// NewForRun creates a logger for a specific run that writes to both stderr and a run-specific log file.
+func NewForRun(cfg *config.Config, baseDir, runID string) (*slog.Logger, io.Closer, error) {
+	level := parseLevel(cfg.Logging.Level)
 
-		// Ensure directory exists
-		if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-			return nil, nil, err
-		}
+	// Create log file path in logs directory
+	logsDir := cfg.LogsDir(baseDir)
+	logPath := filepath.Join(logsDir, runID+".log")
 
-		// Open log file with append mode
-		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil, nil, err
-		}
-		closer = file
-
-		// Create multi-writer for both stderr and file
-		multi := io.MultiWriter(os.Stderr, file)
-		handler = newHandler(cfg.Logging.Format, multi, level)
+	// Ensure directory exists
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return nil, nil, err
 	}
 
-	return slog.New(handler), closer, nil
+	// Open log file with append mode
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Create multi-writer for both stderr and file
+	multi := io.MultiWriter(os.Stderr, file)
+	handler := newHandler(cfg.Logging.Format, multi, level)
+
+	return slog.New(handler), file, nil
 }
 
 // NewDefault creates a default logger writing to stderr.

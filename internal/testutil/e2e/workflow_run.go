@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -294,9 +293,8 @@ func CreateTestWorkflow(h *Harness, id string, steps map[string]*types.Step) (*W
 		}
 	}
 
-	// Ensure workflows directory exists
-	dir := filepath.Join(h.StateDir, "workflows")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Ensure runs directory exists
+	if err := os.MkdirAll(h.RunsDir, 0755); err != nil {
 		return nil, err
 	}
 

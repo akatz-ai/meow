@@ -51,7 +51,8 @@ version = "2"
 [paths]
 template_dir = "custom/templates"
 beads_dir = "custom/beads"
-state_dir = "custom/state"
+runs_dir = "custom/runs"
+logs_dir = "custom/logs"
 
 [defaults]
 agent = "claude-custom"
@@ -67,7 +68,6 @@ ephemeral = "manual"
 [logging]
 level = "debug"
 format = "text"
-file = "custom.log"
 `
 
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -346,11 +346,11 @@ func TestConfig_PathHelpers(t *testing.T) {
 	if got := cfg.BeadsDir(baseDir); got != "/project/.beads" {
 		t.Errorf("BeadsDir = %s, want /project/.beads", got)
 	}
-	if got := cfg.StateDir(baseDir); got != "/project/.meow/state" {
-		t.Errorf("StateDir = %s, want /project/.meow/state", got)
+	if got := cfg.RunsDir(baseDir); got != "/project/.meow/runs" {
+		t.Errorf("RunsDir = %s, want /project/.meow/runs", got)
 	}
-	if got := cfg.LogFile(baseDir); got != "/project/.meow/state/meow.log" {
-		t.Errorf("LogFile = %s, want /project/.meow/state/meow.log", got)
+	if got := cfg.LogsDir(baseDir); got != "/project/.meow/logs" {
+		t.Errorf("LogsDir = %s, want /project/.meow/logs", got)
 	}
 
 	// Test with absolute paths for all helpers
@@ -364,13 +364,13 @@ func TestConfig_PathHelpers(t *testing.T) {
 		t.Errorf("BeadsDir (abs) = %s, want /absolute/beads", got)
 	}
 
-	cfg.Paths.StateDir = "/absolute/state"
-	if got := cfg.StateDir(baseDir); got != "/absolute/state" {
-		t.Errorf("StateDir (abs) = %s, want /absolute/state", got)
+	cfg.Paths.RunsDir = "/absolute/runs"
+	if got := cfg.RunsDir(baseDir); got != "/absolute/runs" {
+		t.Errorf("RunsDir (abs) = %s, want /absolute/runs", got)
 	}
 
-	cfg.Logging.File = "/absolute/meow.log"
-	if got := cfg.LogFile(baseDir); got != "/absolute/meow.log" {
-		t.Errorf("LogFile (abs) = %s, want /absolute/meow.log", got)
+	cfg.Paths.LogsDir = "/absolute/logs"
+	if got := cfg.LogsDir(baseDir); got != "/absolute/logs" {
+		t.Errorf("LogsDir (abs) = %s, want /absolute/logs", got)
 	}
 }

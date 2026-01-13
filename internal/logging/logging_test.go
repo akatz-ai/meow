@@ -33,22 +33,24 @@ func TestNewFromConfig_DefaultsToStderr(t *testing.T) {
 	}
 }
 
-func TestNewFromConfig_WithFile(t *testing.T) {
+func TestNewForRun(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{
+		Paths: config.PathsConfig{
+			LogsDir: filepath.Join(dir, "logs"),
+		},
 		Logging: config.LoggingConfig{
 			Level:  config.LogLevelDebug,
 			Format: config.LogFormatJSON,
-			File:   "logs/meow.log",
 		},
 	}
 
-	logger, closer, err := NewFromConfig(cfg, dir)
+	logger, closer, err := NewForRun(cfg, dir, "run-123")
 	if err != nil {
-		t.Fatalf("NewFromConfig failed: %v", err)
+		t.Fatalf("NewForRun failed: %v", err)
 	}
 	if closer == nil {
-		t.Fatal("Expected closer when file configured")
+		t.Fatal("Expected closer for run log")
 	}
 	defer closer.Close()
 
@@ -56,7 +58,7 @@ func TestNewFromConfig_WithFile(t *testing.T) {
 	logger.Info("test message", "key", "value")
 
 	// Verify file was created and contains log
-	logPath := filepath.Join(dir, "logs", "meow.log")
+	logPath := filepath.Join(dir, "logs", "run-123.log")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("Failed to read log file: %v", err)
@@ -67,19 +69,22 @@ func TestNewFromConfig_WithFile(t *testing.T) {
 	}
 }
 
-func TestNewFromConfig_CreatesDirectory(t *testing.T) {
+func TestNewForRun_CreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
+	logsDir := filepath.Join(dir, "nested", "deep", "logs")
 	cfg := &config.Config{
+		Paths: config.PathsConfig{
+			LogsDir: logsDir,
+		},
 		Logging: config.LoggingConfig{
 			Level:  config.LogLevelInfo,
 			Format: config.LogFormatJSON,
-			File:   "nested/deep/logs/meow.log",
 		},
 	}
 
-	logger, closer, err := NewFromConfig(cfg, dir)
+	logger, closer, err := NewForRun(cfg, dir, "run-456")
 	if err != nil {
-		t.Fatalf("NewFromConfig failed: %v", err)
+		t.Fatalf("NewForRun failed: %v", err)
 	}
 	if closer != nil {
 		closer.Close()
@@ -89,8 +94,7 @@ func TestNewFromConfig_CreatesDirectory(t *testing.T) {
 	}
 
 	// Verify directory was created
-	logDir := filepath.Join(dir, "nested", "deep", "logs")
-	info, err := os.Stat(logDir)
+	info, err := os.Stat(logsDir)
 	if err != nil {
 		t.Fatalf("Directory not created: %v", err)
 	}

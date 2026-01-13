@@ -52,21 +52,19 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Determine workflows directory - check MEOW_STATE_DIR env var first (used by E2E tests),
-	// then fall back to default .meow/workflows
-	workflowsDir := os.Getenv("MEOW_STATE_DIR")
-	if workflowsDir != "" {
-		workflowsDir = filepath.Join(workflowsDir, "workflows")
-	} else {
-		workflowsDir = filepath.Join(dir, ".meow", "workflows")
+	// Determine runs directory - check MEOW_RUNS_DIR env var first (used by E2E tests),
+	// then fall back to default .meow/runs
+	runsDir := os.Getenv("MEOW_RUNS_DIR")
+	if runsDir == "" {
+		runsDir = filepath.Join(dir, ".meow", "runs")
 	}
 
-	if _, err := os.Stat(workflowsDir); os.IsNotExist(err) {
-		return fmt.Errorf("workflows directory not found: %s", workflowsDir)
+	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
+		return fmt.Errorf("runs directory not found: %s", runsDir)
 	}
 
-	// Create workflow store
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	// Create run store
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}

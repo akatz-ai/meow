@@ -34,10 +34,10 @@ func (l *WorkflowLock) Release() error {
 	return err
 }
 
-// YAMLRunStore persists workflows as YAML files with atomic writes.
-// Multiple stores can be created for the same directory - locking is per-workflow.
+// YAMLRunStore persists runs as YAML files with atomic writes.
+// Multiple stores can be created for the same directory - locking is per-run.
 type YAMLRunStore struct {
-	dir string // .meow/workflows
+	dir string // .meow/runs
 }
 
 // NewYAMLRunStore creates a new store.

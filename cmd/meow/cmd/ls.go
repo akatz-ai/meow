@@ -25,10 +25,10 @@ var (
 var lsCmd = &cobra.Command{
 	Use:   "ls",
 	Short: "List workflows in this project",
-	Long: `List workflows in the .meow/workflows directory.
+	Long: `List runs in the .meow/runs directory.
 
-By default, shows only actively running workflows (lock held by orchestrator).
-Use --all to see all workflows, or --status to filter by status.
+By default, shows only actively running runs (lock held by orchestrator).
+Use --all to see all runs, or --status to filter by status.
 
 Examples:
   meow ls              # Active workflows only
@@ -56,14 +56,14 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	workflowsDir := filepath.Join(dir, ".meow", "workflows")
+	runsDir := filepath.Join(dir, ".meow", "runs")
 
-	if _, err := os.Stat(workflowsDir); os.IsNotExist(err) {
-		fmt.Println("No workflows found")
+	if _, err := os.Stat(runsDir); os.IsNotExist(err) {
+		fmt.Println("No runs found")
 		return nil
 	}
 
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}

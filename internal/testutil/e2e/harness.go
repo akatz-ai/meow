@@ -28,8 +28,11 @@ type Harness struct {
 	// TmuxSocket is the path to the isolated tmux socket.
 	TmuxSocket string
 
-	// StateDir is where workflow state files are stored.
-	StateDir string
+	// RunsDir is where run state files are stored.
+	RunsDir string
+
+	// LogsDir is where per-run log files are stored.
+	LogsDir string
 
 	// TemplateDir is where workflow templates are stored.
 	TemplateDir string
@@ -60,7 +63,8 @@ func NewHarness(t *testing.T) *Harness {
 	h := &Harness{
 		TempDir:       tempDir,
 		TmuxSocket:    tmuxSocket,
-		StateDir:      filepath.Join(tempDir, ".meow", "state"),
+		RunsDir:       filepath.Join(tempDir, ".meow", "runs"),
+		LogsDir:       filepath.Join(tempDir, ".meow", "logs"),
 		TemplateDir:   filepath.Join(tempDir, ".meow", "templates"),
 		AdapterDir:    filepath.Join(tempDir, ".meow", "adapters"),
 		SimConfigPath: filepath.Join(tempDir, "sim-config.yaml"),
@@ -69,7 +73,8 @@ func NewHarness(t *testing.T) *Harness {
 
 	// Create directory structure
 	dirs := []string{
-		h.StateDir,
+		h.RunsDir,
+		h.LogsDir,
 		h.TemplateDir,
 		h.AdapterDir,
 		filepath.Join(h.AdapterDir, "claude"),
@@ -116,7 +121,8 @@ wait = "200ms"
 [paths]
 template_dir = ".meow/templates"
 beads_dir = ".beads"
-state_dir = ".meow/state"
+runs_dir = ".meow/runs"
+logs_dir = ".meow/logs"
 
 [agent]
 default_adapter = "claude"
@@ -139,7 +145,8 @@ default_adapter = "claude"
 func (h *Harness) createConfig() *config.Config {
 	cfg := config.Default()
 	cfg.Paths.TemplateDir = h.TemplateDir
-	cfg.Paths.StateDir = h.StateDir
+	cfg.Paths.RunsDir = h.RunsDir
+	cfg.Paths.LogsDir = h.LogsDir
 	cfg.Agent.DefaultAdapter = "claude"
 	cfg.Logging.Level = config.LogLevelDebug
 	return cfg
@@ -210,7 +217,7 @@ func (h *Harness) WriteAdapterConfig(name, content string) error {
 func (h *Harness) Env() []string {
 	env := os.Environ()
 	env = append(env,
-		fmt.Sprintf("MEOW_STATE_DIR=%s", h.StateDir),
+		fmt.Sprintf("MEOW_RUNS_DIR=%s", h.RunsDir),
 		fmt.Sprintf("MEOW_TEMPLATE_DIR=%s", h.TemplateDir),
 		fmt.Sprintf("MEOW_ADAPTER_DIR=%s", h.AdapterDir),
 		fmt.Sprintf("MEOW_SIM_CONFIG=%s", h.SimConfigPath),
@@ -235,7 +242,7 @@ func (h *Harness) RunWorkflow(templatePath string) (*WorkflowRun, error) {
 
 // LoadWorkflow loads an existing workflow from state.
 func (h *Harness) LoadWorkflow(id string) (*types.Run, error) {
-	path := filepath.Join(h.StateDir, "workflows", id+".yaml")
+	path := filepath.Join(h.RunsDir, id+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read workflow: %w", err)
@@ -249,15 +256,14 @@ func (h *Harness) LoadWorkflow(id string) (*types.Run, error) {
 
 // SaveWorkflow saves a workflow to state.
 func (h *Harness) SaveWorkflow(wf *types.Run) error {
-	dir := filepath.Join(h.StateDir, "workflows")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(h.RunsDir, 0755); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(wf)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, wf.ID+".yaml"), data, 0644)
+	return os.WriteFile(filepath.Join(h.RunsDir, wf.ID+".yaml"), data, 0644)
 }
 
 // TmuxNewSession creates a new tmux session using the harness socket.

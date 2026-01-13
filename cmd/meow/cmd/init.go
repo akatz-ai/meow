@@ -64,7 +64,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Create directory structure
 	dirs := []string{
 		filepath.Join(meowDir, "templates"),
-		filepath.Join(meowDir, "state"),
+		filepath.Join(meowDir, "runs"),
+		filepath.Join(meowDir, "logs"),
 		filepath.Join(meowDir, "adapters"),
 	}
 
@@ -81,8 +82,8 @@ version = "1"
 
 [paths]
 template_dir = ".meow/templates"
-beads_dir = ".beads"
-state_dir = ".meow/state"
+runs_dir = ".meow/runs"
+logs_dir = ".meow/logs"
 
 [defaults]
 agent = "claude-1"
@@ -98,7 +99,6 @@ ephemeral = "on_complete"
 [logging]
 level = "info"
 format = "json"
-file = ".meow/state/meow.log"
 
 [agent]
 # setup_hooks controls whether spawned agents get .claude/settings.json with MEOW hooks.
@@ -146,8 +146,8 @@ default_adapter = "claude"
 	fmt.Println("  .meow/config.toml    - configuration")
 	fmt.Println("  .meow/templates/     - workflow templates")
 	fmt.Println("  .meow/adapters/      - adapter configs")
-	fmt.Println("  .meow/state/         - runtime state")
-	fmt.Println("  .beads/              - bead storage")
+	fmt.Println("  .meow/runs/          - run state files")
+	fmt.Println("  .meow/logs/          - per-run log files")
 	if hooksCreated {
 		fmt.Println("  .claude/settings.json - Claude Code hooks")
 	}

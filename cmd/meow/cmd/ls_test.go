@@ -25,9 +25,9 @@ func resetLsFlags() {
 func TestLsNoWorkflows(t *testing.T) {
 	// Create temp directory with .meow structure
 	tmpDir := t.TempDir()
-	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		t.Fatalf("failed to create workflows dir: %v", err)
+	runsDir := filepath.Join(tmpDir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		t.Fatalf("failed to create runs dir: %v", err)
 	}
 
 	// Change to temp directory
@@ -64,13 +64,13 @@ func TestLsNoWorkflows(t *testing.T) {
 
 func TestLsWorkflowsSortedByDate(t *testing.T) {
 	tmpDir := t.TempDir()
-	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		t.Fatalf("failed to create workflows dir: %v", err)
+	runsDir := filepath.Join(tmpDir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		t.Fatalf("failed to create runs dir: %v", err)
 	}
 
 	// Create workflows with different timestamps
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -157,12 +157,12 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 
 func TestLsStatusFlag(t *testing.T) {
 	tmpDir := t.TempDir()
-	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		t.Fatalf("failed to create workflows dir: %v", err)
+	runsDir := filepath.Join(tmpDir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		t.Fatalf("failed to create runs dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -216,12 +216,12 @@ func TestLsStatusFlag(t *testing.T) {
 
 func TestLsJSONOutput(t *testing.T) {
 	tmpDir := t.TempDir()
-	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		t.Fatalf("failed to create workflows dir: %v", err)
+	runsDir := filepath.Join(tmpDir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		t.Fatalf("failed to create runs dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -277,12 +277,12 @@ func TestLsJSONOutput(t *testing.T) {
 
 func TestLsStaleDetection(t *testing.T) {
 	tmpDir := t.TempDir()
-	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		t.Fatalf("failed to create workflows dir: %v", err)
+	runsDir := filepath.Join(tmpDir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		t.Fatalf("failed to create runs dir: %v", err)
 	}
 
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}

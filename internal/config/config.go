@@ -52,7 +52,8 @@ type AgentConfig struct {
 type PathsConfig struct {
 	TemplateDir string `toml:"template_dir"`
 	BeadsDir    string `toml:"beads_dir"`
-	StateDir    string `toml:"state_dir"`
+	RunsDir     string `toml:"runs_dir"`
+	LogsDir     string `toml:"logs_dir"`
 }
 
 // DefaultsConfig holds default values.
@@ -98,7 +99,8 @@ func Default() *Config {
 		Paths: PathsConfig{
 			TemplateDir: ".meow/templates",
 			BeadsDir:    ".beads",
-			StateDir:    ".meow/state",
+			RunsDir:     ".meow/runs",
+			LogsDir:     ".meow/logs",
 		},
 		Defaults: DefaultsConfig{
 			Agent:            "claude-1",
@@ -115,7 +117,7 @@ func Default() *Config {
 		Logging: LoggingConfig{
 			Level:  LogLevelInfo,
 			Format: LogFormatJSON,
-			File:   ".meow/state/meow.log",
+			File:   "", // Per-run logs in .meow/logs/<run-id>.log
 		},
 		Agent: AgentConfig{
 			DefaultAdapter: "",
@@ -204,18 +206,18 @@ func (c *Config) BeadsDir(baseDir string) string {
 	return filepath.Join(baseDir, c.Paths.BeadsDir)
 }
 
-// StateDir returns the absolute state directory path.
-func (c *Config) StateDir(baseDir string) string {
-	if filepath.IsAbs(c.Paths.StateDir) {
-		return c.Paths.StateDir
+// RunsDir returns the absolute runs directory path.
+func (c *Config) RunsDir(baseDir string) string {
+	if filepath.IsAbs(c.Paths.RunsDir) {
+		return c.Paths.RunsDir
 	}
-	return filepath.Join(baseDir, c.Paths.StateDir)
+	return filepath.Join(baseDir, c.Paths.RunsDir)
 }
 
-// LogFile returns the absolute log file path.
-func (c *Config) LogFile(baseDir string) string {
-	if filepath.IsAbs(c.Logging.File) {
-		return c.Logging.File
+// LogsDir returns the absolute logs directory path.
+func (c *Config) LogsDir(baseDir string) string {
+	if filepath.IsAbs(c.Paths.LogsDir) {
+		return c.Paths.LogsDir
 	}
-	return filepath.Join(baseDir, c.Logging.File)
+	return filepath.Join(baseDir, c.Paths.LogsDir)
 }

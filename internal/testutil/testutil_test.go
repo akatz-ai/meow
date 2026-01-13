@@ -45,8 +45,11 @@ func TestNewTestConfig(t *testing.T) {
 	if _, err := os.Stat(cfg.Paths.BeadsDir); os.IsNotExist(err) {
 		t.Error("Beads directory should exist")
 	}
-	if _, err := os.Stat(cfg.Paths.StateDir); os.IsNotExist(err) {
-		t.Error("State directory should exist")
+	if _, err := os.Stat(cfg.Paths.RunsDir); os.IsNotExist(err) {
+		t.Error("Runs directory should exist")
+	}
+	if _, err := os.Stat(cfg.Paths.LogsDir); os.IsNotExist(err) {
+		t.Error("Logs directory should exist")
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -80,7 +83,8 @@ func TestNewTestWorkspace(t *testing.T) {
 	requiredDirs := []string{
 		".meow",
 		".meow/templates",
-		".meow/state",
+		".meow/runs",
+		".meow/logs",
 		".beads",
 	}
 	for _, dir := range requiredDirs {

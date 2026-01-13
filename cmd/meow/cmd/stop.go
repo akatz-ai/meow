@@ -36,8 +36,8 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	workflowsDir := filepath.Join(dir, ".meow", "workflows")
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	runsDir := filepath.Join(dir, ".meow", "runs")
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}

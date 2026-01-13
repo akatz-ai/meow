@@ -43,7 +43,7 @@ func runTrace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	tracePath := dir + "/.meow/state/trace.jsonl"
+	tracePath := dir + "/.meow/logs/trace.jsonl"
 
 	// Check if trace file exists
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {

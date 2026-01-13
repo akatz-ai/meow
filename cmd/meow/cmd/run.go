@@ -26,7 +26,7 @@ var runCmd = &cobra.Command{
 	Long: `Start a workflow by baking a template into steps and running the orchestrator.
 
 The template is loaded and baked into steps which are persisted in
-.meow/workflows/<id>.yaml. The orchestrator then executes the workflow.
+.meow/runs/<id>.yaml. The orchestrator then executes the run.
 
 Use -d/--detach to run in background mode. The orchestrator will run
 as a daemon and you can use 'meow status' to check progress and
@@ -77,10 +77,10 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Ensure .meow/workflows directory exists
-	workflowsDir := filepath.Join(dir, ".meow", "workflows")
-	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
-		return fmt.Errorf("creating workflows dir: %w", err)
+	// Ensure .meow/runs directory exists
+	runsDir := filepath.Join(dir, ".meow", "runs")
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		return fmt.Errorf("creating runs dir: %w", err)
 	}
 
 	// If template path is not absolute, resolve it
@@ -172,7 +172,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create workflow store
-	store, err := orchestrator.NewYAMLRunStore(workflowsDir)
+	store, err := orchestrator.NewYAMLRunStore(runsDir)
 	if err != nil {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
