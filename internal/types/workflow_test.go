@@ -2,6 +2,8 @@ package types
 
 import (
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestWorkflowStatus(t *testing.T) {
@@ -336,4 +338,80 @@ func TestWorkflowGetRunningStepForAgent(t *testing.T) {
 	if step != nil {
 		t.Error("should not find done step")
 	}
+}
+
+func TestWorkflowOrchestratorPID(t *testing.T) {
+	t.Run("marshals and unmarshals with PID", func(t *testing.T) {
+		wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+		wf.OrchestratorPID = 12345
+
+		// Marshal to YAML
+		data, err := yaml.Marshal(wf)
+		if err != nil {
+			t.Fatalf("failed to marshal: %v", err)
+		}
+
+		// Unmarshal back
+		var wf2 Workflow
+		if err := yaml.Unmarshal(data, &wf2); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+
+		if wf2.OrchestratorPID != 12345 {
+			t.Errorf("OrchestratorPID = %d, want 12345", wf2.OrchestratorPID)
+		}
+	})
+
+	t.Run("omits PID when zero (backwards compatibility)", func(t *testing.T) {
+		wf := NewWorkflow("wf-1", "test.meow.toml", nil)
+		wf.OrchestratorPID = 0
+
+		// Marshal to YAML
+		data, err := yaml.Marshal(wf)
+		if err != nil {
+			t.Fatalf("failed to marshal: %v", err)
+		}
+
+		// Should not contain orchestrator_pid in YAML
+		yamlStr := string(data)
+		if contains(yamlStr, "orchestrator_pid") {
+			t.Error("orchestrator_pid should be omitted when zero")
+		}
+	})
+
+	t.Run("loads legacy workflows without PID field", func(t *testing.T) {
+		// Simulate legacy workflow YAML without orchestrator_pid field
+		legacyYAML := `
+id: wf-legacy
+template: test.meow.toml
+status: running
+started_at: 2024-01-01T00:00:00Z
+steps: {}
+`
+		var wf Workflow
+		if err := yaml.Unmarshal([]byte(legacyYAML), &wf); err != nil {
+			t.Fatalf("failed to unmarshal legacy workflow: %v", err)
+		}
+
+		if wf.OrchestratorPID != 0 {
+			t.Errorf("OrchestratorPID should default to 0, got %d", wf.OrchestratorPID)
+		}
+		if wf.ID != "wf-legacy" {
+			t.Errorf("ID = %s, want wf-legacy", wf.ID)
+		}
+	})
+}
+
+// contains is a helper to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsAt(s, substr))
+}
+
+func containsAt(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

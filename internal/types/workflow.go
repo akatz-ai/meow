@@ -53,6 +53,9 @@ type Workflow struct {
 	StartedAt time.Time      `yaml:"started_at"`
 	DoneAt    *time.Time     `yaml:"done_at,omitempty"`
 
+	// Orchestrator tracking
+	OrchestratorPID int `yaml:"orchestrator_pid,omitempty"` // Process ID of running orchestrator (0 if not running)
+
 	// Configuration
 	Variables      map[string]string `yaml:"variables,omitempty"`
 	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Workflow-level default adapter
