@@ -39,6 +39,7 @@ vendor/
 .meow/workflows/
 .meow/worktrees/
 .meow/test-artifacts/
+.meow/sprints/
 
 # Local branch tracking
 .meow-branch
