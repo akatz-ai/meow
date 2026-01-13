@@ -191,13 +191,21 @@ func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[stri
 			ExpandedFrom: parentID,
 		}
 
-		// Set agent config for agent executor
-		if is.Executor == types.ExecutorAgent {
+		// Populate executor-specific config from inline step fields
+		switch is.Executor {
+		case types.ExecutorShell:
+			newStep.Shell = &types.ShellConfig{
+				Command: is.Command,
+			}
+		case types.ExecutorAgent:
 			newStep.Agent = &types.AgentConfig{
-				Agent:  substituteVars(is.Agent, vars),
-				Prompt: substituteVars(is.Prompt, vars),
+				Agent:  is.Agent,
+				Prompt: is.Prompt,
 			}
 		}
+
+		// Apply variable substitution to all fields
+		substituteStepVariables(newStep, vars)
 
 		// Update dependencies
 		newStep.Needs = prefixNeeds(is.Needs, parentID, inlineStepIDs)
