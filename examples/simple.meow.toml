@@ -1,0 +1,75 @@
+# Simple Single-Agent Workflow
+#
+# The minimal MEOW workflow: spawn an agent, give it a task, verify, clean up.
+#
+# Usage:
+#   meow run simple --var task="Fix the login bug"
+#
+# Variables:
+#   task  - What to work on (required)
+#   agent - Agent name (default: worker)
+
+[main]
+name = "simple"
+description = "Single-agent task workflow"
+
+[main.variables]
+task = { required = true, description = "Task to complete" }
+agent = { default = "worker", description = "Agent name" }
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent}}"
+adapter = "claude"
+
+[[main.steps]]
+id = "work"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["spawn"]
+prompt = """
+# Task
+
+{{task}}
+
+## Instructions
+
+1. Understand the task fully before starting
+2. Make small, incremental changes
+3. Test your changes work correctly
+
+When complete, run:
+```
+meow done
+```
+"""
+
+[[main.steps]]
+id = "verify"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["work"]
+prompt = """
+# Verify
+
+Verify the task was completed correctly:
+
+**Task:** {{task}}
+
+## Checklist
+- [ ] Changes work as expected
+- [ ] No obvious bugs or issues
+- [ ] Code follows project conventions
+
+When verified, run:
+```
+meow done
+```
+"""
+
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["verify"]

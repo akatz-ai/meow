@@ -1,0 +1,279 @@
+# Parallel Workers Workflow
+#
+# Demonstrates multi-agent parallel execution:
+#   1. Parse tasks from a JSON file
+#   2. Spawn parallel workers in isolated worktrees
+#   3. Each worker has a Ralph Wiggum persistence monitor
+#   4. Workers join, then code review validates
+#   5. Integration agent merges to main
+#
+# Usage:
+#   meow run parallel-workers --var tasks_file="tasks.json"
+#
+# Expected tasks.json format:
+#   { "tasks": [{ "id": "1", "desc": "..." }, { "id": "2", "desc": "..." }] }
+#
+# Variables:
+#   tasks_file - Path to JSON file with tasks (required)
+#   base_branch - Branch to create worktrees from (default: main)
+
+[main]
+name = "parallel-workers"
+description = "Multi-agent parallel execution with review and merge"
+
+[main.variables]
+tasks_file = { required = true, description = "Path to JSON tasks file" }
+base_branch = { default = "main", description = "Base branch for worktrees" }
+
+# Parse tasks from JSON
+[[main.steps]]
+id = "parse-tasks"
+executor = "shell"
+command = "jq -r '.tasks[0].desc' {{tasks_file}}"
+
+[main.steps.outputs]
+task1 = { source = "stdout" }
+
+[[main.steps]]
+id = "parse-task2"
+executor = "shell"
+command = "jq -r '.tasks[1].desc' {{tasks_file}}"
+
+[main.steps.outputs]
+task2 = { source = "stdout" }
+
+# Create worktrees for isolation
+[[main.steps]]
+id = "create-wt1"
+executor = "shell"
+command = """
+git worktree add -b meow/worker-1 .meow/worktrees/worker-1 {{base_branch}} 2>/dev/null || true
+echo ".meow/worktrees/worker-1"
+"""
+needs = ["parse-tasks"]
+
+[main.steps.outputs]
+path = { source = "stdout" }
+
+[[main.steps]]
+id = "create-wt2"
+executor = "shell"
+command = """
+git worktree add -b meow/worker-2 .meow/worktrees/worker-2 {{base_branch}} 2>/dev/null || true
+echo ".meow/worktrees/worker-2"
+"""
+needs = ["parse-task2"]
+
+[main.steps.outputs]
+path = { source = "stdout" }
+
+# Spawn workers in parallel
+[[main.steps]]
+id = "spawn-worker-1"
+executor = "spawn"
+agent = "worker-1"
+adapter = "claude"
+workdir = "{{create-wt1.outputs.path}}"
+needs = ["create-wt1"]
+
+[[main.steps]]
+id = "spawn-worker-2"
+executor = "spawn"
+agent = "worker-2"
+adapter = "claude"
+workdir = "{{create-wt2.outputs.path}}"
+needs = ["create-wt2"]
+
+# Worker 1: implement task with persistence monitor
+[[main.steps]]
+id = "work-1"
+executor = "agent"
+agent = "worker-1"
+needs = ["spawn-worker-1"]
+prompt = """
+# Task
+
+{{parse-tasks.outputs.task1}}
+
+## Instructions
+1. Implement the task in this worktree
+2. Commit your changes when done
+3. Run `meow done` to signal completion
+
+```
+meow done
+```
+"""
+
+[[main.steps]]
+id = "monitor-1"
+executor = "expand"
+template = "lib/agent-persistence#monitor"
+needs = ["spawn-worker-1"]
+
+[main.steps.variables]
+agent = "worker-1"
+check_step = "work-1"
+nudge_prompt = "Continue working on your task. Run `meow done` when finished."
+
+# Worker 2: implement task with persistence monitor
+[[main.steps]]
+id = "work-2"
+executor = "agent"
+agent = "worker-2"
+needs = ["spawn-worker-2"]
+prompt = """
+# Task
+
+{{parse-task2.outputs.task2}}
+
+## Instructions
+1. Implement the task in this worktree
+2. Commit your changes when done
+3. Run `meow done` to signal completion
+
+```
+meow done
+```
+"""
+
+[[main.steps]]
+id = "monitor-2"
+executor = "expand"
+template = "lib/agent-persistence#monitor"
+needs = ["spawn-worker-2"]
+
+[main.steps.variables]
+agent = "worker-2"
+check_step = "work-2"
+nudge_prompt = "Continue working on your task. Run `meow done` when finished."
+
+# Kill workers after their tasks complete
+[[main.steps]]
+id = "kill-worker-1"
+executor = "kill"
+agent = "worker-1"
+needs = ["work-1"]
+
+[[main.steps]]
+id = "kill-worker-2"
+executor = "kill"
+agent = "worker-2"
+needs = ["work-2"]
+
+# Code review (JOIN: waits for both workers)
+[[main.steps]]
+id = "spawn-reviewer"
+executor = "spawn"
+agent = "reviewer"
+adapter = "claude"
+needs = ["kill-worker-1", "kill-worker-2"]
+
+[[main.steps]]
+id = "code-review"
+executor = "agent"
+agent = "reviewer"
+needs = ["spawn-reviewer"]
+prompt = """
+# Code Review
+
+Review the changes from both workers:
+
+## Worker 1 (branch: meow/worker-1)
+```
+git log main..meow/worker-1 --oneline
+git diff main..meow/worker-1
+```
+
+## Worker 2 (branch: meow/worker-2)
+```
+git log main..meow/worker-2 --oneline
+git diff main..meow/worker-2
+```
+
+## Checklist
+- [ ] Changes are correct and complete
+- [ ] No conflicts between workers
+- [ ] Code follows project conventions
+- [ ] No security issues
+
+If issues found, note them in your output.
+
+```
+meow done --output approved=true
+```
+
+Or if issues:
+```
+meow done --output approved=false --output issues="description"
+```
+"""
+
+[main.steps.outputs]
+approved = { required = true, type = "boolean" }
+issues = { type = "string" }
+
+[[main.steps]]
+id = "kill-reviewer"
+executor = "kill"
+agent = "reviewer"
+needs = ["code-review"]
+
+# Check review result
+[[main.steps]]
+id = "review-check"
+executor = "branch"
+condition = "test '{{code-review.outputs.approved}}' = 'true'"
+needs = ["kill-reviewer"]
+
+[main.steps.on_true]
+template = ".integrate"
+
+[main.steps.on_false]
+inline = []  # Stop if review failed
+
+# Integration: merge to main
+[integrate]
+internal = true
+
+[[integrate.steps]]
+id = "spawn-integrator"
+executor = "spawn"
+agent = "integrator"
+adapter = "claude"
+
+[[integrate.steps]]
+id = "merge"
+executor = "agent"
+agent = "integrator"
+needs = ["spawn-integrator"]
+prompt = """
+# Integration
+
+Merge both worker branches into main:
+
+## Steps
+1. Checkout main: `git checkout main`
+2. Merge worker-1: `git merge meow/worker-1 -m "Merge worker-1"`
+3. Merge worker-2: `git merge meow/worker-2 -m "Merge worker-2"`
+4. If conflicts, resolve them
+5. Push: `git push`
+
+## Cleanup
+```
+git worktree remove .meow/worktrees/worker-1 --force
+git worktree remove .meow/worktrees/worker-2 --force
+git branch -D meow/worker-1 meow/worker-2
+```
+
+When complete:
+```
+meow done
+```
+"""
+
+[[integrate.steps]]
+id = "kill-integrator"
+executor = "kill"
+agent = "integrator"
+needs = ["merge"]

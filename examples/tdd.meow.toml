@@ -1,0 +1,156 @@
+# Test-Driven Development Workflow
+#
+# Implements the classic red-green-refactor cycle:
+#   1. Write failing tests (RED)
+#   2. Make tests pass (GREEN)
+#   3. Refactor code (REFACTOR)
+#   4. Commit changes
+#
+# Usage:
+#   meow run tdd --var feature="user authentication"
+#
+# Variables:
+#   feature - What to implement (required)
+#   agent   - Agent name (default: worker)
+
+[main]
+name = "tdd"
+description = "Test-driven development workflow"
+
+[main.variables]
+feature = { required = true, description = "Feature to implement" }
+agent = { default = "worker", description = "Agent name" }
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent}}"
+adapter = "claude"
+
+# RED: Write failing tests
+[[main.steps]]
+id = "write-tests"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["spawn"]
+prompt = """
+# RED Phase: Write Failing Tests
+
+Feature: {{feature}}
+
+## Goal
+Write tests that define the expected behavior. Tests should FAIL initially.
+
+## Guidelines
+- Start with the simplest test case
+- One behavior per test
+- Use descriptive test names
+- Cover edge cases and error handling
+
+## Process
+1. Create test file if needed
+2. Write test cases
+3. Run tests - verify they FAIL
+
+When tests are written (and failing), run:
+```
+meow done
+```
+"""
+
+# GREEN: Make tests pass
+[[main.steps]]
+id = "implement"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["write-tests"]
+prompt = """
+# GREEN Phase: Make Tests Pass
+
+Feature: {{feature}}
+
+## Goal
+Write the minimum code to make all tests pass.
+
+## Guidelines
+- Don't over-engineer
+- Follow existing code patterns
+- Keep it simple
+
+## Process
+1. Run tests to see failures
+2. Fix one test at a time
+3. Repeat until all pass
+
+When ALL tests pass, run:
+```
+meow done
+```
+"""
+
+# REFACTOR: Clean up
+[[main.steps]]
+id = "refactor"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["implement"]
+prompt = """
+# REFACTOR Phase: Clean Up
+
+Feature: {{feature}}
+
+## Goal
+Improve code quality without changing behavior.
+
+## Consider
+- Remove duplication
+- Improve naming
+- Simplify logic
+- Extract helpers if needed
+
+## Rules
+- Tests must still pass after each change
+- Make small changes, run tests frequently
+- If unsure, skip it
+
+When done (or nothing to refactor), run:
+```
+meow done
+```
+"""
+
+# Commit the changes
+[[main.steps]]
+id = "commit"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["refactor"]
+prompt = """
+# Commit Changes
+
+Feature: {{feature}}
+
+## Steps
+1. Stage changes: `git add -A`
+2. Review: `git diff --staged`
+3. Commit with a descriptive message
+
+## Format
+```
+feat(<scope>): <short description>
+
+- What was added
+- How it works
+```
+
+When committed, run:
+```
+meow done
+```
+"""
+
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["commit"]

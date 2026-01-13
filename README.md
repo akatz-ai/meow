@@ -100,6 +100,8 @@ meow run .meow/templates/simple.meow.toml --var agent=my-agent
 
 MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
 
+Here's an example workflow that parses tasks from JSON, farms them to parallel agents with persistence loops, then reviews and merges:
+
 ```mermaid
 flowchart TB
     subgraph setup["Setup"]
@@ -142,6 +144,8 @@ flowchart TB
     spawn4 --> merge
     merge --> cleanup
 ```
+
+See the [`examples/`](examples/) directory for ready-to-run workflow templates.
 
 ```
 Templates = Programs (version-controlled .meow.toml files)

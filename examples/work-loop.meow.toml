@@ -1,0 +1,119 @@
+# Work Loop Workflow
+#
+# Iteratively select and complete tasks until none remain.
+# Demonstrates the loop pattern using branch + recursive expand.
+#
+# Usage:
+#   meow run work-loop --var task_source="bd ready"
+#
+# Variables:
+#   task_source - Command to list available tasks (default: bd ready)
+#   agent       - Agent name (default: worker)
+
+[main]
+name = "work-loop"
+description = "Iterative task selection and completion"
+
+[main.variables]
+task_source = { default = "bd ready", description = "Command to list tasks" }
+agent = { default = "worker", description = "Agent name" }
+
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent}}"
+adapter = "claude"
+
+[[main.steps]]
+id = "loop"
+executor = "expand"
+template = ".select-task"
+needs = ["spawn"]
+
+# Internal: Task selection and execution loop
+[select-task]
+internal = true
+
+[[select-task.steps]]
+id = "pick"
+executor = "agent"
+agent = "{{agent}}"
+prompt = """
+# Select Next Task
+
+Run `{{task_source}}` to see available tasks.
+
+If there are tasks available:
+1. Pick ONE task to work on
+2. Note its ID
+
+If no tasks remain, we're done.
+
+Output:
+- `has_task`: true if you picked a task, false if none remain
+- `task_id`: the ID of the selected task (if any)
+
+```
+meow done --output has_task=true --output task_id=<id>
+```
+
+Or if no tasks:
+```
+meow done --output has_task=false
+```
+"""
+
+[select-task.steps.outputs]
+has_task = { required = true, type = "boolean" }
+task_id = { type = "string" }
+
+[[select-task.steps]]
+id = "check"
+executor = "branch"
+condition = "test '{{pick.outputs.has_task}}' = 'true'"
+needs = ["pick"]
+
+[select-task.steps.on_true]
+template = ".do-work"
+variables = { task_id = "{{pick.outputs.task_id}}" }
+
+[select-task.steps.on_false]
+inline = []  # Exit loop
+
+# Internal: Execute the selected task
+[do-work]
+internal = true
+
+[[do-work.steps]]
+id = "implement"
+executor = "agent"
+agent = "{{agent}}"
+prompt = """
+# Implement Task: {{task_id}}
+
+Work on task {{task_id}}.
+
+## Process
+1. Understand the requirements
+2. Implement the solution
+3. Test your changes
+4. Commit when done
+
+When complete, run:
+```
+meow done
+```
+"""
+
+[[do-work.steps]]
+id = "next"
+executor = "expand"
+template = ".select-task"
+needs = ["implement"]
+
+# Cleanup after loop exits
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["loop"]
