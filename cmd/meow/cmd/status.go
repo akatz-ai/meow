@@ -16,11 +16,20 @@ import (
 
 // Exit codes for status command
 const (
-	ExitSuccess         = 0
-	ExitNoWorkflows     = 1
+	ExitSuccess          = 0
+	ExitNoWorkflows      = 1
 	ExitWorkflowNotFound = 2
-	ExitError           = 3
 )
+
+// StatusExitError represents an error with a specific exit code.
+type StatusExitError struct {
+	Code    int
+	Message string
+}
+
+func (e *StatusExitError) Error() string {
+	return e.Message
+}
 
 // Status command flags
 var (
@@ -89,11 +98,19 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Watch mode loop
 	if statusWatch {
-		return runStatusWatch(ctx, store, workflowID)
+		err := runStatusWatch(ctx, store, workflowID)
+		if exitErr, ok := err.(*StatusExitError); ok {
+			os.Exit(exitErr.Code)
+		}
+		return err
 	}
 
 	// Single display
-	return displayStatus(ctx, store, workflowID)
+	err = displayStatus(ctx, store, workflowID)
+	if exitErr, ok := err.(*StatusExitError); ok {
+		os.Exit(exitErr.Code)
+	}
+	return err
 }
 
 func runStatusWatch(ctx context.Context, store *orchestrator.YAMLWorkflowStore, workflowID string) error {
@@ -135,8 +152,7 @@ func displayStatus(ctx context.Context, store *orchestrator.YAMLWorkflowStore, w
 func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLWorkflowStore, workflowID string) error {
 	wf, err := store.Get(ctx, workflowID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Workflow not found: %s\n", workflowID)
-		os.Exit(ExitWorkflowNotFound)
+		return &StatusExitError{Code: ExitWorkflowNotFound, Message: fmt.Sprintf("workflow not found: %s", workflowID)}
 	}
 
 	summary := status.NewWorkflowSummary(wf)
@@ -177,13 +193,13 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLWorkflowSt
 	}
 
 	if len(workflows) == 0 {
+		msg := "no workflows found"
 		if statusFilter != "" {
-			fmt.Printf("No workflows with status: %s\n", statusFilter)
+			msg = fmt.Sprintf("no workflows with status: %s", statusFilter)
 		} else {
-			fmt.Println("No workflows found.")
-			fmt.Println("\nUse 'meow run <template>' to start a workflow.")
+			msg = "no workflows found\n\nUse 'meow run <template>' to start a workflow."
 		}
-		os.Exit(ExitNoWorkflows)
+		return &StatusExitError{Code: ExitNoWorkflows, Message: msg}
 	}
 
 	// If only one workflow and no filter, show detailed view
