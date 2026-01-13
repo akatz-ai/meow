@@ -37,6 +37,7 @@ var (
 	statusWatch     bool
 	statusInterval  time.Duration
 	statusFilter    string
+	statusAll       bool
 	statusAllSteps  bool
 	statusAgents    bool
 	statusQuiet     bool
@@ -48,16 +49,18 @@ var statusCmd = &cobra.Command{
 	Short: "Show workflow status",
 	Long: `Display the current state of MEOW workflows.
 
-With no arguments, shows a list of all workflows.
-With a workflow ID, shows detailed status for that workflow.
+By default, shows only actively running workflows (with lock held).
+If exactly one workflow is active, shows its detailed status automatically.
+
+With a workflow ID argument, shows detailed status for that workflow.
 
 Examples:
-  meow status                       # List all workflows
+  meow status                       # Show active workflow(s)
   meow status wf-123                # Show detailed status for workflow
-  meow status --status running      # List only running workflows
+  meow status -a                    # Show all workflows
+  meow status --filter=done         # List only completed workflows
   meow status --json                # Output as JSON
   meow status --watch               # Refresh every 2s (default)
-  meow status --watch --interval 5s # Refresh every 5s
   meow status --agents              # Focus on agent status`,
 	RunE: runStatus,
 }
@@ -68,9 +71,10 @@ func init() {
 	statusCmd.Flags().BoolVarP(&statusJSON, "json", "j", false, "Output as JSON")
 	statusCmd.Flags().BoolVarP(&statusWatch, "watch", "w", false, "Watch mode - refresh periodically")
 	statusCmd.Flags().DurationVarP(&statusInterval, "interval", "i", 2*time.Second, "Watch interval")
-	statusCmd.Flags().StringVarP(&statusFilter, "status", "s", "", "Filter by status (running, done, failed, stopped)")
+	statusCmd.Flags().StringVar(&statusFilter, "filter", "", "Filter by status (running, done, failed, stopped)")
+	statusCmd.Flags().BoolVarP(&statusAll, "all", "a", false, "Show all workflows (not just active)")
 	statusCmd.Flags().BoolVar(&statusAllSteps, "all-steps", false, "Show all steps (not just running)")
-	statusCmd.Flags().BoolVarP(&statusAgents, "agents", "a", false, "Focus on agent status")
+	statusCmd.Flags().BoolVar(&statusAgents, "agents-only", false, "Focus on agent status")
 	statusCmd.Flags().BoolVarP(&statusQuiet, "quiet", "q", false, "Minimal output")
 	statusCmd.Flags().BoolVar(&statusNoColor, "no-color", false, "Disable colors")
 }
@@ -100,6 +104,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if statusWatch {
 		err := runStatusWatch(ctx, store, workflowID)
 		if exitErr, ok := err.(*StatusExitError); ok {
+			fmt.Fprintln(os.Stderr, exitErr.Message)
 			os.Exit(exitErr.Code)
 		}
 		return err
@@ -108,6 +113,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Single display
 	err = displayStatus(ctx, store, workflowID)
 	if exitErr, ok := err.(*StatusExitError); ok {
+		fmt.Fprintln(os.Stderr, exitErr.Message)
 		os.Exit(exitErr.Code)
 	}
 	return err
@@ -192,18 +198,30 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLWorkflowSt
 		return fmt.Errorf("listing workflows: %w", err)
 	}
 
-	if len(workflows) == 0 {
-		msg := "no workflows found"
-		if statusFilter != "" {
-			msg = fmt.Sprintf("no workflows with status: %s", statusFilter)
-		} else {
-			msg = "no workflows found\n\nUse 'meow run <template>' to start a workflow."
+	// Apply active filter by default (unless --all or --filter specified)
+	// Active = status=running AND lock held
+	if !statusAll && statusFilter == "" {
+		active := make([]*types.Workflow, 0, len(workflows))
+		for _, wf := range workflows {
+			if wf.Status == types.WorkflowStatusRunning && store.IsLocked(wf.ID) {
+				active = append(active, wf)
+			}
 		}
-		return &StatusExitError{Code: ExitNoWorkflows, Message: msg}
+		workflows = active
 	}
 
-	// If only one workflow and no filter, show detailed view
-	if len(workflows) == 1 && statusFilter == "" {
+	if len(workflows) == 0 {
+		if statusFilter != "" {
+			return &StatusExitError{Code: ExitNoWorkflows, Message: fmt.Sprintf("no workflows with status: %s", statusFilter)}
+		} else if statusAll {
+			return &StatusExitError{Code: ExitNoWorkflows, Message: "no workflows found\n\nUse 'meow run <template>' to start a workflow."}
+		} else {
+			return &StatusExitError{Code: ExitNoWorkflows, Message: "no active workflows\n\nUse 'meow status -a' to see all workflows."}
+		}
+	}
+
+	// If only one workflow, show detailed view automatically
+	if len(workflows) == 1 {
 		return displayWorkflowDetail(ctx, store, workflows[0].ID)
 	}
 
