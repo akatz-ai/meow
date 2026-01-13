@@ -180,8 +180,8 @@ func TestVarContext_ApplyDefaults(t *testing.T) {
 	ctx.SetVariable("override", "user-value")
 
 	vars := map[string]Var{
-		"override": {Default: "default-value"},
-		"missing":  {Default: "default-missing"},
+		"override":   {Default: "default-value"},
+		"missing":    {Default: "default-missing"},
 		"no_default": {Required: true},
 	}
 
@@ -208,9 +208,9 @@ func TestVarContext_ValidateRequired(t *testing.T) {
 	ctx.SetVariable("provided", "value")
 
 	vars := map[string]Var{
-		"provided":  {Required: true},
-		"missing":   {Required: true},
-		"optional":  {Required: false},
+		"provided":    {Required: true},
+		"missing":     {Required: true},
+		"optional":    {Required: false},
 		"has_default": {Required: true, Default: "default"},
 	}
 
@@ -233,8 +233,8 @@ func TestVarContext_SubstituteMap(t *testing.T) {
 	ctx.SetVariable("port", "8080")
 
 	m := map[string]string{
-		"url":     "http://{{host}}:{{port}}",
-		"static":  "no-vars",
+		"url":    "http://{{host}}:{{port}}",
+		"static": "no-vars",
 	}
 
 	result, err := ctx.SubstituteMap(m)
@@ -1288,6 +1288,37 @@ func TestStringifyValue_Slice(t *testing.T) {
 	}
 }
 
+func TestStringifyValue_StringSlice(t *testing.T) {
+	input := []string{"x", "y", "z"}
+	result := stringifyValue(input)
+
+	// Should be valid JSON array
+	expected := `["x","y","z"]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestStringifyValue_IntSlice(t *testing.T) {
+	input := []int{1, 2, 3}
+	result := stringifyValue(input)
+
+	// Should be valid JSON array
+	expected := `[1,2,3]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestStringifyValue_Nil(t *testing.T) {
+	result := stringifyValue(nil)
+
+	// nil should become empty string
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
 func TestStringifyValue_MapStringString(t *testing.T) {
 	input := map[string]string{
 		"key1": "value1",
@@ -1338,7 +1369,7 @@ func TestVarContext_Get_StructuredOutput(t *testing.T) {
 func TestVarContext_Substitute_MapOutput(t *testing.T) {
 	ctx := NewVarContext()
 	ctx.SetVariable("data", map[string]any{
-		"name": "test",
+		"name":  "test",
 		"count": 42,
 	})
 
