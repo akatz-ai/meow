@@ -1699,8 +1699,11 @@ func (o *Orchestrator) executeBranchConditionAsync(
 
 	// Execute condition command (may block for seconds/minutes/hours)
 	// Pass IPC socket path so condition can use meow event/await-event
+	// Also pass workflow ID and step ID for MEOW_WORKFLOW and MEOW_STEP vars
 	condExec := &SimpleConditionExecutor{
 		SocketPath: ipc.SocketPath(workflowID),
+		WorkflowID: workflowID,
+		StepID:     stepID,
 	}
 	exitCode, stdout, stderr, execErr := condExec.Execute(ctx, condition)
 
