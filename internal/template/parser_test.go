@@ -281,8 +281,10 @@ inline = []
 	if tmpl.Meta.MaxIterations != 100 {
 		t.Errorf("expected max_iterations 100, got %d", tmpl.Meta.MaxIterations)
 	}
-	if tmpl.Steps[0].Type != "condition" {
-		t.Errorf("expected step type 'condition', got %q", tmpl.Steps[0].Type)
+	// Note: Step.Type field was removed in favor of Step.Executor
+	// The TOML `type = "condition"` is now ignored; use `executor = "branch"` instead
+	if tmpl.Steps[0].Condition != "bd list --status=open | grep -q ." {
+		t.Errorf("expected condition, got %q", tmpl.Steps[0].Condition)
 	}
 }
 
@@ -294,11 +296,13 @@ version = "1.0.0"
 
 [[steps]]
 id = "step-1"
-description = "First"
+executor = "shell"
+command = "echo first"
 
 [[steps]]
 id = "step-2"
-description = "Second"
+executor = "shell"
+command = "echo second"
 `
 
 	tmpl, err := ParseString(toml)
@@ -310,8 +314,8 @@ description = "Second"
 	if step == nil {
 		t.Fatal("expected to find step-2")
 	}
-	if step.Description != "Second" {
-		t.Errorf("expected description 'Second', got %q", step.Description)
+	if step.Command != "echo second" {
+		t.Errorf("expected command 'echo second', got %q", step.Command)
 	}
 
 	missing := tmpl.GetStep("nonexistent")
@@ -462,32 +466,15 @@ instructions = "Wait for human"
 	if !tmpl.Meta.RequiresHuman {
 		t.Error("expected requires_human to be true")
 	}
-	if tmpl.Steps[0].Type != "gate" {
-		t.Errorf("expected type 'gate', got %q", tmpl.Steps[0].Type)
+	// Note: Step.Type was removed; gates now use branch executor with await-approval condition
+	// Just verify the step was parsed
+	if tmpl.Steps[0].ID != "await" {
+		t.Errorf("expected step id 'await', got %q", tmpl.Steps[0].ID)
 	}
 }
 
-func TestParseString_EphemeralStep(t *testing.T) {
-	toml := `
-[meta]
-name = "test-ephemeral"
-version = "1.0.0"
-
-[[steps]]
-id = "temp"
-description = "Temporary step"
-ephemeral = true
-`
-
-	tmpl, err := ParseString(toml)
-	if err != nil {
-		t.Fatalf("ParseString failed: %v", err)
-	}
-
-	if !tmpl.Steps[0].Ephemeral {
-		t.Error("expected ephemeral to be true")
-	}
-}
+// Note: TestParseString_EphemeralStep was removed - Step.Ephemeral field was deleted
+// when legacy template support was removed. Steps are now defined with executors.
 
 func TestParseString_VariableEnum(t *testing.T) {
 	toml := `
@@ -536,74 +523,13 @@ description = "Missing ID"
 	}
 }
 
-func TestParseString_StepWithCode(t *testing.T) {
-	toml := `
-[meta]
-name = "test-code"
-version = "1.0.0"
-
-[[steps]]
-id = "run-script"
-description = "Run a script"
-code = "echo 'hello world'"
-`
-
-	tmpl, err := ParseString(toml)
-	if err != nil {
-		t.Fatalf("ParseString failed: %v", err)
-	}
-
-	step := tmpl.Steps[0]
-	if step.Code != "echo 'hello world'" {
-		t.Errorf("expected code, got %q", step.Code)
-	}
-}
-
-func TestParseString_StepWithAction(t *testing.T) {
-	toml := `
-[meta]
-name = "test-action"
-version = "1.0.0"
-
-[[steps]]
-id = "notify"
-description = "Notify user"
-action = "send-slack"
-`
-
-	tmpl, err := ParseString(toml)
-	if err != nil {
-		t.Fatalf("ParseString failed: %v", err)
-	}
-
-	step := tmpl.Steps[0]
-	if step.Action != "send-slack" {
-		t.Errorf("expected action 'send-slack', got %q", step.Action)
-	}
-}
-
-func TestParseString_StepWithValidation(t *testing.T) {
-	toml := `
-[meta]
-name = "test-validation"
-version = "1.0.0"
-
-[[steps]]
-id = "build"
-description = "Build project"
-validation = "test -f ./build/output"
-`
-
-	tmpl, err := ParseString(toml)
-	if err != nil {
-		t.Fatalf("ParseString failed: %v", err)
-	}
-
-	step := tmpl.Steps[0]
-	if step.Validation != "test -f ./build/output" {
-		t.Errorf("expected validation, got %q", step.Validation)
-	}
-}
+// Note: TestParseString_StepWithCode, TestParseString_StepWithAction, and
+// TestParseString_StepWithValidation were removed because Step.Code, Step.Action,
+// and Step.Validation fields were deleted when legacy template support was removed.
+// Modern steps use:
+//   - executor = "shell" with command = "..." instead of code
+//   - No action field (removed concept)
+//   - No validation field (removed concept)
 
 func TestParseString_MetaFields(t *testing.T) {
 	toml := `
@@ -681,28 +607,10 @@ template = "proceed"
 	}
 }
 
-func TestParseString_StepWithAssignee(t *testing.T) {
-	toml := `
-[meta]
-name = "test-assignee"
-version = "1.0.0"
-
-[[steps]]
-id = "work"
-description = "Do work"
-assignee = "claude-1"
-`
-
-	tmpl, err := ParseString(toml)
-	if err != nil {
-		t.Fatalf("ParseString failed: %v", err)
-	}
-
-	step := tmpl.Steps[0]
-	if step.Assignee != "claude-1" {
-		t.Errorf("expected assignee 'claude-1', got %q", step.Assignee)
-	}
-}
+// Note: TestParseString_StepWithAssignee was removed - Step.Assignee field was deleted
+// when legacy template support was removed. Modern steps use:
+//   - executor = "spawn" with agent = "..." for spawning agents
+//   - executor = "agent" with agent = "..." for sending prompts to agents
 
 func TestParseString_StepWithOnTimeout(t *testing.T) {
 	toml := `
@@ -1253,15 +1161,13 @@ func TestStep_Validate_OnError(t *testing.T) {
 }
 
 func TestStep_Validate_EmptyExecutor(t *testing.T) {
-	// Empty executor is allowed for backwards compatibility
+	// Empty executor is allowed for migration period
 	step := Step{
-		ID:           "legacy-step",
-		Type:         "task", // Using legacy type field
-		Instructions: "Do something",
+		ID: "no-executor-step",
 	}
 	err := step.Validate()
 	if err != nil {
-		t.Errorf("expected empty executor to be valid (backwards compatibility), got: %v", err)
+		t.Errorf("expected empty executor to be valid (migration period), got: %v", err)
 	}
 }
 

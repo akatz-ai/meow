@@ -257,11 +257,11 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 	ctx.SetOutput("analyze", "selected", "feature-x")
 
 	step := &Step{
-		ID:           "test-step",
-		Description:  "Testing {{task_id}}",
-		Instructions: "Use {{framework}} to test",
-		Condition:    "{{output.analyze.selected}} != ''",
-		Template:     "impl-{{task_id}}",
+		ID:        "test-step",
+		Executor:  ExecutorBranch,
+		Condition: "{{output.analyze.selected}} != ''",
+		Prompt:    "Testing {{task_id}} with {{framework}}",
+		Template:  "impl-{{task_id}}",
 		Variables: map[string]string{
 			"target": "{{task_id}}",
 		},
@@ -272,11 +272,8 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 		t.Fatalf("SubstituteStep failed: %v", err)
 	}
 
-	if result.Description != "Testing bd-42" {
-		t.Errorf("expected description substitution, got %q", result.Description)
-	}
-	if result.Instructions != "Use pytest to test" {
-		t.Errorf("expected instructions substitution, got %q", result.Instructions)
+	if result.Prompt != "Testing bd-42 with pytest" {
+		t.Errorf("expected prompt substitution, got %q", result.Prompt)
 	}
 	if result.Condition != "feature-x != ''" {
 		t.Errorf("expected condition substitution, got %q", result.Condition)
@@ -289,15 +286,15 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 	}
 }
 
-func TestVarContext_SubstituteStep_Code(t *testing.T) {
+func TestVarContext_SubstituteStep_Command(t *testing.T) {
 	ctx := NewVarContext()
 	ctx.SetVariable("agent", "claude-1")
 	ctx.SetVariable("worktree", "/tmp/wt-123")
 
 	step := &Step{
-		ID:   "setup",
-		Type: "code",
-		Code: "echo {{agent}} > /tmp/agent.txt && cd {{worktree}}",
+		ID:       "setup",
+		Executor: ExecutorShell,
+		Command:  "echo {{agent}} > /tmp/agent.txt && cd {{worktree}}",
 	}
 
 	result, err := ctx.SubstituteStep(step)
@@ -306,26 +303,26 @@ func TestVarContext_SubstituteStep_Code(t *testing.T) {
 	}
 
 	expected := "echo claude-1 > /tmp/agent.txt && cd /tmp/wt-123"
-	if result.Code != expected {
-		t.Errorf("expected code substitution %q, got %q", expected, result.Code)
+	if result.Command != expected {
+		t.Errorf("expected command substitution %q, got %q", expected, result.Command)
 	}
 }
 
-func TestVarContext_SubstituteStep_ErrorInCode(t *testing.T) {
+func TestVarContext_SubstituteStep_ErrorInCommand(t *testing.T) {
 	ctx := NewVarContext()
 
 	step := &Step{
-		ID:   "test-step",
-		Type: "code",
-		Code: "echo {{undefined}}",
+		ID:       "test-step",
+		Executor: ExecutorShell,
+		Command:  "echo {{undefined}}",
 	}
 
 	_, err := ctx.SubstituteStep(step)
 	if err == nil {
 		t.Fatal("expected error for undefined variable")
 	}
-	if !strings.Contains(err.Error(), "code") {
-		t.Errorf("expected error about code, got: %v", err)
+	if !strings.Contains(err.Error(), "command") {
+		t.Errorf("expected error about command, got: %v", err)
 	}
 }
 
@@ -497,24 +494,8 @@ func TestVarContext_SubstituteMap_Error(t *testing.T) {
 	}
 }
 
-func TestVarContext_SubstituteStep_Validation(t *testing.T) {
-	ctx := NewVarContext()
-	ctx.SetVariable("check", "test -f /tmp/ready")
-
-	step := &Step{
-		ID:         "test-step",
-		Validation: "{{check}}",
-	}
-
-	result, err := ctx.SubstituteStep(step)
-	if err != nil {
-		t.Fatalf("SubstituteStep failed: %v", err)
-	}
-
-	if result.Validation != "test -f /tmp/ready" {
-		t.Errorf("expected validation substitution, got %q", result.Validation)
-	}
-}
+// Note: TestVarContext_SubstituteStep_Validation was removed
+// because Step.Validation field was deleted when legacy template support was removed.
 
 func TestVarContext_SubstituteStep_Timeout(t *testing.T) {
 	ctx := NewVarContext()
@@ -566,39 +547,10 @@ func TestVarContext_SubstituteStep_OnTimeout(t *testing.T) {
 	}
 }
 
-func TestVarContext_SubstituteStep_ErrorInDescription(t *testing.T) {
-	ctx := NewVarContext()
-
-	step := &Step{
-		ID:          "test-step",
-		Description: "Working on {{undefined}}",
-	}
-
-	_, err := ctx.SubstituteStep(step)
-	if err == nil {
-		t.Fatal("expected error for undefined variable")
-	}
-	if !strings.Contains(err.Error(), "description") {
-		t.Errorf("expected error about description, got: %v", err)
-	}
-}
-
-func TestVarContext_SubstituteStep_ErrorInInstructions(t *testing.T) {
-	ctx := NewVarContext()
-
-	step := &Step{
-		ID:           "test-step",
-		Instructions: "Do {{undefined}} work",
-	}
-
-	_, err := ctx.SubstituteStep(step)
-	if err == nil {
-		t.Fatal("expected error for undefined variable")
-	}
-	if !strings.Contains(err.Error(), "instructions") {
-		t.Errorf("expected error about instructions, got: %v", err)
-	}
-}
+// Note: TestVarContext_SubstituteStep_ErrorInDescription and
+// TestVarContext_SubstituteStep_ErrorInInstructions were removed because
+// Step.Description and Step.Instructions fields were deleted when
+// legacy template support was removed.
 
 func TestVarContext_SubstituteStep_ErrorInCondition(t *testing.T) {
 	ctx := NewVarContext()
@@ -634,22 +586,8 @@ func TestVarContext_SubstituteStep_ErrorInTemplate(t *testing.T) {
 	}
 }
 
-func TestVarContext_SubstituteStep_ErrorInValidation(t *testing.T) {
-	ctx := NewVarContext()
-
-	step := &Step{
-		ID:         "test-step",
-		Validation: "{{undefined}}",
-	}
-
-	_, err := ctx.SubstituteStep(step)
-	if err == nil {
-		t.Fatal("expected error for undefined variable")
-	}
-	if !strings.Contains(err.Error(), "validation") {
-		t.Errorf("expected error about validation, got: %v", err)
-	}
-}
+// Note: TestVarContext_SubstituteStep_ErrorInValidation was removed because
+// Step.Validation field was deleted when legacy template support was removed.
 
 func TestVarContext_SubstituteStep_ErrorInTimeout(t *testing.T) {
 	ctx := NewVarContext()

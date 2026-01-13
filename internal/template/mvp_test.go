@@ -373,30 +373,8 @@ type = "task"
 	}
 }
 
-func TestDetectFormat(t *testing.T) {
-	legacy := `
-[meta]
-name = "test"
-version = "1.0.0"
-
-[[steps]]
-id = "step-1"
-`
-	if DetectFormat(legacy) != FormatLegacy {
-		t.Error("expected FormatLegacy for [meta] content")
-	}
-
-	module := `
-[main]
-name = "work-loop"
-
-[[main.steps]]
-id = "step-1"
-`
-	if DetectFormat(module) != FormatModule {
-		t.Error("expected FormatModule for non-[meta] content")
-	}
-}
+// Note: TestDetectFormat was removed as DetectFormat and FormatLegacy were removed
+// when legacy template support was deleted.
 
 func TestParseModuleString_Errors(t *testing.T) {
 	// Invalid TOML
@@ -429,11 +407,13 @@ name = "test"
 
 [[main.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo 1"
 
 [[main.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo 2"
 `, "test.toml")
 	if err == nil {
 		t.Fatal("expected error for duplicate step ID")
@@ -446,24 +426,12 @@ name = "test"
 
 [[main.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 needs = ["nonexistent"]
 `, "test.toml")
 	if err == nil {
 		t.Fatal("expected error for unknown dependency")
-	}
-
-	// Invalid step type
-	_, err = ParseModuleString(`
-[main]
-name = "test"
-
-[[main.steps]]
-id = "step-1"
-type = "invalid-type"
-`, "test.toml")
-	if err == nil {
-		t.Fatal("expected error for invalid step type")
 	}
 }
 
@@ -481,28 +449,28 @@ type = "task"
 }
 
 func TestParseModuleString_AllStepFields(t *testing.T) {
+	// Tests modern step fields (legacy Type, Title, Description, Instructions,
+	// Assignee, Code fields were removed in favor of Executor-based approach)
 	moduleToml := `
 [main]
 name = "test"
 
 [[main.steps]]
 id = "full-step"
-type = "condition"
-title = "Check something"
-description = "Description here"
-instructions = "Instructions here"
-assignee = "claude-1"
+executor = "branch"
 condition = "test -f /tmp/ready"
-code = "echo hello"
 timeout = "5m"
 template = "child-template"
-ephemeral = true
 needs = ["other"]
 variables = { key = "value" }
 
+[main.steps.on_true]
+template = "proceed"
+
 [[main.steps]]
 id = "other"
-type = "task"
+executor = "shell"
+command = "echo other"
 `
 	module, err := ParseModuleString(moduleToml, "test.toml")
 	if err != nil {
@@ -512,32 +480,17 @@ type = "task"
 	main := module.GetWorkflow("main")
 	step := main.Steps[0]
 
-	if step.Title != "Check something" {
-		t.Errorf("expected title, got %q", step.Title)
-	}
-	if step.Description != "Description here" {
-		t.Errorf("expected description, got %q", step.Description)
-	}
-	if step.Instructions != "Instructions here" {
-		t.Errorf("expected instructions, got %q", step.Instructions)
-	}
-	if step.Assignee != "claude-1" {
-		t.Errorf("expected assignee, got %q", step.Assignee)
+	if step.Executor != ExecutorBranch {
+		t.Errorf("expected branch executor, got %q", step.Executor)
 	}
 	if step.Condition != "test -f /tmp/ready" {
 		t.Errorf("expected condition, got %q", step.Condition)
-	}
-	if step.Code != "echo hello" {
-		t.Errorf("expected code, got %q", step.Code)
 	}
 	if step.Timeout != "5m" {
 		t.Errorf("expected timeout, got %q", step.Timeout)
 	}
 	if step.Template != "child-template" {
 		t.Errorf("expected template, got %q", step.Template)
-	}
-	if !step.Ephemeral {
-		t.Error("expected ephemeral to be true")
 	}
 	if len(step.Needs) != 1 || step.Needs[0] != "other" {
 		t.Errorf("expected needs ['other'], got %v", step.Needs)
@@ -563,7 +516,8 @@ task_id = { required = true, type = "string", description = "Task ID", default =
 
 [[main.steps]]
 id = "step-1"
-type = "task"
+executor = "shell"
+command = "echo test"
 `
 	module, err := ParseModuleString(moduleToml, "test.toml")
 	if err != nil {
@@ -776,118 +730,6 @@ needs = ["action-1"]
 	}
 }
 
-func TestParseModuleString_TaskOutputSpec(t *testing.T) {
-	moduleToml := `
-[main]
-name = "output-test"
-
-[[main.steps]]
-id = "select-work"
-type = "task"
-title = "Select next work bead"
-instructions = "Pick a task to work on"
-
-[[main.steps.outputs.required]]
-name = "work_bead"
-type = "bead_id"
-description = "The bead to implement"
-
-[[main.steps.outputs.required]]
-name = "reason"
-type = "string"
-description = "Why this bead was selected"
-
-[[main.steps.outputs.optional]]
-name = "notes"
-type = "string"
-description = "Additional notes"
-`
-	module, err := ParseModuleString(moduleToml, "test.toml")
-	if err != nil {
-		t.Fatalf("ParseModuleString failed: %v", err)
-	}
-
-	main := module.GetWorkflow("main")
-	step := main.Steps[0]
-
-	// This test uses legacy output format (required/optional arrays)
-	// which now parses into LegacyOutputs instead of Outputs
-	if step.LegacyOutputs == nil {
-		t.Fatal("expected legacy outputs to be parsed")
-	}
-	if len(step.LegacyOutputs.Required) != 2 {
-		t.Fatalf("expected 2 required outputs, got %d", len(step.LegacyOutputs.Required))
-	}
-	if step.LegacyOutputs.Required[0].Name != "work_bead" {
-		t.Errorf("expected first required output name 'work_bead', got %q", step.LegacyOutputs.Required[0].Name)
-	}
-	if step.LegacyOutputs.Required[0].Type != "bead_id" {
-		t.Errorf("expected first required output type 'bead_id', got %q", step.LegacyOutputs.Required[0].Type)
-	}
-	if step.LegacyOutputs.Required[0].Description != "The bead to implement" {
-		t.Errorf("expected first required output description, got %q", step.LegacyOutputs.Required[0].Description)
-	}
-	if step.LegacyOutputs.Required[1].Name != "reason" {
-		t.Errorf("expected second required output name 'reason', got %q", step.LegacyOutputs.Required[1].Name)
-	}
-	if len(step.LegacyOutputs.Optional) != 1 {
-		t.Fatalf("expected 1 optional output, got %d", len(step.LegacyOutputs.Optional))
-	}
-	if step.LegacyOutputs.Optional[0].Name != "notes" {
-		t.Errorf("expected optional output name 'notes', got %q", step.LegacyOutputs.Optional[0].Name)
-	}
-}
-
-// TestBaker_TaskWithOutputSpec tests that legacy output specs are parsed correctly
-// Note: In the new Step-based model, outputs are defined differently
-// This test verifies the parsing works correctly at the template level
-func TestBaker_TaskWithOutputSpec(t *testing.T) {
-	moduleToml := `
-[main]
-name = "output-bake-test"
-
-[[main.steps]]
-id = "select-work"
-type = "task"
-title = "Select next work bead"
-instructions = "Pick a task to work on"
-
-[[main.steps.outputs.required]]
-name = "work_bead"
-type = "bead_id"
-description = "The bead to implement"
-
-[[main.steps.outputs.optional]]
-name = "notes"
-type = "string"
-`
-	module, err := ParseModuleString(moduleToml, "test.toml")
-	if err != nil {
-		t.Fatalf("ParseModuleString failed: %v", err)
-	}
-
-	main := module.GetWorkflow("main")
-	baker := NewBaker("meow-output-test")
-	baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
-
-	result, err := baker.BakeWorkflow(main, nil)
-	if err != nil {
-		t.Fatalf("BakeWorkflow failed: %v", err)
-	}
-
-	if len(result.Steps) != 1 {
-		t.Fatalf("expected 1 step, got %d", len(result.Steps))
-	}
-
-	step := result.Steps[0]
-	// Task maps to agent executor
-	if step.Executor != types.ExecutorAgent {
-		t.Errorf("expected agent executor, got %s", step.Executor)
-	}
-	if step.Agent == nil {
-		t.Fatal("expected AgentConfig")
-	}
-	// Note: Legacy outputs format is preserved at template level
-	// and available in the parsed template step's LegacyOutputs field
-	// The new Step model uses AgentConfig.Outputs which is a different format
-}
+// Note: TestParseModuleString_TaskOutputSpec and TestBaker_TaskWithOutputSpec were removed
+// as LegacyOutputs was removed when legacy template support was deleted.
+// Agent steps now use the AgentConfig.Outputs field with the modern format.

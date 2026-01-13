@@ -80,9 +80,9 @@ func NewTestTemplate(t *testing.T, name string) *template.Template {
 		},
 		Steps: []template.Step{
 			{
-				ID:           "step-1",
-				Description:  "First test step",
-				Instructions: "Test instructions for step 1",
+				ID:      "step-1",
+				Executor: template.ExecutorShell,
+				Command: "echo test",
 			},
 		},
 	}

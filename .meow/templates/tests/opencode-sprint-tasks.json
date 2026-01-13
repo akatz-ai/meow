@@ -1,0 +1,7 @@
+[
+  {
+    "name": "terminology-types",
+    "beads": "meow-jk39",
+    "prompt": "Implement bead meow-jk39 (rename types.Workflow to types.Run) exactly as specified. Focus only on the types rename and any required file renames. Run the requested validation steps."
+  }
+]

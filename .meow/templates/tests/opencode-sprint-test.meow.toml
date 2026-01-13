@@ -1,0 +1,466 @@
+# ============================================================================
+# MEOW Workflow: OpenCode Sprint Test
+# ============================================================================
+#
+# Simple sprint-style workflow using the OpenCode adapter.
+# - Reads a single task from a task file
+# - Creates worktrees for the task + integration
+# - Runs an OpenCode agent track
+# - Uses an OpenCode integration agent to merge track branches
+# - Uses an OpenCode merge agent to merge integration back to main
+#
+# Usage:
+#   meow run .meow/templates/tests/opencode-sprint-test.meow.toml
+#
+# Optionally override tasks:
+#   meow run .meow/templates/tests/opencode-sprint-test.meow.toml \
+#     --var tasks=/path/to/tasks.json
+# ============================================================================
+
+[main]
+name = "opencode-sprint-test"
+description = "Test sprint workflow using the OpenCode adapter"
+
+[main.variables]
+tasks = { default = ".meow/templates/tests/opencode-sprint-tasks.json", description = "Path to JSON file with [{name, prompt}] task objects" }
+target_branch = { default = "main", description = "Target branch for final merge" }
+spawn_args = { default = "", description = "Extra CLI args for spawned agents" }
+
+# ============================================================================
+# PHASE 1: Load Task (single-item task file)
+# ============================================================================
+
+[[main.steps]]
+id = "load-task"
+executor = "shell"
+description = "Load first task from task file"
+command = """
+set -e
+
+TASKS_FILE="{{tasks}}"
+if [ ! -f "$TASKS_FILE" ]; then
+  echo "ERROR: tasks file not found: $TASKS_FILE" >&2
+  exit 1
+fi
+
+TASK_COUNT=$(jq 'length' "$TASKS_FILE")
+if [ "$TASK_COUNT" -lt 1 ]; then
+  echo "ERROR: tasks file is empty" >&2
+  exit 1
+fi
+
+NAME=$(jq -r '.[0].name' "$TASKS_FILE")
+if [ -z "$NAME" ] || [ "$NAME" = "null" ]; then
+  echo "ERROR: task missing name" >&2
+  exit 1
+fi
+
+mkdir -p .meow/worktrees
+PROMPT_FILE=".meow/worktrees/.task-prompt"
+BEADS_FILE=".meow/worktrees/.task-beads"
+TRACK_DIRS_FILE=".meow/worktrees/.track-dirs"
+
+jq -r '.[0].prompt' "$TASKS_FILE" > "$PROMPT_FILE"
+jq -r '.[0].beads // ""' "$TASKS_FILE" > "$BEADS_FILE"
+echo "${NAME}-track" > "$TRACK_DIRS_FILE"
+
+echo "$NAME"
+"""
+
+[main.steps.shell_outputs]
+track_name = { source = "stdout" }
+prompt = { source = "file:.meow/worktrees/.task-prompt" }
+beads = { source = "file:.meow/worktrees/.task-beads" }
+track_dirs = { source = "file:.meow/worktrees/.track-dirs" }
+
+# ============================================================================
+# PHASE 2: Create Worktrees
+# ============================================================================
+
+[[main.steps]]
+id = "task-worktree"
+executor = "expand"
+template = ".meow/templates/lib/worktree"
+needs = ["load-task"]
+
+[main.steps.variables]
+track_name = "{{load-task.outputs.track_name}}"
+
+[[main.steps]]
+id = "integration-worktree"
+executor = "expand"
+template = ".meow/templates/lib/worktree"
+needs = ["task-worktree.create"]
+
+[main.steps.variables]
+track_name = "sprint-integration"
+
+# ============================================================================
+# PHASE 3: OpenCode Agent Track
+# ============================================================================
+
+[[main.steps]]
+id = "agent-track"
+executor = "expand"
+template = ".opencode-agent-track"
+needs = ["task-worktree.create", "load-task"]
+
+[main.steps.variables]
+track_name = "{{load-task.outputs.track_name}}"
+workdir = "{{task-worktree.create.outputs.path}}"
+task_prompt = "{{load-task.outputs.prompt}}"
+task_beads = "{{load-task.outputs.beads}}"
+spawn_args = "{{spawn_args}}"
+
+# ============================================================================
+# PHASE 4: Integration Agent (OpenCode)
+# ============================================================================
+
+[[main.steps]]
+id = "integration"
+executor = "expand"
+template = ".opencode-integration"
+needs = ["agent-track.done", "integration-worktree.create", "load-task"]
+
+[main.steps.variables]
+workdir = "{{integration-worktree.create.outputs.path}}"
+track_dirs = "{{load-task.outputs.track_dirs}}"
+spawn_args = "{{spawn_args}}"
+
+# ============================================================================
+# PHASE 5: Merge Agent (OpenCode)
+# ============================================================================
+
+[[main.steps]]
+id = "merge"
+executor = "expand"
+template = ".opencode-merge"
+needs = ["integration.done"]
+
+[main.steps.variables]
+workdir = "{{integration-worktree.create.outputs.path}}"
+merge_message = "Merge: OpenCode sprint test"
+target_branch = "{{target_branch}}"
+spawn_args = "{{spawn_args}}"
+
+# ============================================================================
+# PHASE 6: Done
+# ============================================================================
+
+[[main.steps]]
+id = "workflow-done"
+executor = "shell"
+needs = ["merge.done"]
+command = "echo 'OpenCode sprint test complete'"
+
+# ============================================================================
+# INTERNAL: OpenCode Agent Track
+# ============================================================================
+
+[opencode-agent-track]
+name = "opencode-agent-track"
+internal = true
+
+[opencode-agent-track.variables]
+track_name = { required = true, description = "Track name" }
+workdir = { required = true, description = "Worktree path" }
+task_prompt = { required = true, description = "Task prompt" }
+task_beads = { default = "", description = "Bead references" }
+spawn_args = { default = "", description = "Extra CLI args for OpenCode" }
+
+[[opencode-agent-track.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "agent-0"
+adapter = "opencode"
+workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
+
+[[opencode-agent-track.steps]]
+id = "work"
+executor = "agent"
+agent = "agent-0"
+needs = ["spawn"]
+prompt = """
+# {{track_name}} Agent Task
+
+{{task_prompt}}
+
+## Bead References (if any)
+{{task_beads}}
+
+If bead IDs are listed above, close them as you complete: `bd close <bead-id>`
+
+---
+
+## IMPORTANT CONSTRAINTS
+- **ONLY** implement the work described above
+- Do NOT work on unrelated beads or issues you might see
+- Do NOT modify files outside your assignment scope
+- If you discover related work needed, note it but do NOT implement it
+
+## Workflow
+1. If beads are referenced, run `bd show <bead-id>` for full requirements
+2. Write tests first (TDD approach) when implementing code
+3. Implement the minimum code to pass tests
+4. Commit after each logical unit with a clear message
+5. If beads are referenced, close them as you complete: `bd close <bead-id>`
+
+## When Done
+After ALL your assigned work is complete, run:
+
+```
+meow done
+```
+"""
+
+[[opencode-agent-track.steps]]
+id = "review"
+executor = "agent"
+agent = "agent-0"
+needs = ["work"]
+prompt = """
+# Self-Review: {{track_name}} Track
+
+Take a step back and carefully reread your most recent code changes with fresh eyes.
+
+## Review Checklist
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Verify test coverage** - do tests actually test the important behavior?
+5. **Check imports** - any unused imports? Missing imports that will cause build failures?
+6. **Run tests** - `go test -short ./...`
+
+## Actions
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
+
+## When Done
+```
+meow done
+```
+"""
+
+[[opencode-agent-track.steps]]
+id = "verify-clean"
+executor = "shell"
+needs = ["review"]
+command = """
+cd "{{workdir}}"
+
+# Check for uncommitted changes (excluding .meow-branch which is workflow metadata)
+CHANGES=$(git status --porcelain | grep -v '.meow-branch' || true)
+if [ -n "$CHANGES" ]; then
+    echo "ERROR: Uncommitted changes in {{track_name}} track!" >&2
+    echo "$CHANGES" >&2
+    exit 1
+fi
+
+echo "Track {{track_name}} is clean - all changes committed"
+"""
+
+[[opencode-agent-track.steps]]
+id = "kill"
+executor = "kill"
+agent = "agent-0"
+needs = ["verify-clean"]
+graceful = true
+
+[[opencode-agent-track.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Track {{track_name}} complete'"
+needs = ["kill"]
+
+# ============================================================================
+# INTERNAL: OpenCode Integration Agent
+# ============================================================================
+
+[opencode-integration]
+name = "opencode-integration"
+internal = true
+
+[opencode-integration.variables]
+workdir = { required = true, description = "Integration worktree path" }
+track_dirs = { required = true, description = "Comma-separated track directory names" }
+spawn_args = { default = "", description = "Extra CLI args for OpenCode" }
+
+[[opencode-integration.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "agent-integration"
+adapter = "opencode"
+workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
+
+[[opencode-integration.steps]]
+id = "work"
+executor = "agent"
+agent = "agent-integration"
+needs = ["spawn"]
+prompt = """
+# Integration Agent: Merge All Tracks
+
+Your job is to merge all feature branches into this integration worktree.
+When parallel agents work on the same files, conflicts are expected. Resolve them.
+
+## Tracks to Merge
+{{track_dirs}}
+
+For each track, the branch name is in `../<track-dir>/.meow-branch`
+
+## Merge Each Branch
+For each track:
+```bash
+BRANCH=$(cat ../<track-dir>/.meow-branch)
+git merge "$BRANCH" --no-edit -m "Merge: <track-name>"
+```
+
+If the merge succeeds, continue to the next branch.
+
+## If Conflicts Occur
+When you see "CONFLICT" in the output:
+1. Run `git status` to see conflicted files
+2. For `.meow-branch` conflicts: just pick either version
+   ```bash
+   git checkout --theirs .meow-branch
+   git add .meow-branch
+   ```
+3. For test file conflicts (e.g., `*_test.go`):
+   - Both branches typically added content at the end
+   - Keep BOTH sets of content (combine them)
+   - Remove conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+4. For other conflicts:
+   - Read both versions carefully
+   - Combine logically (don't lose either side's changes)
+5. Stage resolved files: `git add <file>`
+6. Complete the merge: `git commit -m "Merge: <track-name> (conflicts resolved)"`
+7. Continue with the next branch
+
+## After All Merges
+1. Run `go build ./...` to verify build passes
+2. Run `go test -short ./...` to verify tests pass
+3. If tests fail, fix the issues and commit
+
+When all tracks are merged and tests pass: `meow done`
+"""
+
+[[opencode-integration.steps]]
+id = "review"
+executor = "agent"
+agent = "agent-integration"
+needs = ["work"]
+prompt = """
+# Integration Review
+
+All tracks should be merged. Final verification:
+
+1. `git log --oneline -20` - verify all merges present
+2. `go build ./...` - verify build
+3. `go test -short ./...` - verify tests
+
+Fix any issues you find.
+
+When verified: `meow done`
+"""
+
+[[opencode-integration.steps]]
+id = "kill"
+executor = "kill"
+agent = "agent-integration"
+needs = ["review"]
+graceful = true
+
+[[opencode-integration.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Integration complete - all tracks merged successfully'"
+needs = ["kill"]
+
+# ============================================================================
+# INTERNAL: OpenCode Merge Agent
+# ============================================================================
+
+[opencode-merge]
+name = "opencode-merge"
+internal = true
+
+[opencode-merge.variables]
+workdir = { required = true, description = "Integration worktree path" }
+merge_message = { required = true, description = "Commit message for final merge" }
+target_branch = { required = true, description = "Target branch to merge into" }
+spawn_args = { default = "", description = "Extra CLI args for OpenCode" }
+
+[[opencode-merge.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "merge-agent"
+adapter = "opencode"
+workdir = "{{workdir}}"
+spawn_args = "{{spawn_args}}"
+
+[[opencode-merge.steps]]
+id = "merge"
+executor = "agent"
+agent = "merge-agent"
+needs = ["spawn"]
+prompt = """
+# Final Merge to {{target_branch}}
+
+Your task is to merge this integration branch to {{target_branch}}.
+
+## Steps
+
+1. **Fetch latest from remote**:
+   ```bash
+   git fetch origin {{target_branch}}
+   ```
+
+2. **Check for conflicts**:
+   ```bash
+   git merge-base --is-ancestor origin/{{target_branch}} HEAD || echo "Target has diverged"
+   ```
+
+3. **If target has diverged, rebase or merge**:
+   ```bash
+   # Option A: Rebase (cleaner history)
+   git rebase origin/{{target_branch}}
+
+   # Option B: Merge (if rebase fails)
+   git merge origin/{{target_branch}} --no-edit
+   ```
+
+4. **Run final verification**:
+   ```bash
+   go build ./...
+   go test -short ./...
+   ```
+
+5. **Push to remote**:
+   ```bash
+   git push origin HEAD:{{target_branch}}
+   ```
+
+If the push is rejected (e.g., branch protection), explain what happened.
+
+## Commit Message
+
+Use this message for any merge commits:
+{{merge_message}}
+
+When done: `meow done`
+"""
+
+[[opencode-merge.steps]]
+id = "kill"
+executor = "kill"
+agent = "merge-agent"
+needs = ["merge"]
+graceful = true
+
+[[opencode-merge.steps]]
+id = "done"
+executor = "shell"
+command = "echo 'Merge agent completed - target: {{target_branch}}'"
+needs = ["kill"]

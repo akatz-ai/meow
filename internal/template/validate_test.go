@@ -15,8 +15,8 @@ func TestValidateFull_ValidTemplate(t *testing.T) {
 			"task_id": {Required: true},
 		},
 		Steps: []Step{
-			{ID: "step-1", Description: "First step with {{task_id}}"},
-			{ID: "step-2", Description: "Second step", Needs: []string{"step-1"}},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo {{task_id}}"},
+			{ID: "step-2", Executor: ExecutorShell, Command: "echo done", Needs: []string{"step-1"}},
 		},
 	}
 
@@ -28,7 +28,7 @@ func TestValidateFull_ValidTemplate(t *testing.T) {
 
 func TestValidateFull_MissingName(t *testing.T) {
 	tmpl := &Template{
-		Steps: []Step{{ID: "step-1"}},
+		Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 	}
 
 	result := ValidateFull(tmpl)
@@ -43,7 +43,7 @@ func TestValidateFull_MissingName(t *testing.T) {
 func TestValidateFull_InvalidVersion(t *testing.T) {
 	tmpl := &Template{
 		Meta:  Meta{Name: "test", Version: "bad-version"},
-		Steps: []Step{{ID: "step-1"}},
+		Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 	}
 
 	result := ValidateFull(tmpl)
@@ -67,8 +67,8 @@ func TestValidateFull_DuplicateStepID(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "step-1"},
-			{ID: "step-1"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo 1"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"},
 		},
 	}
 
@@ -82,7 +82,7 @@ func TestValidateFull_UnknownDependency(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "step-1", Needs: []string{"nonexistent"}},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo test", Needs: []string{"nonexistent"}},
 		},
 	}
 
@@ -96,8 +96,8 @@ func TestValidateFull_DependencySuggestion(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "load-context"},
-			{ID: "write-tests", Needs: []string{"load-contxt"}}, // typo
+			{ID: "load-context", Executor: ExecutorShell, Command: "echo load"},
+			{ID: "write-tests", Executor: ExecutorShell, Command: "echo write", Needs: []string{"load-contxt"}}, // typo
 		},
 	}
 
@@ -111,9 +111,9 @@ func TestValidateFull_CircularDependency(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "a", Needs: []string{"b"}},
-			{ID: "b", Needs: []string{"c"}},
-			{ID: "c", Needs: []string{"a"}},
+			{ID: "a", Executor: ExecutorShell, Command: "echo a", Needs: []string{"b"}},
+			{ID: "b", Executor: ExecutorShell, Command: "echo b", Needs: []string{"c"}},
+			{ID: "c", Executor: ExecutorShell, Command: "echo c", Needs: []string{"a"}},
 		},
 	}
 
@@ -127,7 +127,7 @@ func TestValidateFull_SelfReference(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "a", Needs: []string{"a"}},
+			{ID: "a", Executor: ExecutorShell, Command: "echo a", Needs: []string{"a"}},
 		},
 	}
 
@@ -141,7 +141,7 @@ func TestValidateFull_UndefinedVariable(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "step-1", Description: "Using {{undefined_var}}"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo {{undefined_var}}"},
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestValidateFull_DefinedVariable(t *testing.T) {
 			"my_var": {Required: true},
 		},
 		Steps: []Step{
-			{ID: "step-1", Description: "Using {{my_var}}"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo {{my_var}}"},
 		},
 	}
 
@@ -172,7 +172,7 @@ func TestValidateFull_BuiltinVariables(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "step-1", Description: "Time: {{timestamp}}, Agent: {{agent}}"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo Time: {{timestamp}}, Agent: {{agent}}"},
 		},
 	}
 
@@ -186,8 +186,8 @@ func TestValidateFull_OutputReferences(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "step-1"},
-			{ID: "step-2", Description: "Using {{output.step-1.result}} and {{step-1.outputs.other}}"},
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo hello"},
+			{ID: "step-2", Executor: ExecutorShell, Command: "echo {{output.step-1.result}} and {{step-1.outputs.other}}"},
 		},
 	}
 
@@ -201,8 +201,8 @@ func TestValidateFull_OutputReferences(t *testing.T) {
 
 func TestValidateFull_InvalidOnError(t *testing.T) {
 	tmpl := &Template{
-		Meta: Meta{Name: "test", OnError: "invalid"},
-		Steps: []Step{{ID: "step-1"}},
+		Meta:  Meta{Name: "test", OnError: "invalid"},
+		Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 	}
 
 	result := ValidateFull(tmpl)
@@ -214,8 +214,8 @@ func TestValidateFull_InvalidOnError(t *testing.T) {
 func TestValidateFull_ValidOnError(t *testing.T) {
 	for _, onErr := range []string{"continue", "abort", "retry", "inject-gate"} {
 		tmpl := &Template{
-			Meta: Meta{Name: "test", OnError: onErr},
-			Steps: []Step{{ID: "step-1"}},
+			Meta:  Meta{Name: "test", OnError: onErr},
+			Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 		}
 
 		result := ValidateFull(tmpl)
@@ -229,7 +229,7 @@ func TestValidateFull_ConditionWithoutBranches(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Name: "test"},
 		Steps: []Step{
-			{ID: "check", Condition: "test -f /tmp/flag"},
+			{ID: "check", Executor: ExecutorBranch, Condition: "test -f /tmp/flag"},
 		},
 	}
 
@@ -245,6 +245,7 @@ func TestValidateFull_ConditionWithBranches(t *testing.T) {
 		Steps: []Step{
 			{
 				ID:        "check",
+				Executor:  ExecutorBranch,
 				Condition: "test -f /tmp/flag",
 				OnTrue:    &ExpansionTarget{Template: "do-something"},
 			},
@@ -257,40 +258,15 @@ func TestValidateFull_ConditionWithBranches(t *testing.T) {
 	}
 }
 
-func TestValidateFull_GateWithoutInstructions(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{ID: "gate", Type: "gate"},
-		},
-	}
-
-	result := ValidateFull(tmpl)
-	if !containsError(result, "gate without instructions") {
-		t.Errorf("expected gate error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFull_GateWithInstructions(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{ID: "gate", Type: "gate", Instructions: "Review and approve the changes"},
-		},
-	}
-
-	result := ValidateFull(tmpl)
-	if containsError(result, "gate without instructions") {
-		t.Errorf("expected no gate error, got: %v", result.Error())
-	}
-}
+// Note: Gate tests removed - gates are now implemented via branch executor
+// with condition = "meow await-approval <gate-id>" instead of type = "gate"
 
 func TestValidateFull_MultipleErrors(t *testing.T) {
 	tmpl := &Template{
 		Meta: Meta{Version: "bad"}, // Missing name, bad version
 		Steps: []Step{
-			{ID: "step-1", Needs: []string{"unknown"}}, // Unknown dep
-			{ID: "step-1"},                              // Duplicate
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo 1", Needs: []string{"unknown"}}, // Unknown dep
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"},                              // Duplicate
 		},
 	}
 
@@ -309,6 +285,7 @@ func TestValidateFull_ExpansionTargetVariables(t *testing.T) {
 		Steps: []Step{
 			{
 				ID:        "check",
+				Executor:  ExecutorBranch,
 				Condition: "test -f /tmp/flag",
 				OnTrue: &ExpansionTarget{
 					Template: "{{my_var}}",
@@ -358,8 +335,8 @@ func containsError(result *ValidationResult, substr string) bool {
 
 func TestValidateFull_InvalidMetaType(t *testing.T) {
 	tmpl := &Template{
-		Meta: Meta{Name: "test", Type: "invalid-type"},
-		Steps: []Step{{ID: "step-1"}},
+		Meta:  Meta{Name: "test", Type: "invalid-type"},
+		Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 	}
 
 	result := ValidateFull(tmpl)
@@ -372,7 +349,7 @@ func TestValidateFull_ValidMetaType(t *testing.T) {
 	for _, typ := range []string{"loop", "linear"} {
 		tmpl := &Template{
 			Meta:  Meta{Name: "test", Type: typ},
-			Steps: []Step{{ID: "step-1"}},
+			Steps: []Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 		}
 
 		result := ValidateFull(tmpl)
@@ -391,6 +368,7 @@ func TestValidateFull_OnTimeoutVariables(t *testing.T) {
 		Steps: []Step{
 			{
 				ID:        "check",
+				Executor:  ExecutorBranch,
 				Condition: "test -f /tmp/ready",
 				OnTrue:    &ExpansionTarget{Template: "proceed"},
 				OnTimeout: &ExpansionTarget{
@@ -467,6 +445,7 @@ func TestValidateFull_VariableInOnTimeoutTemplate(t *testing.T) {
 		Steps: []Step{
 			{
 				ID:        "check",
+				Executor:  ExecutorBranch,
 				Condition: "test -f /tmp/ready",
 				OnTrue:    &ExpansionTarget{Template: "proceed"},
 				OnTimeout: &ExpansionTarget{
@@ -483,41 +462,13 @@ func TestValidateFull_VariableInOnTimeoutTemplate(t *testing.T) {
 	}
 }
 
-func TestValidateFull_StepTypeInvalid(t *testing.T) {
-	tmpl := &Template{
-		Meta: Meta{Name: "test"},
-		Steps: []Step{
-			{ID: "step-1", Type: "unknown-type"},
-		},
-	}
-
-	result := ValidateFull(tmpl)
-	if !containsError(result, "invalid step type") {
-		t.Errorf("expected invalid step type error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFull_AllValidStepTypes(t *testing.T) {
-	validTypes := []string{"task", "collaborative", "gate", "condition", "code", "start", "stop", "expand"}
-	for _, typ := range validTypes {
-		tmpl := &Template{
-			Meta: Meta{Name: "test"},
-			Steps: []Step{
-				{ID: "step-1", Type: typ, Instructions: "test instructions"},
-			},
-		}
-
-		result := ValidateFull(tmpl)
-		if containsError(result, "invalid step type") {
-			t.Errorf("expected no error for valid type %q, got: %v", typ, result.Error())
-		}
-	}
-}
+// Note: Step.Type validation tests removed - the Type field was deleted
+// when legacy template support was removed. Steps now use the Executor field.
 
 func TestValidateFull_EmptyStepID(t *testing.T) {
 	tmpl := &Template{
 		Meta:  Meta{Name: "test"},
-		Steps: []Step{{ID: "", Description: "Missing ID"}},
+		Steps: []Step{{ID: "", Executor: ExecutorShell, Command: "echo test"}},
 	}
 
 	result := ValidateFull(tmpl)

@@ -514,7 +514,7 @@ func TestBakeWorkflow_MissingRequiredVariable(t *testing.T) {
 			"task_id": {Required: true},
 		},
 		Steps: []*Step{
-			{ID: "step-1", Type: "task"},
+			{ID: "step-1", Executor: ExecutorAgent, Prompt: "Test"},
 		},
 	}
 
@@ -538,7 +538,7 @@ func TestBakeWorkflow_DefaultVariable(t *testing.T) {
 			"framework": {Default: "pytest"},
 		},
 		Steps: []*Step{
-			{ID: "step-1", Type: "task", Prompt: "Using {{framework}}"},
+			{ID: "step-1", Executor: ExecutorAgent, Prompt: "Using {{framework}}"},
 		},
 	}
 
@@ -571,7 +571,7 @@ func TestBakeWorkflow_VariableOverride(t *testing.T) {
 			"framework": {Default: "pytest"},
 		},
 		Steps: []*Step{
-			{ID: "step-1", Type: "task", Prompt: "Using {{framework}}"},
+			{ID: "step-1", Executor: ExecutorAgent, Prompt: "Using {{framework}}"},
 		},
 	}
 
@@ -598,20 +598,20 @@ func TestBakeWorkflow_VariableOverride(t *testing.T) {
 	}
 }
 
-// TestBakeWorkflow_CodeStep tests shell executor with Code field (Type: code)
-func TestBakeWorkflow_CodeStep(t *testing.T) {
+// TestBakeWorkflow_ShellStep tests shell executor
+func TestBakeWorkflow_ShellStep(t *testing.T) {
 	workflow := &Workflow{
-		Name: "code-test",
+		Name: "shell-test",
 		Steps: []*Step{
 			{
-				ID:   "run-code",
-				Type: "code",
-				Code: "echo 'hello world'",
+				ID:       "run-shell",
+				Executor: ExecutorShell,
+				Command:  "echo 'hello world'",
 			},
 		},
 	}
 
-	baker := NewBaker("wf-code-001")
+	baker := NewBaker("wf-shell-001")
 	baker.Now = fixedTime
 
 	result, err := baker.BakeWorkflow(workflow, nil)
@@ -635,20 +635,20 @@ func TestBakeWorkflow_CodeStep(t *testing.T) {
 	}
 }
 
-// TestBakeWorkflow_StartStopSteps tests spawn/kill executor with start/stop types
-func TestBakeWorkflow_StartStopSteps(t *testing.T) {
+// TestBakeWorkflow_SpawnKillSteps tests spawn/kill executors
+func TestBakeWorkflow_SpawnKillSteps(t *testing.T) {
 	workflow := &Workflow{
 		Name: "agent-control",
 		Steps: []*Step{
 			{
 				ID:       "start-agent",
-				Type:     "start",
-				Assignee: "claude-worker",
+				Executor: ExecutorSpawn,
+				Agent:    "claude-worker",
 			},
 			{
 				ID:       "stop-agent",
-				Type:     "stop",
-				Assignee: "claude-worker",
+				Executor: ExecutorKill,
+				Agent:    "claude-worker",
 				Needs:    []string{"start-agent"},
 			},
 		},
@@ -698,7 +698,7 @@ func TestBakeWorkflow_ExpandStep(t *testing.T) {
 		Steps: []*Step{
 			{
 				ID:       "expand-impl",
-				Type:     "expand",
+				Executor: ExecutorExpand,
 				Template: "implement",
 				Variables: map[string]string{
 					"task": "bd-42",
@@ -742,7 +742,7 @@ func TestBakeWorkflow_ConditionStep(t *testing.T) {
 		Steps: []*Step{
 			{
 				ID:        "check",
-				Type:      "condition",
+				Executor:  ExecutorBranch,
 				Condition: "test -f /tmp/ready",
 				OnTrue:    &ExpansionTarget{Template: "proceed"},
 				OnFalse:   &ExpansionTarget{Template: "wait"},
@@ -794,7 +794,7 @@ func TestBakeWorkflow_ConditionWithVariable(t *testing.T) {
 		Steps: []*Step{
 			{
 				ID:        "check",
-				Type:      "condition",
+				Executor:  ExecutorBranch,
 				Condition: "test -f {{file_path}}",
 				OnTrue:    &ExpansionTarget{Template: "proceed"},
 				OnFalse:   &ExpansionTarget{Template: "wait"},
@@ -834,9 +834,9 @@ func TestBakeWorkflow_CodeWithVariable(t *testing.T) {
 		},
 		Steps: []*Step{
 			{
-				ID:   "run-code",
-				Type: "code",
-				Code: "echo 'Running test: {{test_name}}'",
+				ID:       "run-code",
+				Executor: ExecutorShell,
+				Command:  "echo 'Running test: {{test_name}}'",
 			},
 		},
 	}
@@ -877,13 +877,13 @@ func TestBakeWorkflow_StartStopWithVariableAssignee(t *testing.T) {
 		Steps: []*Step{
 			{
 				ID:       "start-agent",
-				Type:     "start",
-				Assignee: "{{agent}}",
+				Executor: ExecutorSpawn,
+				Agent:    "{{agent}}",
 			},
 			{
 				ID:       "stop-agent",
-				Type:     "stop",
-				Assignee: "{{agent}}",
+				Executor: ExecutorKill,
+				Agent:    "{{agent}}",
 				Needs:    []string{"start-agent"},
 			},
 		},
@@ -925,7 +925,7 @@ func TestBakeWorkflow_DependenciesPreserved(t *testing.T) {
 	workflow := &Workflow{
 		Name: "deps-test",
 		Steps: []*Step{
-			{ID: "step-1", Type: "task", Needs: []string{"nonexistent"}},
+			{ID: "step-1", Executor: ExecutorAgent, Prompt: "Test", Needs: []string{"nonexistent"}},
 		},
 	}
 

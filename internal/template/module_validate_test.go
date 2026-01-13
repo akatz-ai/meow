@@ -15,8 +15,8 @@ func TestValidateFullModule_ValidModule(t *testing.T) {
 					"agent": {Required: true},
 				},
 				Steps: []*Step{
-					{ID: "step-1", Title: "First step", Assignee: "{{agent}}"},
-					{ID: "step-2", Title: "Second step", Assignee: "{{agent}}", Needs: []string{"step-1"}},
+					{ID: "step-1", Executor: ExecutorAgent, Agent: "{{agent}}", Prompt: "First task"},
+					{ID: "step-2", Executor: ExecutorAgent, Agent: "{{agent}}", Prompt: "Second task", Needs: []string{"step-1"}},
 				},
 			},
 		},
@@ -34,7 +34,7 @@ func TestValidateFullModule_MissingWorkflowName(t *testing.T) {
 		Workflows: map[string]*Workflow{
 			"main": {
 				// Name is empty
-				Steps: []*Step{{ID: "step-1"}},
+				Steps: []*Step{{ID: "step-1", Executor: ExecutorShell, Command: "echo test"}},
 			},
 		},
 	}
@@ -69,8 +69,8 @@ func TestValidateFullModule_DuplicateStepID(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1"},
-					{ID: "step-1"}, // Duplicate
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo 1"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"}, // Duplicate
 				},
 			},
 		},
@@ -89,7 +89,7 @@ func TestValidateFullModule_UnknownDependency(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Needs: []string{"nonexistent"}},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo test", Needs: []string{"nonexistent"}},
 				},
 			},
 		},
@@ -108,8 +108,8 @@ func TestValidateFullModule_DependencySuggestion(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "load-context"},
-					{ID: "write-tests", Needs: []string{"load-contxt"}}, // Typo
+					{ID: "load-context", Executor: ExecutorShell, Command: "echo load"},
+					{ID: "write-tests", Executor: ExecutorShell, Command: "echo write", Needs: []string{"load-contxt"}}, // Typo
 				},
 			},
 		},
@@ -128,9 +128,9 @@ func TestValidateFullModule_CircularDependency(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "a", Needs: []string{"b"}},
-					{ID: "b", Needs: []string{"c"}},
-					{ID: "c", Needs: []string{"a"}},
+					{ID: "a", Executor: ExecutorShell, Command: "echo a", Needs: []string{"b"}},
+					{ID: "b", Executor: ExecutorShell, Command: "echo b", Needs: []string{"c"}},
+					{ID: "c", Executor: ExecutorShell, Command: "echo c", Needs: []string{"a"}},
 				},
 			},
 		},
@@ -139,58 +139,6 @@ func TestValidateFullModule_CircularDependency(t *testing.T) {
 	result := ValidateFullModule(module)
 	if !containsModuleError(result, "circular dependency") {
 		t.Errorf("expected cycle error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_InvalidStepType(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "step-1", Type: "invalid-type"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "invalid step type") {
-		t.Errorf("expected type error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_AllValidStepTypes(t *testing.T) {
-	validTypes := []string{"task", "collaborative", "gate", "condition", "code", "start", "stop", "expand"}
-	for _, typ := range validTypes {
-		t.Run(typ, func(t *testing.T) {
-			step := &Step{ID: "step-1", Type: typ, Instructions: "test"}
-			// Add required fields for each type
-			switch typ {
-			case "condition":
-				step.Condition = "test"
-				step.OnTrue = &ExpansionTarget{Template: "other"}
-			case "code":
-				step.Code = "echo hello"
-			case "expand":
-				step.Template = "other#workflow"
-			case "start", "stop":
-				step.Assignee = "agent-1"
-			}
-
-			module := &Module{
-				Path: "test.meow.toml",
-				Workflows: map[string]*Workflow{
-					"main": {Name: "main", Steps: []*Step{step}},
-				},
-			}
-
-			result := ValidateFullModule(module)
-			if containsModuleError(result, "invalid step type") {
-				t.Errorf("expected no type error for %q, got: %v", typ, result.Error())
-			}
-		})
 	}
 }
 
@@ -203,12 +151,12 @@ func TestValidateFullModule_ValidLocalReference(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".helper"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".helper"},
 				},
 			},
 			"helper": {
 				Name:  "helper",
-				Steps: []*Step{{ID: "h1"}},
+				Steps: []*Step{{ID: "h1", Executor: ExecutorShell, Command: "echo helper"}},
 			},
 		},
 	}
@@ -226,7 +174,7 @@ func TestValidateFullModule_UnknownLocalReference(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".nonexistent"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".nonexistent"},
 				},
 			},
 		},
@@ -245,12 +193,12 @@ func TestValidateFullModule_LocalReferenceSuggestion(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".implemen"}, // Typo
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".implemen"}, // Typo
 				},
 			},
 			"implement": {
 				Name:  "implement",
-				Steps: []*Step{{ID: "i1"}},
+				Steps: []*Step{{ID: "i1", Executor: ExecutorShell, Command: "echo impl"}},
 			},
 		},
 	}
@@ -270,13 +218,13 @@ func TestValidateFullModule_InternalWorkflowCanBeReferencedLocally(t *testing.T)
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".internal-helper"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".internal-helper"},
 				},
 			},
 			"internal-helper": {
 				Name:     "internal-helper",
 				Internal: true, // Marked as internal - but local refs are OK
-				Steps:    []*Step{{ID: "h1"}},
+				Steps:    []*Step{{ID: "h1", Executor: ExecutorShell, Command: "echo internal"}},
 			},
 		},
 	}
@@ -295,14 +243,14 @@ func TestValidateFullModule_LocalReferenceToStep(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".helper.specific-step"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".helper.specific-step"},
 				},
 			},
 			"helper": {
 				Name: "helper",
 				Steps: []*Step{
-					{ID: "specific-step"},
-					{ID: "other-step"},
+					{ID: "specific-step", Executor: ExecutorShell, Command: "echo specific"},
+					{ID: "other-step", Executor: ExecutorShell, Command: "echo other"},
 				},
 			},
 		},
@@ -322,12 +270,12 @@ func TestValidateFullModule_LocalReferenceToNonexistentStep(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: ".helper.missing-step"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: ".helper.missing-step"},
 				},
 			},
 			"helper": {
 				Name:  "helper",
-				Steps: []*Step{{ID: "existing-step"}},
+				Steps: []*Step{{ID: "existing-step", Executor: ExecutorShell, Command: "echo existing"}},
 			},
 		},
 	}
@@ -347,7 +295,7 @@ func TestValidateFullModule_LocalReferenceInOnTrue(t *testing.T) {
 				Steps: []*Step{
 					{
 						ID:        "check",
-						Type:      "condition",
+						Executor:  ExecutorBranch,
 						Condition: "test -f /tmp/flag",
 						OnTrue:    &ExpansionTarget{Template: ".missing"},
 					},
@@ -369,7 +317,7 @@ func TestValidateFullModule_LocalReferenceSkipsVariables(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: "{{dynamic_template}}"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: "{{dynamic_template}}"},
 				},
 			},
 		},
@@ -389,7 +337,7 @@ func TestValidateFullModule_ExternalReferenceSkipped(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Type: "expand", Template: "other-file#workflow"},
+					{ID: "step-1", Executor: ExecutorExpand, Template: "other-file#workflow"},
 				},
 			},
 		},
@@ -402,9 +350,6 @@ func TestValidateFullModule_ExternalReferenceSkipped(t *testing.T) {
 	}
 }
 
-// Note: hooks_to validation tests removed - hooks_to is no longer supported
-// (MVP-SPEC-v2 is task-tracking agnostic)
-
 // Variable reference tests
 
 func TestValidateFullModule_UndefinedVariable(t *testing.T) {
@@ -414,7 +359,7 @@ func TestValidateFullModule_UndefinedVariable(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Title: "Using {{undefined_var}}"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo {{undefined_var}}"},
 				},
 			},
 		},
@@ -436,7 +381,7 @@ func TestValidateFullModule_DefinedVariable(t *testing.T) {
 					"my_var": {Required: true},
 				},
 				Steps: []*Step{
-					{ID: "step-1", Title: "Using {{my_var}}"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo {{my_var}}"},
 				},
 			},
 		},
@@ -455,7 +400,7 @@ func TestValidateFullModule_BuiltinVariables(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1", Title: "Time: {{timestamp}}, Agent: {{agent}}, Bead: {{bead_id}}"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo Time: {{timestamp}}, Agent: {{agent}}, Bead: {{bead_id}}"},
 				},
 			},
 		},
@@ -474,8 +419,8 @@ func TestValidateFullModule_OutputReferencesSkipped(t *testing.T) {
 			"main": {
 				Name: "main",
 				Steps: []*Step{
-					{ID: "step-1"},
-					{ID: "step-2", Title: "Using {{output.step-1.result}} and {{step-1.outputs.value}}"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo hello"},
+					{ID: "step-2", Executor: ExecutorShell, Command: "echo {{output.step-1.result}} and {{step-1.outputs.value}}"},
 				},
 			},
 		},
@@ -488,169 +433,6 @@ func TestValidateFullModule_OutputReferencesSkipped(t *testing.T) {
 	}
 }
 
-// Type-specific validation tests
-
-func TestValidateFullModule_GateWithoutInstructions(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "gate-1", Type: "gate"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "gate without instructions") {
-		t.Errorf("expected gate error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_GateWithAssignee(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "gate-1", Type: "gate", Instructions: "Approve", Assignee: "agent-1"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "must not have an assignee") {
-		t.Errorf("expected gate assignee error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_ConditionWithoutCondition(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{
-						ID:     "check",
-						Type:   "condition",
-						OnTrue: &ExpansionTarget{Template: "other"},
-					},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "requires a condition expression") {
-		t.Errorf("expected condition error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_ConditionWithoutBranches(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{
-						ID:        "check",
-						Type:      "condition",
-						Condition: "test -f /tmp/flag",
-						// No OnTrue or OnFalse
-					},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "on_true or on_false") {
-		t.Errorf("expected branch error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_ExpandWithoutTemplate(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "expand-1", Type: "expand"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "requires a template reference") {
-		t.Errorf("expected template error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_CodeWithoutCode(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "code-1", Type: "code"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "requires a code block") {
-		t.Errorf("expected code error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_StartWithoutAssignee(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "start-1", Type: "start"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "requires an assignee") {
-		t.Errorf("expected assignee error, got: %v", result.Error())
-	}
-}
-
-func TestValidateFullModule_StopWithoutAssignee(t *testing.T) {
-	module := &Module{
-		Path: "test.meow.toml",
-		Workflows: map[string]*Workflow{
-			"main": {
-				Name: "main",
-				Steps: []*Step{
-					{ID: "stop-1", Type: "stop"},
-				},
-			},
-		},
-	}
-
-	result := ValidateFullModule(module)
-	if !containsModuleError(result, "requires an assignee") {
-		t.Errorf("expected assignee error, got: %v", result.Error())
-	}
-}
-
 // Multiple errors test
 
 func TestValidateFullModule_MultipleErrors(t *testing.T) {
@@ -660,9 +442,9 @@ func TestValidateFullModule_MultipleErrors(t *testing.T) {
 			"main": {
 				// Missing name
 				Steps: []*Step{
-					{ID: "step-1", Type: "invalid"}, // Invalid type
-					{ID: "step-1"},                   // Duplicate
-					{ID: "step-2", Needs: []string{"unknown"}}, // Unknown dep
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo 1"},
+					{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"},                                     // Duplicate
+					{ID: "step-2", Executor: ExecutorShell, Command: "echo 3", Needs: []string{"unknown"}}, // Unknown dep
 				},
 			},
 		},
