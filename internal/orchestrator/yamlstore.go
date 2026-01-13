@@ -77,6 +77,29 @@ func (s *YAMLWorkflowStore) AcquireWorkflowLock(workflowID string) (*WorkflowLoc
 	}, nil
 }
 
+// IsLocked checks if a workflow is currently locked (orchestrator running).
+// Returns true if another process holds the lock, false otherwise.
+func (s *YAMLWorkflowStore) IsLocked(workflowID string) bool {
+	lockPath := filepath.Join(s.dir, workflowID+".yaml.lock")
+
+	// Try to open the lock file
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0644)
+	if err != nil {
+		return false // No lock file = not locked
+	}
+	defer lockFile.Close()
+
+	// Try non-blocking lock
+	err = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		return true // Couldn't acquire = someone has it
+	}
+
+	// We got the lock, release it immediately
+	syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	return false
+}
+
 // Close is a no-op for compatibility. Use WorkflowLock.Release() to release locks.
 func (s *YAMLWorkflowStore) Close() error {
 	return nil
