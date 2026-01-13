@@ -18,7 +18,6 @@ import (
 var (
 	lsRunning bool
 	lsJSON    bool
-	lsAll     bool
 )
 
 var lsCmd = &cobra.Command{
@@ -26,15 +25,15 @@ var lsCmd = &cobra.Command{
 	Short: "List workflows in this project",
 	Long: `List all workflows in the .meow/workflows directory.
 
-By default, shows running and recently completed workflows.
-Use --all to include older workflows.`,
+Shows all workflows sorted by start time (most recent first).
+Use --running to filter to only running workflows.
+Use --json for machine-readable output.`,
 	RunE: runLs,
 }
 
 func init() {
 	lsCmd.Flags().BoolVar(&lsRunning, "running", false, "show only running workflows")
 	lsCmd.Flags().BoolVar(&lsJSON, "json", false, "output as JSON")
-	lsCmd.Flags().BoolVar(&lsAll, "all", false, "include all workflows (not just recent)")
 	rootCmd.AddCommand(lsCmd)
 }
 
