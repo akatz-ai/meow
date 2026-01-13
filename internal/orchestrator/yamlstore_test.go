@@ -251,6 +251,46 @@ func TestYAMLWorkflowStoreLocking(t *testing.T) {
 			t.Error("lock file should be cleaned up after release")
 		}
 	})
+
+	t.Run("IsLocked detects active locks", func(t *testing.T) {
+		workflowID := "locked-workflow"
+
+		// Before acquiring lock, should not be locked
+		if store1.IsLocked(workflowID) {
+			t.Error("workflow should not be locked initially")
+		}
+
+		// Acquire lock
+		lock, err := store1.AcquireWorkflowLock(workflowID)
+		if err != nil {
+			t.Fatalf("failed to acquire lock: %v", err)
+		}
+		defer lock.Release()
+
+		// While locked, should return true
+		if !store1.IsLocked(workflowID) {
+			t.Error("workflow should be locked while lock is held")
+		}
+
+		// Another store should also detect the lock
+		if !store2.IsLocked(workflowID) {
+			t.Error("another store should also detect the lock")
+		}
+
+		// Release the lock
+		lock.Release()
+
+		// After release, should not be locked
+		if store1.IsLocked(workflowID) {
+			t.Error("workflow should not be locked after release")
+		}
+	})
+
+	t.Run("IsLocked returns false for nonexistent lock file", func(t *testing.T) {
+		if store1.IsLocked("never-locked-workflow") {
+			t.Error("workflow with no lock file should not be locked")
+		}
+	})
 }
 
 func TestYAMLWorkflowStoreCrashRecovery(t *testing.T) {
