@@ -169,17 +169,6 @@ func (c *VarContext) resolve(path string) (any, error) {
 		}
 	}
 
-	// Check for special prefixes
-	if root == "output" && len(parts) >= 3 {
-		// output.step.field format (step ID here could also contain dots)
-		// Find "outputs" is not present, so this is legacy format: output.stepID.field
-		// where stepID might have dots. We take everything between "output" and the last part as stepID.
-		// Actually, this format is ambiguous with dotted step IDs. Keep simple: output.step.field
-		stepID := parts[1]
-		field := strings.Join(parts[2:], ".")
-		return c.resolveOutput(stepID, field)
-	}
-
 	// Check user variables first
 	if val, ok := c.Variables[root]; ok {
 		return c.resolvePath(val, parts[1:])
@@ -347,25 +336,10 @@ func (c *VarContext) SubstituteStep(step *Step) (*Step, error) {
 	var err error
 
 	// Substitute simple string fields
-	if result.Description != "" {
-		result.Description, err = c.Substitute(result.Description)
-		if err != nil {
-			return nil, fmt.Errorf("description: %w", err)
-		}
-	}
-
 	if result.Prompt != "" {
 		result.Prompt, err = c.Substitute(result.Prompt)
 		if err != nil {
 			return nil, fmt.Errorf("prompt: %w", err)
-		}
-	}
-
-	// Legacy instructions field
-	if result.Instructions != "" {
-		result.Instructions, err = c.Substitute(result.Instructions)
-		if err != nil {
-			return nil, fmt.Errorf("instructions: %w", err)
 		}
 	}
 
@@ -387,20 +361,6 @@ func (c *VarContext) SubstituteStep(step *Step) (*Step, error) {
 		result.Command, err = c.Substitute(result.Command)
 		if err != nil {
 			return nil, fmt.Errorf("command: %w", err)
-		}
-	}
-
-	if result.Code != "" {
-		result.Code, err = c.Substitute(result.Code)
-		if err != nil {
-			return nil, fmt.Errorf("code: %w", err)
-		}
-	}
-
-	if result.Validation != "" {
-		result.Validation, err = c.Substitute(result.Validation)
-		if err != nil {
-			return nil, fmt.Errorf("validation: %w", err)
 		}
 	}
 

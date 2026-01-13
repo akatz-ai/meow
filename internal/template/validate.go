@@ -144,26 +144,6 @@ func validateSteps(t *Template, name string, result *ValidationResult) {
 				"use unique step ids")
 		}
 		stepIDs[step.ID] = i
-
-		// Validate step type if set
-		if step.Type != "" {
-			valid := map[string]bool{
-				"":              true, // Default to task
-				"task":          true,
-				"collaborative": true,
-				"gate":          true,
-				"condition":     true,
-				"code":          true,
-				"start":         true,
-				"stop":          true,
-				"expand":        true,
-			}
-			if !valid[step.Type] {
-				result.Add(name, step.ID, "type",
-					fmt.Sprintf("invalid step type: %q", step.Type),
-					"use task, collaborative, gate, condition, code, start, stop, or expand")
-			}
-		}
 	}
 }
 
@@ -279,11 +259,8 @@ func validateVariableReferences(t *Template, name string, result *ValidationResu
 
 	// Check all string fields in steps for variable references
 	for _, step := range t.Steps {
-		checkVarRefs(step.Description, name, step.ID, "description", defined, t, result)
-		checkVarRefs(step.Instructions, name, step.ID, "instructions", defined, t, result)
 		checkVarRefs(step.Condition, name, step.ID, "condition", defined, t, result)
 		checkVarRefs(step.Template, name, step.ID, "template", defined, t, result)
-		checkVarRefs(step.Validation, name, step.ID, "validation", defined, t, result)
 
 		for k, v := range step.Variables {
 			checkVarRefs(v, name, step.ID, fmt.Sprintf("variables.%s", k), defined, t, result)
@@ -357,13 +334,6 @@ func validateTypeSpecific(t *Template, name string, result *ValidationResult) {
 		// Template reference should be non-empty if specified
 		if step.Template != "" && !strings.Contains(step.Template, "{{") {
 			// Static template reference - could validate existence but that's runtime
-		}
-
-		// Gate steps should have instructions
-		if step.Type == "gate" && step.Instructions == "" {
-			result.Add(name, step.ID, "type",
-				"gate without instructions",
-				"add instructions explaining what the human should do")
 		}
 	}
 }
