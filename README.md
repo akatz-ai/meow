@@ -20,6 +20,28 @@ The AI agent orchestration space is full of frameworks: LangChain, CrewAI, Claud
 
 MEOW is for developers who use Claude Code or Aider, want multi-agent workflows, and don't want to adopt a framework ecosystem. If you need enterprise features or turnkey agent capabilities, look at [Claude-Flow](https://github.com/ruvnet/claude-flow) or [LangGraph](https://langchain-ai.github.io/langgraph/).
 
+## Installation
+
+**Quick install (Linux/macOS):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/akatz-ai/meow-machine/main/install.sh | sh
+```
+
+**With Go:**
+```bash
+go install github.com/meow-stack/meow-machine/cmd/meow@latest
+```
+
+**From source:**
+```bash
+git clone https://github.com/akatz-ai/meow-machine
+cd meow-machine
+make install
+```
+
+**Manual download:**
+Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow-machine/releases).
+
 ## How It Works
 
 MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
