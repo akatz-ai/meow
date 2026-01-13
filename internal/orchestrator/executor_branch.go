@@ -222,16 +222,30 @@ type SimpleConditionExecutor struct {
 	// SocketPath is the IPC socket path for MEOW_ORCH_SOCK environment variable.
 	// If set, condition commands can use meow event/await-event.
 	SocketPath string
+	// WorkflowID is the workflow ID for MEOW_WORKFLOW environment variable.
+	WorkflowID string
+	// StepID is the step ID for MEOW_STEP environment variable.
+	StepID string
 }
 
 // Execute runs a command using the shell executor.
 func (e *SimpleConditionExecutor) Execute(ctx context.Context, command string) (int, string, string, error) {
-	// Build environment - include MEOW_ORCH_SOCK if we have a socket path
-	var env map[string]string
+	// Build environment - inject MEOW_* variables
+	env := make(map[string]string)
+
+	// Inject MEOW_WORKFLOW if we have a workflow ID
+	if e.WorkflowID != "" {
+		env["MEOW_WORKFLOW"] = e.WorkflowID
+	}
+
+	// Inject MEOW_STEP if we have a step ID
+	if e.StepID != "" {
+		env["MEOW_STEP"] = e.StepID
+	}
+
+	// Inject MEOW_ORCH_SOCK if we have a socket path
 	if e.SocketPath != "" {
-		env = map[string]string{
-			"MEOW_ORCH_SOCK": e.SocketPath,
-		}
+		env["MEOW_ORCH_SOCK"] = e.SocketPath
 	}
 
 	step := &types.Step{

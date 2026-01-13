@@ -475,3 +475,23 @@ func TestSimpleConditionExecutor_Timeout(t *testing.T) {
 		t.Errorf("expected context.DeadlineExceeded, got %v", ctx.Err())
 	}
 }
+
+func TestSimpleConditionExecutor_InjectsMeowVars(t *testing.T) {
+	exec := &SimpleConditionExecutor{
+		SocketPath: "/tmp/meow-test.sock",
+		WorkflowID: "wf-123",
+		StepID:     "step-456",
+	}
+
+	// Command that prints specific MEOW_* environment variables we set
+	_, stdout, _, err := exec.Execute(context.Background(),
+		"echo \"MEOW_WORKFLOW=$MEOW_WORKFLOW MEOW_STEP=$MEOW_STEP MEOW_ORCH_SOCK=$MEOW_ORCH_SOCK\"")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "MEOW_WORKFLOW=wf-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
+	if stdout != expected {
+		t.Errorf("expected MEOW_* vars: %q, got: %q", expected, stdout)
+	}
+}

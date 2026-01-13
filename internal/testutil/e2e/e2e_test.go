@@ -3757,3 +3757,247 @@ echo 'VERIFIED'
 
 	t.Logf("✓ Nested step output in expand variable works correctly")
 }
+
+// ===========================================================================
+// Foreach with Dynamic Items Tests
+// ===========================================================================
+
+func TestE2E_ForeachDynamicItems_BasicArray(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template that generates items dynamically and iterates over them
+	template := `
+[main]
+name = "foreach-dynamic-basic"
+
+# Step that outputs a JSON array
+[[main.steps]]
+id = "generate"
+executor = "shell"
+command = "echo '[\"apple\",\"banana\",\"cherry\"]'"
+[main.steps.shell_outputs]
+items = { source = "stdout", type = "json" }
+
+# Foreach that iterates over the dynamic items
+[[main.steps]]
+id = "process"
+executor = "foreach"
+needs = ["generate"]
+items = "{{generate.outputs.items}}"
+template = ".process-item"
+item_var = "fruit"
+
+# Template for processing each item
+[".process-item"]
+[[".process-item".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'Processing: {{fruit}}'"
+`
+	if err := h.WriteTemplate("foreach-dynamic-basic.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-dynamic-basic.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstderr: %s", stderr)
+	}
+
+	// Verify all 3 items were processed
+	for _, item := range []string{"apple", "banana", "cherry"} {
+		if !strings.Contains(stderr, "process."+item) {
+			t.Errorf("expected iteration for item %s", item)
+		}
+	}
+
+	t.Logf("✓ Foreach with dynamic array items works correctly")
+}
+
+func TestE2E_ForeachDynamicItems_NestedObjects(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template with nested object items
+	template := `
+[main]
+name = "foreach-dynamic-objects"
+
+# Generate array of objects
+[[main.steps]]
+id = "plan"
+executor = "shell"
+command = "echo '[{\"name\":\"task1\",\"priority\":1},{\"name\":\"task2\",\"priority\":2}]'"
+[main.steps.shell_outputs]
+tasks = { source = "stdout", type = "json" }
+
+# Foreach over objects with field access
+[[main.steps]]
+id = "execute"
+executor = "foreach"
+needs = ["plan"]
+items = "{{plan.outputs.tasks}}"
+template = ".task-executor"
+item_var = "task"
+
+[".task-executor"]
+[[".task-executor".steps]]
+id = "run"
+executor = "shell"
+command = "echo 'Running {{task.name}} with priority {{task.priority}}'"
+`
+	if err := h.WriteTemplate("foreach-dynamic-objects.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-dynamic-objects.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+
+	// Verify object fields were accessible in iterations
+	// The iteration IDs should contain the name field
+	for _, task := range []string{"task1", "task2"} {
+		// Look for evidence that the iteration happened
+		if !strings.Contains(stderr, "execute."+task) {
+			t.Errorf("expected iteration for task %s", task)
+		}
+	}
+
+	t.Logf("✓ Foreach with nested object items works correctly")
+}
+
+func TestE2E_ForeachDynamicItems_EmptyArray(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template with empty array
+	template := `
+[main]
+name = "foreach-dynamic-empty"
+
+# Generate empty array
+[[main.steps]]
+id = "generate"
+executor = "shell"
+command = "echo '[]'"
+[main.steps.shell_outputs]
+items = { source = "stdout", type = "json" }
+
+# Foreach over empty array
+[[main.steps]]
+id = "process"
+executor = "foreach"
+needs = ["generate"]
+items = "{{generate.outputs.items}}"
+template = ".process-item"
+item_var = "item"
+
+# Verify step runs after foreach completes with no iterations
+[[main.steps]]
+id = "verify"
+executor = "shell"
+needs = ["process"]
+command = "echo 'Foreach completed with no iterations'"
+
+[".process-item"]
+[[".process-item".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'This should not run'"
+`
+	if err := h.WriteTemplate("foreach-dynamic-empty.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-dynamic-empty.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+
+	// Verify the verify step ran (meaning foreach completed)
+	if !strings.Contains(stderr, "dispatching step\" id=verify") {
+		t.Errorf("expected verify step to run after empty foreach")
+	}
+
+	// Verify no iterations happened (no work step should be present)
+	if strings.Contains(stderr, "This should not run") {
+		t.Errorf("expected no iterations for empty array")
+	}
+
+	t.Logf("✓ Foreach with empty array completes successfully with no iterations")
+}
+
+func TestE2E_ForeachDynamicItems_LargeArray(t *testing.T) {
+	h := e2e.NewHarness(t)
+
+	// Template with larger array to test concurrency
+	template := `
+[main]
+name = "foreach-dynamic-large"
+
+# Generate array of 10 items
+[[main.steps]]
+id = "generate"
+executor = "shell"
+command = "echo '[1,2,3,4,5,6,7,8,9,10]'"
+[main.steps.shell_outputs]
+items = { source = "stdout", type = "json" }
+
+# Foreach with max_concurrent to test parallel execution
+[[main.steps]]
+id = "process"
+executor = "foreach"
+needs = ["generate"]
+items = "{{generate.outputs.items}}"
+template = ".process-item"
+item_var = "num"
+max_concurrent = 3
+
+[".process-item"]
+[[".process-item".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'Processing number {{num}}' && sleep 0.1"
+`
+	if err := h.WriteTemplate("foreach-dynamic-large.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	start := time.Now()
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-dynamic-large.toml"))
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete")
+	}
+
+	// With max_concurrent=3, 10 items @ 0.1s should take ~0.4s (10/3 batches * 0.1s)
+	// Sequential would be 1.0s. Allow overhead for startup.
+	if duration > 2000*time.Millisecond {
+		t.Errorf("foreach took too long: %v (expected < 2000ms with concurrency)", duration)
+	}
+
+	// Verify all items were processed
+	for i := 1; i <= 10; i++ {
+		itemID := fmt.Sprintf("process.%d", i)
+		if !strings.Contains(stderr, itemID) {
+			t.Errorf("expected iteration for item %d", i)
+		}
+	}
+
+	t.Logf("✓ Foreach with large array and max_concurrent works correctly")
+}

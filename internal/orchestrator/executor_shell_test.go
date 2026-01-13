@@ -438,3 +438,32 @@ func TestExecuteShell_ExitCodeAlwaysInOutputs(t *testing.T) {
 		t.Errorf("expected exit_code 0, got %v", result.Outputs["exit_code"])
 	}
 }
+
+func TestExecuteShell_MeowEnvVarsInjected(t *testing.T) {
+	// Test that MEOW_* environment variables are injected when provided in Env
+	step := &types.Step{
+		ID:       "test-meow-vars",
+		Executor: types.ExecutorShell,
+		Shell: &types.ShellConfig{
+			Command: "echo \"MEOW_WORKFLOW=$MEOW_WORKFLOW MEOW_STEP=$MEOW_STEP MEOW_ORCH_SOCK=$MEOW_ORCH_SOCK\"",
+			Env: map[string]string{
+				"MEOW_WORKFLOW":  "wf-123",
+				"MEOW_STEP":      "step-456",
+				"MEOW_ORCH_SOCK": "/tmp/meow-test.sock",
+			},
+			Outputs: map[string]types.OutputSource{
+				"env_vars": {Source: "stdout"},
+			},
+		},
+	}
+
+	result, stepErr := ExecuteShell(context.Background(), step)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	expected := "MEOW_WORKFLOW=wf-123 MEOW_STEP=step-456 MEOW_ORCH_SOCK=/tmp/meow-test.sock"
+	if result.Outputs["env_vars"] != expected {
+		t.Errorf("expected %q, got %q", expected, result.Outputs["env_vars"])
+	}
+}

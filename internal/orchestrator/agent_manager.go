@@ -1,18 +1,17 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/adapter"
+	"github.com/meow-stack/meow-machine/internal/agent"
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
@@ -26,6 +25,7 @@ type TmuxAgentManager struct {
 	agents     map[string]*agentState // agentID -> state
 	workdir    string                 // Base working directory
 	tmuxSocket string                 // Custom tmux socket path (empty = default)
+	tmux       *agent.TmuxWrapper     // TmuxWrapper for session management
 	registry   *adapter.Registry      // Adapter registry for agent configs
 }
 
@@ -56,11 +56,19 @@ func NewTmuxAgentManager(workdir string, registry *adapter.Registry, logger *slo
 		}
 	}
 
+	// Create TmuxWrapper with socket path if configured
+	var tmuxOpts []agent.TmuxOption
+	if tmuxSocket != "" {
+		tmuxOpts = append(tmuxOpts, agent.WithSocketPath(tmuxSocket))
+	}
+	tmuxWrapper := agent.NewTmuxWrapper(tmuxOpts...)
+
 	return &TmuxAgentManager{
 		logger:     logger.With("component", "agent-manager"),
 		agents:     make(map[string]*agentState),
 		workdir:    workdir,
 		tmuxSocket: tmuxSocket,
+		tmux:       tmuxWrapper,
 		registry:   registry,
 	}
 }
@@ -69,6 +77,12 @@ func NewTmuxAgentManager(workdir string, registry *adapter.Registry, logger *slo
 // This is primarily for testing with isolated tmux servers.
 func (m *TmuxAgentManager) SetTmuxSocket(socket string) {
 	m.tmuxSocket = socket
+	// Recreate TmuxWrapper with new socket path
+	var opts []agent.TmuxOption
+	if socket != "" {
+		opts = append(opts, agent.WithSocketPath(socket))
+	}
+	m.tmux = agent.NewTmuxWrapper(opts...)
 }
 
 // Start spawns an agent in a tmux session using the configured adapter.
@@ -108,7 +122,7 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 	m.logger.Info("spawning agent", "agent", agentID, "adapter", adapterName, "session", sessionName, "workdir", workdir)
 
 	// Check if session already exists
-	if m.sessionExists(sessionName) {
+	if m.tmux.SessionExists(ctx, sessionName) {
 		m.logger.Warn("tmux session already exists", "session", sessionName)
 		// Attach to existing session instead of creating new
 	} else {
@@ -131,7 +145,12 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 
 		// Create tmux session with bash - we'll start agent via send-keys
 		// This ensures the session stays alive and we can inject prompts
-		if err := m.createSession(ctx, sessionName, workdir, env, "bash"); err != nil {
+		if err := m.tmux.NewSession(ctx, agent.SessionOptions{
+			Name:    sessionName,
+			Workdir: workdir,
+			Env:     env,
+			Command: "bash",
+		}); err != nil {
 			return fmt.Errorf("creating tmux session: %w", err)
 		}
 
@@ -152,10 +171,10 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Workflow, step *
 		time.Sleep(100 * time.Millisecond)
 
 		// Start agent in the session
-		if err := m.sendKeys(ctx, sessionName, agentCmd); err != nil {
+		if err := m.tmux.SendKeysLiteral(ctx, sessionName, agentCmd); err != nil {
 			return fmt.Errorf("sending agent command: %w", err)
 		}
-		if err := m.sendKeys(ctx, sessionName, "Enter"); err != nil {
+		if err := m.tmux.SendKeysSpecial(ctx, sessionName, "Enter"); err != nil {
 			return fmt.Errorf("sending Enter: %w", err)
 		}
 
@@ -214,14 +233,14 @@ func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *t
 		if err != nil {
 			m.logger.Warn("failed to load adapter for graceful stop, using defaults", "adapter", state.adapterName, "error", err)
 			// Fall back to reasonable defaults
-			if err := m.sendKeys(ctx, sessionName, "C-c"); err != nil {
+			if err := m.tmux.SendKeysSpecial(ctx, sessionName, "C-c"); err != nil {
 				m.logger.Warn("failed to send C-c", "error", err)
 			}
 			time.Sleep(2 * time.Second)
 		} else {
 			// Send graceful stop keys from adapter config
 			for _, key := range adapterCfg.GracefulStop.Keys {
-				if err := m.sendKeys(ctx, sessionName, key); err != nil {
+				if err := m.tmux.SendKeysSpecial(ctx, sessionName, key); err != nil {
 					m.logger.Warn("failed to send graceful stop key", "key", key, "error", err)
 				}
 			}
@@ -231,7 +250,7 @@ func (m *TmuxAgentManager) Stop(ctx context.Context, wf *types.Workflow, step *t
 	}
 
 	// Kill the session
-	if err := m.killSession(ctx, sessionName); err != nil {
+	if err := m.tmux.KillSession(ctx, sessionName); err != nil {
 		m.logger.Warn("failed to kill session", "error", err)
 		// Not fatal - session might already be gone
 	}
@@ -254,7 +273,7 @@ func (m *TmuxAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 		return false, nil
 	}
 
-	return m.sessionExists(state.tmuxSession), nil
+	return m.tmux.SessionExists(ctx, state.tmuxSession), nil
 }
 
 // InjectPrompt sends a prompt to an agent's tmux session using the configured adapter.
@@ -281,7 +300,7 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 
 	// Send pre-keys (e.g., Escape to exit copy mode)
 	for _, key := range injection.PreKeys {
-		if err := m.sendKeys(ctx, sessionName, key); err != nil {
+		if err := m.tmux.SendKeysSpecial(ctx, sessionName, key); err != nil {
 			m.logger.Debug("pre-key failed", "key", key, "error", err)
 			// Continue anyway - often not critical
 		}
@@ -295,11 +314,11 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	// Send prompt using the configured method
 	method := adapterCfg.GetPromptInjectionMethod()
 	if method == "literal" {
-		if err := m.sendKeysLiteral(ctx, sessionName, prompt); err != nil {
+		if err := m.tmux.SendKeysLiteral(ctx, sessionName, prompt); err != nil {
 			return fmt.Errorf("sending prompt (literal): %w", err)
 		}
 	} else {
-		if err := m.sendKeys(ctx, sessionName, prompt); err != nil {
+		if err := m.tmux.SendKeysSpecial(ctx, sessionName, prompt); err != nil {
 			return fmt.Errorf("sending prompt (keys): %w", err)
 		}
 	}
@@ -317,7 +336,7 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 				m.logger.Debug("retrying post-key", "key", key, "attempt", attempt+1)
 				time.Sleep(200 * time.Millisecond)
 			}
-			if err := m.sendKeys(ctx, sessionName, key); err != nil {
+			if err := m.tmux.SendKeysSpecial(ctx, sessionName, key); err != nil {
 				lastErr = err
 				m.logger.Debug("post-key attempt failed", "key", key, "attempt", attempt+1, "error", err)
 				continue
@@ -376,7 +395,7 @@ func (m *TmuxAgentManager) Interrupt(ctx context.Context, agentID string) error 
 	sessionName := state.tmuxSession
 	m.logger.Info("sending interrupt to agent", "agent", agentID, "session", sessionName)
 
-	return m.sendKeys(ctx, sessionName, "C-c")
+	return m.tmux.SendKeysSpecial(ctx, sessionName, "C-c")
 }
 
 // KillAll kills all agent sessions for a workflow.
@@ -394,7 +413,7 @@ func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Workflow) erro
 		m.logger.Info("killing agent during cleanup", "agent", agentID, "session", state.tmuxSession)
 
 		// Send C-c first for graceful shutdown
-		if err := m.sendKeys(ctx, state.tmuxSession, "C-c"); err != nil {
+		if err := m.tmux.SendKeysSpecial(ctx, state.tmuxSession, "C-c"); err != nil {
 			m.logger.Warn("failed to send C-c", "agent", agentID, "error", err)
 		}
 
@@ -402,7 +421,7 @@ func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Workflow) erro
 		time.Sleep(500 * time.Millisecond)
 
 		// Kill the session
-		if err := m.killSession(ctx, state.tmuxSession); err != nil {
+		if err := m.tmux.KillSession(ctx, state.tmuxSession); err != nil {
 			m.logger.Warn("failed to kill session", "agent", agentID, "error", err)
 			lastErr = err
 		}
@@ -413,101 +432,10 @@ func (m *TmuxAgentManager) KillAll(ctx context.Context, wf *types.Workflow) erro
 	return lastErr
 }
 
-// --- tmux helpers ---
-
-// tmuxArgs builds a tmux command with optional socket argument.
-func (m *TmuxAgentManager) tmuxArgs(args ...string) []string {
-	if m.tmuxSocket != "" {
-		return append([]string{"-S", m.tmuxSocket}, args...)
-	}
-	return args
-}
-
-func (m *TmuxAgentManager) sessionExists(name string) bool {
-	args := m.tmuxArgs("has-session", "-t", name)
-	cmd := exec.Command("tmux", args...)
-	return cmd.Run() == nil
-}
-
-func (m *TmuxAgentManager) createSession(ctx context.Context, name, workdir string, env map[string]string, shellCmd string) error {
-	// Build environment exports
-	var envExports strings.Builder
-	for k, v := range env {
-		envExports.WriteString(fmt.Sprintf("export %s=%q; ", k, v))
-	}
-
-	// Create the tmux session with explicit window size to help terminal detection
-	// The command runs exports and then the shell command (typically claude)
-	fullCmd := fmt.Sprintf("%s%s", envExports.String(), shellCmd)
-
-	baseArgs := []string{
-		"new-session",
-		"-d",         // detached
-		"-s", name,   // session name
-		"-c", workdir, // working directory
-		"-x", "200",  // width (helps with terminal detection)
-		"-y", "50",   // height
-		"sh", "-c", fullCmd, // command to run
-	}
-	args := m.tmuxArgs(baseArgs...)
-
-	m.logger.Debug("creating tmux session", "args", args)
-
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	cmd.Dir = workdir
-
-	// Set environment for the tmux command itself
-	cmd.Env = os.Environ()
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux new-session failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return nil
-}
-
-func (m *TmuxAgentManager) killSession(ctx context.Context, name string) error {
-	args := m.tmuxArgs("kill-session", "-t", name)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux kill-session failed: %w (stderr: %s)", err, stderr.String())
-	}
-	return nil
-}
-
-func (m *TmuxAgentManager) sendKeys(ctx context.Context, session string, keys string) error {
-	args := m.tmuxArgs("send-keys", "-t", session, keys)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux send-keys failed: %w (stderr: %s)", err, stderr.String())
-	}
-	return nil
-}
-
-// sendKeysLiteral sends text using tmux's literal mode (-l flag).
-// This properly handles special characters and multiline text.
-func (m *TmuxAgentManager) sendKeysLiteral(ctx context.Context, session string, text string) error {
-	args := m.tmuxArgs("send-keys", "-t", session, "-l", text)
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tmux send-keys -l failed: %w (stderr: %s)", err, stderr.String())
-	}
-	return nil
-}
-
 // Note: Agent-specific prompt detection (like waitForClaudeReady) has been removed.
 // Adapters now handle this via startup_delay configuration - the orchestrator
 // waits for the configured delay after spawning before sending prompts.
 // This keeps the agent manager agent-agnostic.
+//
+// Tmux operations are now handled via the TmuxWrapper from internal/agent,
+// eliminating code duplication and providing better isolation with socket support.

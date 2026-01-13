@@ -15,13 +15,37 @@ import (
 type TmuxWrapper struct {
 	// defaultTimeout is used when context has no deadline
 	defaultTimeout time.Duration
+	// socketPath is an optional socket path for tmux -S flag
+	socketPath string
 }
 
-// NewTmuxWrapper creates a new tmux wrapper with default settings.
-func NewTmuxWrapper() *TmuxWrapper {
-	return &TmuxWrapper{
+// TmuxOption configures a TmuxWrapper.
+type TmuxOption func(*TmuxWrapper)
+
+// WithSocketPath sets a custom socket path for tmux operations.
+// When set, all tmux commands will use -S <socketPath>.
+func WithSocketPath(path string) TmuxOption {
+	return func(w *TmuxWrapper) {
+		w.socketPath = path
+	}
+}
+
+// WithTimeout sets a custom default timeout for tmux operations.
+func WithTimeout(timeout time.Duration) TmuxOption {
+	return func(w *TmuxWrapper) {
+		w.defaultTimeout = timeout
+	}
+}
+
+// NewTmuxWrapper creates a new tmux wrapper with optional configuration.
+func NewTmuxWrapper(opts ...TmuxOption) *TmuxWrapper {
+	w := &TmuxWrapper{
 		defaultTimeout: 5 * time.Second,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 // SessionOptions configures session creation.
@@ -148,25 +172,41 @@ func (w *TmuxWrapper) ListSessions(ctx context.Context, prefix string) ([]string
 }
 
 // SendKeys sends keystrokes to a tmux session, followed by Enter.
+// Keys are sent literally (using -l flag), preventing interpretation of special chars.
 // This is the typical way to send commands to a session.
 func (w *TmuxWrapper) SendKeys(ctx context.Context, session, keys string) error {
-	return w.sendKeysInternal(ctx, session, keys, true)
+	return w.sendKeysInternal(ctx, session, keys, true, true)
 }
 
 // SendKeysLiteral sends keystrokes to a tmux session without pressing Enter.
-// Use this for control sequences (like "C-c") or partial input.
+// Keys are sent literally (using -l flag), preventing interpretation of special chars.
+// Use this for partial input or text that should not be interpreted.
 func (w *TmuxWrapper) SendKeysLiteral(ctx context.Context, session, keys string) error {
-	return w.sendKeysInternal(ctx, session, keys, false)
+	return w.sendKeysInternal(ctx, session, keys, false, true)
+}
+
+// SendKeysSpecial sends special key sequences to a tmux session (like "C-c", "Enter").
+// Keys are NOT sent literally, allowing tmux to interpret special sequences.
+// Does not automatically press Enter - if you want to send Enter, use "Enter" as the keys.
+func (w *TmuxWrapper) SendKeysSpecial(ctx context.Context, session, keys string) error {
+	return w.sendKeysInternal(ctx, session, keys, false, false)
 }
 
 // sendKeysInternal sends keystrokes to a tmux session.
-func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string, pressEnter bool) error {
+// If useLiteralFlag is true, uses -l flag to send keys literally.
+// If pressEnter is true, sends Enter separately after the keys.
+func (w *TmuxWrapper) sendKeysInternal(ctx context.Context, session, keys string, pressEnter, useLiteralFlag bool) error {
 	if session == "" {
 		return fmt.Errorf("session name is required")
 	}
 
-	// Use -l flag to send keys literally (prevents interpretation of special chars)
-	args := []string{"send-keys", "-t", session, "-l", keys}
+	// Build args based on literal flag
+	args := []string{"send-keys", "-t", session}
+	if useLiteralFlag {
+		args = append(args, "-l")
+	}
+	args = append(args, keys)
+
 	output, err := w.runCmd(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("send-keys: %w: %s", err, output)
@@ -258,6 +298,14 @@ func (w *TmuxWrapper) UnsetEnv(ctx context.Context, session, key string) error {
 	return nil
 }
 
+// buildArgs prepends socket path argument if configured.
+func (w *TmuxWrapper) buildArgs(args ...string) []string {
+	if w.socketPath != "" {
+		return append([]string{"-S", w.socketPath}, args...)
+	}
+	return args
+}
+
 // runCmd executes a tmux command with proper timeout handling.
 // If the context has no deadline, a default timeout is applied.
 func (w *TmuxWrapper) runCmd(ctx context.Context, args ...string) ([]byte, error) {
@@ -266,7 +314,8 @@ func (w *TmuxWrapper) runCmd(ctx context.Context, args ...string) ([]byte, error
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	fullArgs := w.buildArgs(args...)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	return cmd.CombinedOutput()
 }
 
@@ -277,7 +326,8 @@ func (w *TmuxWrapper) runCmdWithBuffers(ctx context.Context, args ...string) (st
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	fullArgs := w.buildArgs(args...)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	stdout = &bytes.Buffer{}
 	stderr = &bytes.Buffer{}
 	cmd.Stdout = stdout
@@ -293,6 +343,7 @@ func (w *TmuxWrapper) hasSession(ctx context.Context, name string) bool {
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", name)
+	fullArgs := w.buildArgs("has-session", "-t", name)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	return cmd.Run() == nil
 }
