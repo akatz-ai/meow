@@ -16,23 +16,32 @@ import (
 )
 
 var (
-	lsRunning bool
-	lsJSON    bool
+	lsAll    bool
+	lsStale  bool
+	lsStatus string
+	lsJSON   bool
 )
 
 var lsCmd = &cobra.Command{
 	Use:   "ls",
 	Short: "List workflows in this project",
-	Long: `List all workflows in the .meow/workflows directory.
+	Long: `List workflows in the .meow/workflows directory.
 
-Shows all workflows sorted by start time (most recent first).
-Use --running to filter to only running workflows.
-Use --json for machine-readable output.`,
+By default, shows only actively running workflows (lock held by orchestrator).
+Use --all to see all workflows, or --status to filter by status.
+
+Examples:
+  meow ls              # Active workflows only
+  meow ls -a           # All workflows
+  meow ls --stale      # Stale workflows (running but no lock)
+  meow ls --status=done  # Completed workflows`,
 	RunE: runLs,
 }
 
 func init() {
-	lsCmd.Flags().BoolVar(&lsRunning, "running", false, "show only running workflows")
+	lsCmd.Flags().BoolVarP(&lsAll, "all", "a", false, "show all workflows (not just active)")
+	lsCmd.Flags().BoolVar(&lsStale, "stale", false, "show stale workflows (running but no lock)")
+	lsCmd.Flags().StringVar(&lsStatus, "status", "", "filter by status (running, stopped, done, failed, pending)")
 	lsCmd.Flags().BoolVar(&lsJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(lsCmd)
 }
@@ -59,9 +68,10 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("opening workflow store: %w", err)
 	}
 
+	// Apply status filter if specified
 	filter := orchestrator.WorkflowFilter{}
-	if lsRunning {
-		filter.Status = types.WorkflowStatusRunning
+	if lsStatus != "" {
+		filter.Status = types.WorkflowStatus(lsStatus)
 	}
 
 	workflows, err := store.List(context.Background(), filter)
@@ -74,11 +84,42 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return workflows[i].StartedAt.After(workflows[j].StartedAt)
 	})
 
+	// Apply post-filter based on flags
+	// Default: only actively running (running + locked)
+	// --all: show everything
+	// --stale: show stale (running but no lock)
+	// --status=X: already filtered above
+	if !lsAll && lsStatus == "" {
+		filtered := make([]*types.Workflow, 0, len(workflows))
+		for _, wf := range workflows {
+			isLocked := store.IsLocked(wf.ID)
+			isRunning := wf.Status == types.WorkflowStatusRunning
+			isStale := isRunning && !isLocked
+
+			if lsStale {
+				// --stale: show only stale workflows
+				if isStale {
+					filtered = append(filtered, wf)
+				}
+			} else {
+				// Default: show only actively running (running + locked)
+				if isRunning && isLocked {
+					filtered = append(filtered, wf)
+				}
+			}
+		}
+		workflows = filtered
+	}
+
 	if len(workflows) == 0 {
-		if lsRunning {
-			fmt.Println("No running workflows")
-		} else {
+		if lsStale {
+			fmt.Println("No stale workflows")
+		} else if lsStatus != "" {
+			fmt.Printf("No %s workflows\n", lsStatus)
+		} else if lsAll {
 			fmt.Println("No workflows found")
+		} else {
+			fmt.Println("No active workflows")
 		}
 		return nil
 	}

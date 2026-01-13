@@ -15,6 +15,13 @@ import (
 	"github.com/meow-stack/meow-machine/internal/types"
 )
 
+func resetLsFlags() {
+	lsAll = false
+	lsStale = false
+	lsStatus = ""
+	lsJSON = false
+}
+
 func TestLsNoWorkflows(t *testing.T) {
 	// Create temp directory with .meow structure
 	tmpDir := t.TempDir()
@@ -29,6 +36,7 @@ func TestLsNoWorkflows(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 	defer os.Chdir(origWd)
+	defer resetLsFlags()
 
 	// Capture stdout
 	oldStdout := os.Stdout
@@ -48,8 +56,9 @@ func TestLsNoWorkflows(t *testing.T) {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	if !strings.Contains(output, "No workflows found") {
-		t.Errorf("Expected 'No workflows found', got: %s", output)
+	// Default shows "No active workflows" since we filter to active only
+	if !strings.Contains(output, "No active workflows") {
+		t.Errorf("Expected 'No active workflows', got: %s", output)
 	}
 }
 
@@ -91,6 +100,10 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
+	// Use --all to see all workflows (not just active)
+	lsAll = true
 
 	// Capture stdout
 	oldStdout := os.Stdout
@@ -113,7 +126,7 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	// Verify workflows appear in correct order (newest first)
 	lines := strings.Split(output, "\n")
 	if len(lines) < 4 { // Header + 3 workflows
-		t.Fatalf("Expected at least 4 lines, got %d", len(lines))
+		t.Fatalf("Expected at least 4 lines, got %d: %s", len(lines), output)
 	}
 
 	// Check that wf-newest appears before wf-recent before wf-old
@@ -134,7 +147,7 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	}
 
 	if newestIdx == -1 || recentIdx == -1 || oldIdx == -1 {
-		t.Fatalf("Not all workflows found in output")
+		t.Fatalf("Not all workflows found in output: %s", output)
 	}
 
 	if !(newestIdx < recentIdx && recentIdx < oldIdx) {
@@ -142,7 +155,7 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	}
 }
 
-func TestLsRunningFlag(t *testing.T) {
+func TestLsStatusFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	workflowsDir := filepath.Join(tmpDir, ".meow", "workflows")
 	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
@@ -170,10 +183,10 @@ func TestLsRunningFlag(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 	defer os.Chdir(origWd)
+	defer resetLsFlags()
 
-	// Set the running flag
-	lsRunning = true
-	defer func() { lsRunning = false }()
+	// Use --status=running to see running workflows (including stale)
+	lsStatus = "running"
 
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
@@ -192,12 +205,12 @@ func TestLsRunningFlag(t *testing.T) {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	// Should only show running workflow
+	// Should only show running workflow (note: it will show as stale since no lock)
 	if !strings.Contains(output, "wf-running") {
-		t.Error("Expected to see wf-running in output")
+		t.Errorf("Expected to see wf-running in output, got: %s", output)
 	}
 	if strings.Contains(output, "wf-done") {
-		t.Error("Should not see wf-done in output with --running flag")
+		t.Error("Should not see wf-done in output with --status=running")
 	}
 }
 
@@ -224,9 +237,11 @@ func TestLsJSONOutput(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 	defer os.Chdir(origWd)
+	defer resetLsFlags()
 
+	// Use --all and --json to see all workflows as JSON
+	lsAll = true
 	lsJSON = true
-	defer func() { lsJSON = false }()
 
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
@@ -284,6 +299,10 @@ func TestLsStaleDetection(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
+	// Use --stale to see stale workflows
+	lsStale = true
 
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
@@ -302,8 +321,11 @@ func TestLsStaleDetection(t *testing.T) {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	// Should show as stale since no lock is held
-	if !strings.Contains(output, "running (stale)") && !strings.Contains(output, "stale") {
-		t.Errorf("Expected to see 'stale' indicator, got: %s", output)
+	// Should show the stale workflow with "(stale)" indicator
+	if !strings.Contains(output, "wf-stale") {
+		t.Errorf("Expected to see wf-stale in output with --stale flag, got: %s", output)
+	}
+	if !strings.Contains(output, "running (stale)") {
+		t.Errorf("Expected to see 'running (stale)' indicator, got: %s", output)
 	}
 }
