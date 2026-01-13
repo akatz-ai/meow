@@ -36,10 +36,16 @@ func init() {
 }
 
 func runSessionID(cmd *cobra.Command, args []string) error {
-	// Get workflow ID from environment
-	workflowID := os.Getenv("MEOW_WORKFLOW")
-	if workflowID == "" {
-		return fmt.Errorf("MEOW_WORKFLOW not set - are you running in a MEOW session?")
+	// Get orchestrator socket from environment
+	// If not set, we cannot proceed (this command requires an active workflow)
+	sockPath := os.Getenv("MEOW_ORCH_SOCK")
+	if sockPath == "" {
+		// Fallback: try to derive from workflow ID for manual use
+		workflowID := os.Getenv("MEOW_WORKFLOW")
+		if workflowID == "" {
+			return fmt.Errorf("MEOW_ORCH_SOCK or MEOW_WORKFLOW not set - are you running in a MEOW session?")
+		}
+		sockPath = ipc.SocketPath(workflowID)
 	}
 
 	// Get agent ID from flag or environment
@@ -51,8 +57,8 @@ func runSessionID(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("agent not specified - use --agent flag or set MEOW_AGENT")
 	}
 
-	// Create IPC client for this workflow
-	client := ipc.NewClientForWorkflow(workflowID)
+	// Create IPC client using the socket path from environment
+	client := ipc.NewClient(sockPath)
 
 	// Get session ID
 	sessionID, err := client.GetSessionID(agentID)

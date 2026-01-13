@@ -51,10 +51,11 @@ func init() {
 }
 
 func runDone(cmd *cobra.Command, args []string) error {
-	// Check if orchestrator socket is set
+	// Get orchestrator socket from environment
 	// If not set, exit silently (no-op) - allows agents to call meow done
 	// without being in a MEOW workflow
-	if os.Getenv("MEOW_ORCH_SOCK") == "" {
+	sockPath := os.Getenv("MEOW_ORCH_SOCK")
+	if sockPath == "" {
 		return nil // Silent no-op
 	}
 
@@ -104,8 +105,8 @@ func runDone(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create IPC client for this workflow
-	client := ipc.NewClientForWorkflow(workflowID)
+	// Create IPC client using the socket path from environment
+	client := ipc.NewClient(sockPath)
 
 	// Send step done message
 	response, err := client.SendStepDone(workflowID, agentID, stepID, outputs, doneNotes)
