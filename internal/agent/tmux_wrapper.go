@@ -15,13 +15,37 @@ import (
 type TmuxWrapper struct {
 	// defaultTimeout is used when context has no deadline
 	defaultTimeout time.Duration
+	// socketPath is an optional socket path for tmux -S flag
+	socketPath string
 }
 
-// NewTmuxWrapper creates a new tmux wrapper with default settings.
-func NewTmuxWrapper() *TmuxWrapper {
-	return &TmuxWrapper{
+// TmuxOption configures a TmuxWrapper.
+type TmuxOption func(*TmuxWrapper)
+
+// WithSocketPath sets a custom socket path for tmux operations.
+// When set, all tmux commands will use -S <socketPath>.
+func WithSocketPath(path string) TmuxOption {
+	return func(w *TmuxWrapper) {
+		w.socketPath = path
+	}
+}
+
+// WithTimeout sets a custom default timeout for tmux operations.
+func WithTimeout(timeout time.Duration) TmuxOption {
+	return func(w *TmuxWrapper) {
+		w.defaultTimeout = timeout
+	}
+}
+
+// NewTmuxWrapper creates a new tmux wrapper with optional configuration.
+func NewTmuxWrapper(opts ...TmuxOption) *TmuxWrapper {
+	w := &TmuxWrapper{
 		defaultTimeout: 5 * time.Second,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 // SessionOptions configures session creation.
@@ -258,6 +282,14 @@ func (w *TmuxWrapper) UnsetEnv(ctx context.Context, session, key string) error {
 	return nil
 }
 
+// buildArgs prepends socket path argument if configured.
+func (w *TmuxWrapper) buildArgs(args ...string) []string {
+	if w.socketPath != "" {
+		return append([]string{"-S", w.socketPath}, args...)
+	}
+	return args
+}
+
 // runCmd executes a tmux command with proper timeout handling.
 // If the context has no deadline, a default timeout is applied.
 func (w *TmuxWrapper) runCmd(ctx context.Context, args ...string) ([]byte, error) {
@@ -266,7 +298,8 @@ func (w *TmuxWrapper) runCmd(ctx context.Context, args ...string) ([]byte, error
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	fullArgs := w.buildArgs(args...)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	return cmd.CombinedOutput()
 }
 
@@ -277,7 +310,8 @@ func (w *TmuxWrapper) runCmdWithBuffers(ctx context.Context, args ...string) (st
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	fullArgs := w.buildArgs(args...)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	stdout = &bytes.Buffer{}
 	stderr = &bytes.Buffer{}
 	cmd.Stdout = stdout
@@ -293,6 +327,7 @@ func (w *TmuxWrapper) hasSession(ctx context.Context, name string) bool {
 		ctx, cancel = context.WithTimeout(ctx, w.defaultTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "tmux", "has-session", "-t", name)
+	fullArgs := w.buildArgs("has-session", "-t", name)
+	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	return cmd.Run() == nil
 }

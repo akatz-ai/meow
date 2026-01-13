@@ -16,6 +16,50 @@ func TestNewTmuxWrapper(t *testing.T) {
 	if w.defaultTimeout != 5*time.Second {
 		t.Errorf("defaultTimeout = %v, want 5s", w.defaultTimeout)
 	}
+	if w.socketPath != "" {
+		t.Errorf("socketPath should be empty by default, got %q", w.socketPath)
+	}
+}
+
+func TestNewTmuxWrapper_WithOptions(t *testing.T) {
+	w := NewTmuxWrapper(
+		WithSocketPath("/tmp/test.sock"),
+		WithTimeout(10*time.Second),
+	)
+	if w.socketPath != "/tmp/test.sock" {
+		t.Errorf("socketPath = %q, want /tmp/test.sock", w.socketPath)
+	}
+	if w.defaultTimeout != 10*time.Second {
+		t.Errorf("defaultTimeout = %v, want 10s", w.defaultTimeout)
+	}
+}
+
+func TestTmuxWrapper_BuildArgs_NoSocket(t *testing.T) {
+	w := NewTmuxWrapper()
+	args := w.buildArgs("list-sessions", "-F", "#{session_name}")
+	expected := []string{"list-sessions", "-F", "#{session_name}"}
+	if len(args) != len(expected) {
+		t.Fatalf("len(args) = %d, want %d", len(args), len(expected))
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("args[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
+}
+
+func TestTmuxWrapper_BuildArgs_WithSocket(t *testing.T) {
+	w := NewTmuxWrapper(WithSocketPath("/tmp/test.sock"))
+	args := w.buildArgs("list-sessions", "-F", "#{session_name}")
+	expected := []string{"-S", "/tmp/test.sock", "list-sessions", "-F", "#{session_name}"}
+	if len(args) != len(expected) {
+		t.Fatalf("len(args) = %d, want %d", len(args), len(expected))
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("args[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
 }
 
 func TestTmuxWrapper_NewSession_EmptyName(t *testing.T) {
