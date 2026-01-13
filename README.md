@@ -1,8 +1,10 @@
 ![shimmer_meow_logo](https://github.com/user-attachments/assets/7df96ff8-e305-473d-b1ed-8f3c7341ce2e)
 
+> **Alpha Software** — This project is in early development. APIs and workflow formats may change without notice. Not recommended for production use.
+
 **Meow Executors Orchestrate Work** — The Makefile of agent orchestration.
 
-No Python. No cloud. No magic. Just tmux, YAML, and a binary.
+No Python. No cloud. No magic. Just tmux, TOML, and a binary.
 
 ## Why MEOW?
 
@@ -13,7 +15,7 @@ The AI agent orchestration space is full of frameworks: LangChain, CrewAI, Claud
 | Framework Approach | MEOW Approach |
 |--------------------|---------------|
 | Python SDK with dependencies | Single Go binary |
-| Cloud services and databases | YAML files on disk |
+| Cloud services and databases | TOML files on disk |
 | Agents as API endpoints | Agents as terminal processes |
 | Framework-specific agent code | Any terminal agent, unchanged |
 | Visual builders, dashboards | `git diff`-able TOML templates |
@@ -24,23 +26,23 @@ MEOW is for developers who use Claude Code or Aider, want multi-agent workflows,
 
 **Quick install (Linux/macOS):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akatz-ai/meow-machine/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/akatz-ai/meow/main/install.sh | sh
 ```
 
 **With Go:**
 ```bash
-go install github.com/meow-stack/meow-machine/cmd/meow@latest
+go install github.com/akatz-ai/meow/cmd/meow@latest
 ```
 
 **From source:**
 ```bash
-git clone https://github.com/akatz-ai/meow-machine
-cd meow-machine
+git clone https://github.com/akatz-ai/meow
+cd meow
 make install
 ```
 
 **Manual download:**
-Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow-machine/releases).
+Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow/releases).
 
 ## Getting Started
 
@@ -62,7 +64,6 @@ This creates the following structure:
 │   └── tdd.meow.toml
 ├── lib/             # Standard library templates
 │   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
-│   ├── claude-utils.meow.toml       # Context monitoring
 │   ├── claude-events.meow.toml      # Hook configuration
 │   └── worktree.meow.toml           # Git worktree helper
 ├── adapters/        # Agent adapter configs
@@ -86,10 +87,10 @@ meow run .meow/templates/simple.meow.toml --var agent=my-agent
 MEOW templates are programs. The orchestrator **pushes** prompts directly into running terminal sessions via tmux—it literally types into the agent's terminal and waits for `meow done`.
 
 ```
-Templates = Programs (version-controlled TOML)
-Steps     = Instructions
-Executors = Who runs each instruction
-Workflows = Running instances (runtime state in YAML)
+Templates = Programs (version-controlled .meow.toml files)
+Steps     = Instructions within a template
+Executors = Who runs each instruction (7 total)
+Runs      = Running instances (runtime state)
 ```
 
 ### 7 Executors
@@ -168,7 +169,7 @@ needs = ["get-branch"]
 
 ## Tradeoffs
 
-**MEOW gives you:** Simplicity, no vendor lock-in, version-controlled workflows, works with any terminal agent, easy debugging (just tmux + YAML).
+**MEOW gives you:** Simplicity, no vendor lock-in, version-controlled workflows, works with any terminal agent, easy debugging (just tmux + TOML).
 
 **MEOW does NOT give you:** Built-in memory/RAG, observability dashboards, managed deployment, guaranteed crash recovery (best-effort only).
 
@@ -176,11 +177,21 @@ This isn't a limitation—it's the point. MEOW coordinates; you build the rest.
 
 ## Documentation
 
-**[MVP Specification](docs/MVP-SPEC-v2.md)** — Complete technical spec covering all 7 executors, template composition, adapters, IPC, and multi-agent patterns.
+- **[Architecture](docs/ARCHITECTURE.md)** — Core principles, design decisions, and the 7 executors
+- **[Patterns](docs/PATTERNS.md)** — Common workflow patterns: work loops, Ralph Wiggum persistence, human gates, parallel agents
 
 ## Status
 
-**Active Development** — Core orchestrator functional. See spec for implementation phases.
+**Alpha** — MEOW is under active development. The core orchestrator is functional and all 7 executors are implemented, but:
+
+- **APIs may change** — Command flags, config formats, and template syntax could change between versions
+- **No stability guarantees** — Workflow files from today may need updates to work with future versions
+- **Limited testing** — While we have tests, edge cases exist; expect bugs
+- **No migration tooling** — Breaking changes won't include automatic migration paths
+
+**Use at your own risk.** MEOW is great for experimentation and personal projects, but we don't recommend it for production workloads yet.
+
+Contributions, bug reports, and feedback are welcome.
 
 ## License
 

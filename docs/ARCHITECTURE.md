@@ -2,7 +2,7 @@
 
 **MEOW** (Meow Executors Orchestrate Work) is terminal agent orchestration without the framework tax.
 
-> **The Makefile of agent orchestration.** No Python. No cloud. No magic. Just tmux, YAML, and a binary. Works with Claude Code, Aider, or any terminal agent.
+> **The Makefile of agent orchestration.** No Python. No cloud. No magic. Just tmux, TOML, and a binary. Works with Claude Code, Aider, or any terminal agent.
 
 ---
 
@@ -15,7 +15,7 @@ The AI agent orchestration space is crowded: LangChain, LangGraph, CrewAI, Claud
 | Framework Approach | MEOW Approach |
 |--------------------|---------------|
 | Python SDK with dependencies | Single Go binary |
-| Cloud services and databases | YAML files on disk |
+| Cloud services and databases | TOML files on disk |
 | Agents as API endpoints | Agents as terminal processes |
 | Framework-specific agent code | Any terminal agent, unchanged |
 | Visual builders, dashboards | `git diff`-able TOML templates |
