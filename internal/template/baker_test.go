@@ -1067,3 +1067,88 @@ template = ".worker"
 		t.Errorf("expected template '.worker', got %q", step.Foreach.Template)
 	}
 }
+
+// Test for meow-o22f: empty string variables should not be overridden by defaults
+func TestBakeWorkflow_EmptyStringNotOverriddenByDefault(t *testing.T) {
+	workflow := &Workflow{
+		Name: "test-workflow",
+		Variables: map[string]*Var{
+			"with_default": {
+				Default: "default-value",
+			},
+		},
+		Steps: []*Step{
+			{
+				ID:       "task-1",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Variable is: {{with_default}}",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-001")
+
+	// Explicitly set the variable to empty string
+	vars := map[string]string{
+		"with_default": "",
+	}
+
+	result, err := baker.BakeWorkflow(workflow, vars)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// The variable should remain empty, not be overridden by the default
+	if baker.VarContext.Get("with_default") != "" {
+		t.Errorf("expected empty string, got %q - default should not override empty string", baker.VarContext.Get("with_default"))
+	}
+
+	// Verify the prompt was substituted with empty string
+	step := result.Steps[0]
+	if step.Agent.Prompt != "Variable is: " {
+		t.Errorf("expected 'Variable is: ', got %q", step.Agent.Prompt)
+	}
+}
+
+// Test for meow-o22f: required validation should fail for unset, but not for empty
+func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
+	workflow := &Workflow{
+		Name: "test-workflow",
+		Variables: map[string]*Var{
+			"required_var": {
+				Required: true,
+			},
+		},
+		Steps: []*Step{
+			{
+				ID:       "task-1",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Do something",
+			},
+		},
+	}
+
+	baker := NewBaker("wf-001")
+
+	// Test 1: Required variable set to empty string should be valid
+	vars := map[string]string{
+		"required_var": "",
+	}
+
+	_, err := baker.BakeWorkflow(workflow, vars)
+	if err != nil {
+		t.Errorf("BakeWorkflow should succeed when required var is set to empty string, got error: %v", err)
+	}
+
+	// Test 2: Required variable not provided should fail
+	baker2 := NewBaker("wf-002")
+	_, err = baker2.BakeWorkflow(workflow, map[string]string{})
+	if err == nil {
+		t.Error("BakeWorkflow should fail when required var is not provided")
+	}
+	if !strings.Contains(err.Error(), "required") {
+		t.Errorf("expected error about required variable, got: %v", err)
+	}
+}

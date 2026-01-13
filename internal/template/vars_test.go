@@ -180,8 +180,8 @@ func TestVarContext_ApplyDefaults(t *testing.T) {
 	ctx.SetVariable("override", "user-value")
 
 	vars := map[string]Var{
-		"override": {Default: "default-value"},
-		"missing":  {Default: "default-missing"},
+		"override":   {Default: "default-value"},
+		"missing":    {Default: "default-missing"},
 		"no_default": {Required: true},
 	}
 
@@ -208,9 +208,9 @@ func TestVarContext_ValidateRequired(t *testing.T) {
 	ctx.SetVariable("provided", "value")
 
 	vars := map[string]Var{
-		"provided":  {Required: true},
-		"missing":   {Required: true},
-		"optional":  {Required: false},
+		"provided":    {Required: true},
+		"missing":     {Required: true},
+		"optional":    {Required: false},
 		"has_default": {Required: true, Default: "default"},
 	}
 
@@ -233,8 +233,8 @@ func TestVarContext_SubstituteMap(t *testing.T) {
 	ctx.SetVariable("port", "8080")
 
 	m := map[string]string{
-		"url":     "http://{{host}}:{{port}}",
-		"static":  "no-vars",
+		"url":    "http://{{host}}:{{port}}",
+		"static": "no-vars",
 	}
 
 	result, err := ctx.SubstituteMap(m)
@@ -1238,5 +1238,245 @@ func TestVarContext_SubstituteForShell_NoRecursiveSubstitution(t *testing.T) {
 	expected := "echo '{{malicious}}'"
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+// Tests for stringifyValue (meow-r8wp)
+
+func TestStringifyValue_String(t *testing.T) {
+	result := stringifyValue("hello")
+	if result != "hello" {
+		t.Errorf("expected 'hello', got %q", result)
+	}
+}
+
+func TestStringifyValue_Integer(t *testing.T) {
+	result := stringifyValue(42)
+	if result != "42" {
+		t.Errorf("expected '42', got %q", result)
+	}
+}
+
+func TestStringifyValue_Boolean(t *testing.T) {
+	result := stringifyValue(true)
+	if result != "true" {
+		t.Errorf("expected 'true', got %q", result)
+	}
+}
+
+func TestStringifyValue_MapStringAny(t *testing.T) {
+	input := map[string]any{
+		"foo": "bar",
+		"baz": 123,
+	}
+	result := stringifyValue(input)
+
+	// Result should be valid JSON
+	if !strings.Contains(result, `"foo"`) || !strings.Contains(result, `"bar"`) {
+		t.Errorf("expected valid JSON with foo:bar, got %q", result)
+	}
+}
+
+func TestStringifyValue_Slice(t *testing.T) {
+	input := []any{"a", "b", "c"}
+	result := stringifyValue(input)
+
+	// Should be valid JSON array
+	expected := `["a","b","c"]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestStringifyValue_StringSlice(t *testing.T) {
+	input := []string{"x", "y", "z"}
+	result := stringifyValue(input)
+
+	// Should be valid JSON array
+	expected := `["x","y","z"]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestStringifyValue_IntSlice(t *testing.T) {
+	input := []int{1, 2, 3}
+	result := stringifyValue(input)
+
+	// Should be valid JSON array
+	expected := `[1,2,3]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestStringifyValue_Nil(t *testing.T) {
+	result := stringifyValue(nil)
+
+	// nil should become empty string
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+func TestStringifyValue_MapStringString(t *testing.T) {
+	input := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+	}
+	result := stringifyValue(input)
+
+	// Result should be valid JSON
+	if !strings.Contains(result, `"key1"`) || !strings.Contains(result, `"value1"`) {
+		t.Errorf("expected valid JSON, got %q", result)
+	}
+}
+
+func TestStringifyValue_NestedStructure(t *testing.T) {
+	input := map[string]any{
+		"outer": map[string]any{
+			"inner": []any{1, 2, 3},
+		},
+	}
+	result := stringifyValue(input)
+
+	// Should be valid JSON with nested structure
+	if !strings.Contains(result, `"outer"`) || !strings.Contains(result, `"inner"`) {
+		t.Errorf("expected nested JSON structure, got %q", result)
+	}
+}
+
+func TestVarContext_Get_StructuredOutput(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Test map output
+	ctx.SetVariable("config", map[string]any{
+		"host": "localhost",
+		"port": 8080,
+	})
+
+	result := ctx.Get("config")
+
+	// Should be valid JSON, not "map[host:localhost port:8080]"
+	if !strings.HasPrefix(result, "{") {
+		t.Errorf("expected JSON object, got %q", result)
+	}
+	if !strings.Contains(result, `"host"`) {
+		t.Errorf("expected JSON with host field, got %q", result)
+	}
+}
+
+func TestVarContext_Substitute_MapOutput(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("data", map[string]any{
+		"name":  "test",
+		"count": 42,
+	})
+
+	result, err := ctx.Substitute("Data: {{data}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+
+	// Should contain valid JSON, not Go map literal
+	if !strings.Contains(result, `"name"`) || !strings.Contains(result, `"test"`) {
+		t.Errorf("expected JSON in result, got %q", result)
+	}
+	if strings.Contains(result, "map[") {
+		t.Errorf("result contains Go map literal instead of JSON: %q", result)
+	}
+}
+
+func TestVarContext_Substitute_SliceOutput(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+
+	result, err := ctx.Substitute("Items: {{items}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+
+	// Should contain valid JSON array
+	expected := `Items: ["a","b","c"]`
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestVarContext_SubstituteForShell_MapOutput(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("config", map[string]any{
+		"key": "value",
+	})
+
+	result, err := ctx.SubstituteForShell("echo {{config}}")
+	if err != nil {
+		t.Fatalf("SubstituteForShell failed: %v", err)
+	}
+
+	// Should be escaped JSON, not Go map literal
+	if !strings.Contains(result, `"key"`) {
+		t.Errorf("expected JSON in shell-escaped result, got %q", result)
+	}
+	if strings.Contains(result, "map[") {
+		t.Errorf("result contains Go map literal instead of JSON: %q", result)
+	}
+}
+
+// Tests for Has() method (meow-o22f)
+
+func TestVarContext_Has(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("exists", "value")
+	ctx.SetVariable("empty", "")
+
+	tests := []struct {
+		name     string
+		varName  string
+		expected bool
+	}{
+		{"variable exists with value", "exists", true},
+		{"variable exists but empty", "empty", true},
+		{"variable does not exist", "missing", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ctx.Has(tt.varName)
+			if result != tt.expected {
+				t.Errorf("Has(%q) = %v, want %v", tt.varName, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestVarContext_Has_EmptyString(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Explicitly set a variable to empty string
+	ctx.SetVariable("empty", "")
+
+	// Has() should return true (variable is set, even if empty)
+	if !ctx.Has("empty") {
+		t.Error("Has('empty') should return true for explicitly set empty string")
+	}
+
+	// Get() returns empty string
+	if ctx.Get("empty") != "" {
+		t.Errorf("Get('empty') should return empty string, got %q", ctx.Get("empty"))
+	}
+}
+
+func TestVarContext_Has_Unset(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Has() should return false for unset variable
+	if ctx.Has("unset") {
+		t.Error("Has('unset') should return false for unset variable")
+	}
+
+	// Get() also returns empty string for unset
+	if ctx.Get("unset") != "" {
+		t.Errorf("Get('unset') should return empty string, got %q", ctx.Get("unset"))
 	}
 }

@@ -3,12 +3,14 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"reflect"
 	"regexp"
 	"sort"
 	"sync"
@@ -28,6 +30,38 @@ var (
 	// ErrNotImplemented signals that an executor is not yet implemented.
 	ErrNotImplemented = errors.New("executor not implemented")
 )
+
+// stringifyValue converts any value to a string representation.
+// For maps and slices, it JSON-marshals them instead of using Go's %v format.
+// This prevents outputs like "map[foo:bar]" and produces valid JSON like {"foo":"bar"}.
+func stringifyValue(val any) string {
+	if val == nil {
+		return ""
+	}
+
+	switch v := val.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	}
+
+	// Use reflection to detect maps and slices of any type
+	rv := reflect.ValueOf(val)
+	kind := rv.Kind()
+
+	if kind == reflect.Map || kind == reflect.Slice || kind == reflect.Array {
+		// JSON-marshal structured types
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
+		// Fallback to %v if JSON marshaling fails
+		return fmt.Sprintf("%v", val)
+	}
+
+	// Use %v for scalars (int, bool, float, etc.)
+	return fmt.Sprintf("%v", val)
+}
 
 // AgentManager manages agent lifecycle (tmux sessions).
 type AgentManager interface {
@@ -494,14 +528,7 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Workflow, step *types.Ste
 			}
 
 			// Convert to string
-			switch v := val.(type) {
-			case string:
-				return v
-			case fmt.Stringer:
-				return v.String()
-			default:
-				return fmt.Sprintf("%v", v)
-			}
+			return stringifyValue(val)
 		})
 	}
 

@@ -65,7 +65,7 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 
 	// Apply variable defaults from workflow
 	for name, v := range workflow.Variables {
-		if v.Default != nil && b.VarContext.Get(name) == "" {
+		if v.Default != nil && !b.VarContext.Has(name) {
 			switch d := v.Default.(type) {
 			case string:
 				b.VarContext.Set(name, d)
@@ -78,7 +78,7 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 	// Validate required variables (skip if deferring undefined variables, e.g., in foreach)
 	if !b.VarContext.DeferUndefinedVariables {
 		for name, v := range workflow.Variables {
-			if v.Required && b.VarContext.Get(name) == "" {
+			if v.Required && !b.VarContext.Has(name) {
 				return nil, fmt.Errorf("required variable %q not provided", name)
 			}
 		}

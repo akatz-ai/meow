@@ -1,11 +1,45 @@
 package template
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
 )
+
+// stringifyValue converts any value to a string representation.
+// For maps and slices, it JSON-marshals them instead of using Go's %v format.
+// This prevents outputs like "map[foo:bar]" and produces valid JSON like {"foo":"bar"}.
+func stringifyValue(val any) string {
+	if val == nil {
+		return ""
+	}
+
+	switch v := val.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	}
+
+	// Use reflection to detect maps and slices of any type
+	rv := reflect.ValueOf(val)
+	kind := rv.Kind()
+
+	if kind == reflect.Map || kind == reflect.Slice || kind == reflect.Array {
+		// JSON-marshal structured types
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
+		// Fallback to %v if JSON marshaling fails
+		return fmt.Sprintf("%v", val)
+	}
+
+	// Use %v for scalars (int, bool, float, etc.)
+	return fmt.Sprintf("%v", val)
+}
 
 // StepInfo contains the information needed from a step for output resolution.
 type StepInfo struct {
@@ -71,9 +105,16 @@ func (c *VarContext) Set(name string, value any) {
 // Get returns the value of a user-defined variable, or empty string if not set.
 func (c *VarContext) Get(name string) string {
 	if val, ok := c.Variables[name]; ok {
-		return fmt.Sprintf("%v", val)
+		return stringifyValue(val)
 	}
 	return ""
+}
+
+// Has returns true if a user-defined variable is set (even if empty).
+// This distinguishes between unset variables and variables set to empty string.
+func (c *VarContext) Has(name string) bool {
+	_, ok := c.Variables[name]
+	return ok
 }
 
 // SetBuiltin sets a builtin variable (e.g., agent, step_id).
@@ -129,7 +170,7 @@ func (c *VarContext) Substitute(input string) (string, error) {
 				return match // Keep original on error
 			}
 
-			return fmt.Sprintf("%v", value)
+			return stringifyValue(value)
 		})
 
 		if newResult == result {
@@ -498,7 +539,7 @@ func (c *VarContext) SubstituteForShell(input string) (string, error) {
 		}
 
 		// Shell-escape the value to prevent injection
-		return ShellEscape(fmt.Sprintf("%v", value))
+		return ShellEscape(stringifyValue(value))
 	})
 
 	return result, lastErr
