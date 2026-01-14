@@ -16,9 +16,6 @@ func resetInitFlags(t *testing.T) {
 	if err := initCmd.Flags().Set("force", "false"); err != nil {
 		t.Fatalf("failed to reset force flag: %v", err)
 	}
-	if err := initCmd.Flags().Set("hooks", "false"); err != nil {
-		t.Fatalf("failed to reset hooks flag: %v", err)
-	}
 }
 
 func TestInitGlobalCreatesStructure(t *testing.T) {

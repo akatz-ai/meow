@@ -10,19 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// meowHooksJSON is the Claude Code settings.json content that configures
-// the Stop hook to emit meow events for the Ralph Wiggum persistence loop.
-const meowHooksJSON = `{
-  "hooks": {
-    "Stop": [
-      {
-        "type": "command",
-        "command": "meow event agent-stopped"
-      }
-    ]
-  }
-}`
-
 //go:embed adapters/*/adapter.toml
 var embeddedAdapters embed.FS
 
@@ -50,17 +37,11 @@ contain ephemeral runtime state.
 AGENTS.md contains guidelines for AI agents working within MEOW workflows.
 Include it in your agent worktrees or reference from your project's CLAUDE.md.
 
-To install workflow collections, use 'meow install' (coming soon).
-
-Use --hooks to also create .claude/settings.json with MEOW hooks for
-agent automation (typically only needed in agent worktrees).`,
+To install workflow collections, use 'meow install' (coming soon).`,
 	RunE: runInit,
 }
 
-var initWithHooks bool
-
 func init() {
-	initCmd.Flags().BoolVar(&initWithHooks, "hooks", false, "setup Claude Code hooks for automation (use only in agent worktrees)")
 	initCmd.Flags().BoolP("global", "g", false, "initialize ~/.meow/ instead of .meow/")
 	initCmd.Flags().Bool("force", false, "reinitialize even if directory exists")
 	rootCmd.AddCommand(initCmd)
@@ -69,10 +50,6 @@ func init() {
 func runInit(cmd *cobra.Command, args []string) error {
 	global, _ := cmd.Flags().GetBool("global")
 	force, _ := cmd.Flags().GetBool("force")
-
-	if global && initWithHooks {
-		return fmt.Errorf("cannot use --hooks with --global")
-	}
 
 	if global {
 		home, err := os.UserHomeDir()
@@ -170,17 +147,6 @@ default_adapter = "claude"
 		return fmt.Errorf("creating .beads directory: %w", err)
 	}
 
-	// Setup Claude Code hooks
-	var hooksCreated bool
-	var err error
-	if initWithHooks {
-		hooksCreated, err = setupClaudeHooks(dir)
-		if err != nil {
-			// Non-fatal - just warn
-			fmt.Printf("Warning: could not setup Claude Code hooks: %v\n", err)
-		}
-	}
-
 	fmt.Println("Initialized MEOW project in", dir)
 	fmt.Println("\nCreated:")
 	fmt.Println("  .meow/config.toml  - configuration")
@@ -189,9 +155,6 @@ default_adapter = "claude"
 	fmt.Println("  .meow/adapters/    - adapter configs")
 	fmt.Println("  .meow/runs/        - run state files")
 	fmt.Println("  .meow/logs/        - per-run log files")
-	if hooksCreated {
-		fmt.Println("  .claude/settings.json - Claude Code hooks")
-	}
 	fmt.Println("\nNext steps:")
 	fmt.Println("  1. Add workflows to .meow/workflows/")
 	fmt.Println("  2. Run a workflow:  meow run <workflow>")
@@ -372,28 +335,4 @@ func copyEmbeddedAdapters(destDir string, skipExisting bool) error {
 
 		return nil
 	})
-}
-
-// setupClaudeHooks creates .claude/settings.json with MEOW hooks.
-func setupClaudeHooks(dir string) (bool, error) {
-	claudeDir := filepath.Join(dir, ".claude")
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-
-	// Check if settings already exist
-	if _, err := os.Stat(settingsPath); err == nil {
-		// File exists - don't overwrite
-		return false, nil
-	}
-
-	// Create .claude directory
-	if err := os.MkdirAll(claudeDir, 0755); err != nil {
-		return false, fmt.Errorf("creating .claude directory: %w", err)
-	}
-
-	// Create settings with hooks
-	if err := os.WriteFile(settingsPath, []byte(meowHooksJSON), 0644); err != nil {
-		return false, fmt.Errorf("writing settings: %w", err)
-	}
-
-	return true, nil
 }
