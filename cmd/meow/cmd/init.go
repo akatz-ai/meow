@@ -23,14 +23,8 @@ const meowHooksJSON = `{
   }
 }`
 
-//go:embed workflows/*.toml
-var embeddedWorkflows embed.FS
-
 //go:embed adapters/*/adapter.toml
 var embeddedAdapters embed.FS
-
-//go:embed lib/*.toml
-var embeddedLib embed.FS
 
 //go:embed agents_template.md
 var embeddedAgentsMD string
@@ -45,13 +39,7 @@ Creates the following structure:
   .meow/
   ├── config.toml      # Project configuration
   ├── AGENTS.md        # Guidelines for agents working in workflows
-  ├── workflows/       # Workflow definitions (starter workflows included)
-  │   ├── simple.meow.toml
-  │   ├── tdd.meow.toml
-  │   └── lib/          # Standard library workflows
-  │       ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
-  │       ├── claude-events.meow.toml      # Hook configuration
-  │       └── worktree.meow.toml           # Git worktree helper
+  ├── workflows/       # Your workflow definitions (empty by default)
   ├── adapters/        # Agent adapter configs (claude, codex, opencode)
   ├── runs/            # Runtime state for active runs (gitignored)
   └── logs/            # Per-run log files (gitignored)
@@ -62,19 +50,17 @@ contain ephemeral runtime state.
 AGENTS.md contains guidelines for AI agents working within MEOW workflows.
 Include it in your agent worktrees or reference from your project's CLAUDE.md.
 
+To install workflow collections, use 'meow install' (coming soon).
+
 Use --hooks to also create .claude/settings.json with MEOW hooks for
 agent automation (typically only needed in agent worktrees).`,
 	RunE: runInit,
 }
 
-var (
-	initWithHooks     bool
-	initSkipWorkflows bool
-)
+var initWithHooks bool
 
 func init() {
 	initCmd.Flags().BoolVar(&initWithHooks, "hooks", false, "setup Claude Code hooks for automation (use only in agent worktrees)")
-	initCmd.Flags().BoolVar(&initSkipWorkflows, "skip-workflows", false, "skip copying default workflows")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -92,9 +78,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Create directory structure
 	dirs := []string{
 		filepath.Join(meowDir, "workflows"),
-		filepath.Join(meowDir, "workflows", "lib"),
 		filepath.Join(meowDir, "runs"),
-
 		filepath.Join(meowDir, "logs"),
 		filepath.Join(meowDir, "adapters"),
 	}
@@ -143,21 +127,9 @@ default_adapter = "claude"
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	// Copy default workflows
-	if !initSkipWorkflows {
-		if err := copyEmbeddedWorkflows(filepath.Join(meowDir, "workflows")); err != nil {
-			return fmt.Errorf("copying workflows: %w", err)
-		}
-	}
-
 	// Copy default adapters
 	if err := copyEmbeddedAdapters(filepath.Join(meowDir, "adapters")); err != nil {
 		return fmt.Errorf("copying adapters: %w", err)
-	}
-
-	// Copy standard library workflows
-	if err := copyEmbeddedLib(filepath.Join(meowDir, "workflows", "lib")); err != nil {
-		return fmt.Errorf("copying lib: %w", err)
 	}
 
 	// Write AGENTS.md (agent guidelines for workflow participants)
@@ -184,48 +156,21 @@ default_adapter = "claude"
 
 	fmt.Println("Initialized MEOW project in", dir)
 	fmt.Println("\nCreated:")
-	fmt.Println("  .meow/config.toml    - configuration")
-	fmt.Println("  .meow/AGENTS.md      - agent workflow guidelines")
-	fmt.Println("  .meow/workflows/     - workflow definitions")
-	fmt.Println("  .meow/workflows/lib/ - standard library (agent-persistence, etc)")
-	fmt.Println("  .meow/adapters/      - adapter configs")
-	fmt.Println("  .meow/runs/          - run state files")
-	fmt.Println("  .meow/logs/          - per-run log files")
+	fmt.Println("  .meow/config.toml  - configuration")
+	fmt.Println("  .meow/AGENTS.md    - agent workflow guidelines")
+	fmt.Println("  .meow/workflows/   - your workflow definitions (empty)")
+	fmt.Println("  .meow/adapters/    - adapter configs")
+	fmt.Println("  .meow/runs/        - run state files")
+	fmt.Println("  .meow/logs/        - per-run log files")
 	if hooksCreated {
 		fmt.Println("  .claude/settings.json - Claude Code hooks")
 	}
 	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Run a workflow:    meow run simple --var task=\"My task\"")
-	fmt.Println("  2. Check status:      meow status")
-	fmt.Println("  3. Agent completes:   meow done (called by agent)")
+	fmt.Println("  1. Add workflows to .meow/workflows/")
+	fmt.Println("  2. Run a workflow:  meow run <workflow>")
+	fmt.Println("  3. Check status:    meow status")
 
 	return nil
-}
-
-// copyEmbeddedWorkflows copies workflows from the embedded filesystem.
-func copyEmbeddedWorkflows(destDir string) error {
-	return fs.WalkDir(embeddedWorkflows, "workflows", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		// Read embedded file
-		content, err := embeddedWorkflows.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("reading embedded %s: %w", path, err)
-		}
-
-		// Write to destination
-		destPath := filepath.Join(destDir, filepath.Base(path))
-		if err := os.WriteFile(destPath, content, 0644); err != nil {
-			return fmt.Errorf("writing %s: %w", destPath, err)
-		}
-
-		return nil
-	})
 }
 
 // copyEmbeddedAdapters copies adapter configs from the embedded filesystem.
@@ -254,32 +199,6 @@ func copyEmbeddedAdapters(destDir string) error {
 			return fmt.Errorf("creating adapter dir %s: %w", filepath.Dir(destPath), err)
 		}
 
-		if err := os.WriteFile(destPath, content, 0644); err != nil {
-			return fmt.Errorf("writing %s: %w", destPath, err)
-		}
-
-		return nil
-	})
-}
-
-// copyEmbeddedLib copies standard library templates from the embedded filesystem.
-func copyEmbeddedLib(destDir string) error {
-	return fs.WalkDir(embeddedLib, "lib", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		// Read embedded file
-		content, err := embeddedLib.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("reading embedded %s: %w", path, err)
-		}
-
-		// Write to destination
-		destPath := filepath.Join(destDir, filepath.Base(path))
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
 		}
