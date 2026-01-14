@@ -2,99 +2,72 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/types"
 )
 
 func resetLsFlags() {
 	lsAll = false
-	lsStale = false
-	lsStatus = ""
 	lsJSON = false
 }
 
-func TestLsNoWorkflows(t *testing.T) {
-	// Create temp directory with .meow structure
-	tmpDir := t.TempDir()
-	runsDir := filepath.Join(tmpDir, ".meow", "runs")
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
-		t.Fatalf("failed to create runs dir: %v", err)
+func writeWorkflowFile(t *testing.T, baseDir, name, description string) string {
+	t.Helper()
+
+	path := filepath.Join(baseDir, ".meow", "workflows", filepath.FromSlash(name)+".meow.toml")
+	content := fmt.Sprintf(`
+[main]
+name = "main"
+description = %q
+
+[[main.steps]]
+id = "step1"
+executor = "shell"
+command = "echo hello"
+`, description)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("failed to create workflow dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write workflow: %v", err)
 	}
 
-	// Change to temp directory
-	origWd, _ := os.Getwd()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer os.Chdir(origWd)
-	defer resetLsFlags()
+	return path
+}
 
-	// Capture stdout
+func captureOutput(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := runLs(lsCmd, nil)
+	err := fn()
 
 	w.Close()
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	if err != nil {
-		t.Fatalf("runLs failed: %v", err)
-	}
-
-	// Default shows "No active workflows" since we filter to active only
-	if !strings.Contains(output, "No active workflows") {
-		t.Errorf("Expected 'No active workflows', got: %s", output)
-	}
+	_, _ = io.Copy(&buf, r)
+	return buf.String(), err
 }
 
-func TestLsWorkflowsSortedByDate(t *testing.T) {
+func TestLsNoWorkflows(t *testing.T) {
 	tmpDir := t.TempDir()
-	runsDir := filepath.Join(tmpDir, ".meow", "runs")
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
-		t.Fatalf("failed to create runs dir: %v", err)
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".meow"), 0755); err != nil {
+		t.Fatalf("failed to create .meow dir: %v", err)
 	}
 
-	// Create workflows with different timestamps
-	store, err := orchestrator.NewYAMLRunStore(runsDir)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// Create workflows with different start times
-	wf1 := types.NewRun("run-old", "test1.meow.toml", nil)
-	wf1.StartedAt = time.Now().Add(-2 * time.Hour)
-	wf1.Status = types.RunStatusDone
-
-	wf2 := types.NewRun("run-recent", "test2.meow.toml", nil)
-	wf2.StartedAt = time.Now().Add(-1 * time.Hour)
-	wf2.Status = types.RunStatusRunning
-
-	wf3 := types.NewRun("run-newest", "test3.meow.toml", nil)
-	wf3.StartedAt = time.Now()
-	wf3.Status = types.RunStatusRunning
-
-	store.Create(ctx, wf1)
-	store.Create(ctx, wf2)
-	store.Create(ctx, wf3)
-
-	// Change to temp directory
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("failed to chdir: %v", err)
@@ -102,81 +75,84 @@ func TestLsWorkflowsSortedByDate(t *testing.T) {
 	defer os.Chdir(origWd)
 	defer resetLsFlags()
 
-	// Use --all to see all workflows (not just active)
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runLs failed: %v", err)
+	}
+
+	if !strings.Contains(output, "No workflows found") {
+		t.Fatalf("Expected 'No workflows found', got: %s", output)
+	}
+}
+
+func TestLsTopLevelOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+	writeWorkflowFile(t, tmpDir, "top-level", "Top level workflow")
+	writeWorkflowFile(t, tmpDir, "lib/sub", "Sub workflow")
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runLs failed: %v", err)
+	}
+
+	if !strings.Contains(output, "top-level") {
+		t.Fatalf("Expected top-level workflow in output: %s", output)
+	}
+	if strings.Contains(output, "lib/sub") {
+		t.Fatalf("Did not expect subdirectory workflow without --all: %s", output)
+	}
+}
+
+func TestLsAllIncludesSubdirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+	writeWorkflowFile(t, tmpDir, "top-level", "Top level workflow")
+	writeWorkflowFile(t, tmpDir, "lib/sub", "Sub workflow")
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
 	lsAll = true
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err = runLs(lsCmd, nil)
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
 	if err != nil {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	// Verify workflows appear in correct order (newest first)
-	lines := strings.Split(output, "\n")
-	if len(lines) < 4 { // Header + 3 workflows
-		t.Fatalf("Expected at least 4 lines, got %d: %s", len(lines), output)
-	}
-
-	// Check that wf-newest appears before wf-recent before wf-old
-	newestIdx := -1
-	recentIdx := -1
-	oldIdx := -1
-
-	for i, line := range lines {
-		if strings.Contains(line, "run-newest") {
-			newestIdx = i
-		}
-		if strings.Contains(line, "run-recent") {
-			recentIdx = i
-		}
-		if strings.Contains(line, "run-old") {
-			oldIdx = i
-		}
-	}
-
-	if newestIdx == -1 || recentIdx == -1 || oldIdx == -1 {
-		t.Fatalf("Not all workflows found in output: %s", output)
-	}
-
-	if !(newestIdx < recentIdx && recentIdx < oldIdx) {
-		t.Errorf("Workflows not sorted by date (newest first). Order: newest=%d, recent=%d, old=%d", newestIdx, recentIdx, oldIdx)
+	if !strings.Contains(output, "top-level") || !strings.Contains(output, "lib/sub") {
+		t.Fatalf("Expected both workflows with --all, got: %s", output)
 	}
 }
 
-func TestLsStatusFlag(t *testing.T) {
+func TestLsPathArgument(t *testing.T) {
 	tmpDir := t.TempDir()
-	runsDir := filepath.Join(tmpDir, ".meow", "runs")
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
-		t.Fatalf("failed to create runs dir: %v", err)
-	}
+	userHome := t.TempDir()
 
-	store, err := orchestrator.NewYAMLRunStore(runsDir)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-
-	ctx := context.Background()
-
-	wfRunning := types.NewRun("run-running", "test.meow.toml", nil)
-	wfRunning.Status = types.RunStatusRunning
-
-	wfDone := types.NewRun("run-done", "test.meow.toml", nil)
-	wfDone.Status = types.RunStatusDone
-
-	store.Create(ctx, wfRunning)
-	store.Create(ctx, wfDone)
+	t.Setenv("HOME", userHome)
+	writeWorkflowFile(t, tmpDir, "top-level", "Top level workflow")
+	writeWorkflowFile(t, tmpDir, "lib/sub", "Sub workflow")
 
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmpDir); err != nil {
@@ -185,52 +161,60 @@ func TestLsStatusFlag(t *testing.T) {
 	defer os.Chdir(origWd)
 	defer resetLsFlags()
 
-	// Use --status=running to see running workflows (including stale)
-	lsStatus = "running"
-
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err = runLs(lsCmd, nil)
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, []string{"lib"})
+	})
 	if err != nil {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	// Should only show running workflow (note: it will show as stale since no lock)
-	if !strings.Contains(output, "run-running") {
-		t.Errorf("Expected to see wf-running in output, got: %s", output)
+	if !strings.Contains(output, "lib/sub") {
+		t.Fatalf("Expected lib/sub workflow, got: %s", output)
 	}
-	if strings.Contains(output, "run-done") {
-		t.Error("Should not see wf-done in output with --status=running")
+	if strings.Contains(output, "top-level") {
+		t.Fatalf("Did not expect top-level workflow when listing lib/: %s", output)
+	}
+}
+
+func TestLsProjectOverridesUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+	writeWorkflowFile(t, tmpDir, "shared", "Project workflow")
+	writeWorkflowFile(t, userHome, "shared", "User workflow")
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runLs failed: %v", err)
+	}
+
+	if !strings.Contains(output, "shared") {
+		t.Fatalf("Expected shared workflow in output: %s", output)
+	}
+	if !strings.Contains(output, "project") {
+		t.Fatalf("Expected project source for shared workflow: %s", output)
+	}
+	if strings.Contains(output, "user") {
+		t.Fatalf("Did not expect user source for shadowed workflow: %s", output)
 	}
 }
 
 func TestLsJSONOutput(t *testing.T) {
 	tmpDir := t.TempDir()
-	runsDir := filepath.Join(tmpDir, ".meow", "runs")
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
-		t.Fatalf("failed to create runs dir: %v", err)
-	}
+	userHome := t.TempDir()
 
-	store, err := orchestrator.NewYAMLRunStore(runsDir)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-
-	ctx := context.Background()
-
-	wf := types.NewRun("run-test", "test.meow.toml", nil)
-	wf.Status = types.RunStatusRunning
-	store.Create(ctx, wf)
+	t.Setenv("HOME", userHome)
+	writeWorkflowFile(t, tmpDir, "json-workflow", "JSON workflow")
 
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmpDir); err != nil {
@@ -239,93 +223,25 @@ func TestLsJSONOutput(t *testing.T) {
 	defer os.Chdir(origWd)
 	defer resetLsFlags()
 
-	// Use --all and --json to see all workflows as JSON
-	lsAll = true
 	lsJSON = true
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err = runLs(lsCmd, nil)
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
 	if err != nil {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
-	// Verify it's valid JSON
 	var result []map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("Output is not valid JSON: %v", err)
 	}
 
 	if len(result) != 1 {
-		t.Errorf("Expected 1 workflow, got %d", len(result))
+		t.Fatalf("Expected 1 workflow, got %d", len(result))
 	}
 
-	if result[0]["id"] != "run-test" {
-		t.Errorf("Expected id 'wf-test', got %v", result[0]["id"])
-	}
-}
-
-func TestLsStaleDetection(t *testing.T) {
-	tmpDir := t.TempDir()
-	runsDir := filepath.Join(tmpDir, ".meow", "runs")
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
-		t.Fatalf("failed to create runs dir: %v", err)
-	}
-
-	store, err := orchestrator.NewYAMLRunStore(runsDir)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// Create a workflow with running status but no lock held
-	wf := types.NewRun("run-stale", "test.meow.toml", nil)
-	wf.Status = types.RunStatusRunning
-	store.Create(ctx, wf)
-
-	origWd, _ := os.Getwd()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer os.Chdir(origWd)
-	defer resetLsFlags()
-
-	// Use --stale to see stale workflows
-	lsStale = true
-
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err = runLs(lsCmd, nil)
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	if err != nil {
-		t.Fatalf("runLs failed: %v", err)
-	}
-
-	// Should show the stale workflow with "(stale)" indicator
-	if !strings.Contains(output, "run-stale") {
-		t.Errorf("Expected to see wf-stale in output with --stale flag, got: %s", output)
-	}
-	if !strings.Contains(output, "running (stale)") {
-		t.Errorf("Expected to see 'running (stale)' indicator, got: %s", output)
+	if result[0]["workflow"] != "json-workflow" {
+		t.Fatalf("Expected workflow 'json-workflow', got %v", result[0]["workflow"])
 	}
 }
