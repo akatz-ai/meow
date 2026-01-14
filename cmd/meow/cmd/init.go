@@ -61,18 +61,44 @@ var initWithHooks bool
 
 func init() {
 	initCmd.Flags().BoolVar(&initWithHooks, "hooks", false, "setup Claude Code hooks for automation (use only in agent worktrees)")
+	initCmd.Flags().BoolP("global", "g", false, "initialize ~/.meow/ instead of .meow/")
+	initCmd.Flags().Bool("force", false, "reinitialize even if directory exists")
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	global, _ := cmd.Flags().GetBool("global")
+	force, _ := cmd.Flags().GetBool("force")
+
+	if global && initWithHooks {
+		return fmt.Errorf("cannot use --hooks with --global")
+	}
+
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		meowDir := filepath.Join(home, ".meow")
+		return initGlobalDirectory(meowDir, force)
+	}
+
 	dir, err := getWorkDir()
 	if err != nil {
 		return err
 	}
 
 	meowDir := filepath.Join(dir, ".meow")
+	return initProjectDirectory(dir, meowDir, force)
+}
+
+func initProjectDirectory(dir, meowDir string, force bool) error {
 	if _, err := os.Stat(meowDir); err == nil {
-		return fmt.Errorf("MEOW project already initialized (found .meow directory)")
+		if !force {
+			return fmt.Errorf("MEOW project already initialized (found .meow directory)")
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking .meow directory: %w", err)
 	}
 
 	// Create directory structure
@@ -123,18 +149,18 @@ setup_hooks = true
 # Change this if you prefer a different default adapter.
 default_adapter = "claude"
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if _, err := writeFileIfMissing(configPath, []byte(configContent)); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
 	// Copy default adapters
-	if err := copyEmbeddedAdapters(filepath.Join(meowDir, "adapters")); err != nil {
+	if err := copyEmbeddedAdapters(filepath.Join(meowDir, "adapters"), force); err != nil {
 		return fmt.Errorf("copying adapters: %w", err)
 	}
 
 	// Write AGENTS.md (agent guidelines for workflow participants)
 	agentsPath := filepath.Join(meowDir, "AGENTS.md")
-	if err := os.WriteFile(agentsPath, []byte(embeddedAgentsMD), 0644); err != nil {
+	if _, err := writeFileIfMissing(agentsPath, []byte(embeddedAgentsMD)); err != nil {
 		return fmt.Errorf("writing AGENTS.md: %w", err)
 	}
 
@@ -146,6 +172,7 @@ default_adapter = "claude"
 
 	// Setup Claude Code hooks
 	var hooksCreated bool
+	var err error
 	if initWithHooks {
 		hooksCreated, err = setupClaudeHooks(dir)
 		if err != nil {
@@ -173,8 +200,140 @@ default_adapter = "claude"
 	return nil
 }
 
+func initGlobalDirectory(meowDir string, force bool) error {
+	if _, err := os.Stat(meowDir); err == nil {
+		if !force {
+			fmt.Println("~/.meow/ already exists.")
+			fmt.Println()
+			fmt.Println("Use --force to reinitialize (existing files preserved, missing files created).")
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking ~/.meow directory: %w", err)
+	}
+
+	if force {
+		fmt.Println("Reinitializing ~/.meow/...")
+	} else {
+		fmt.Println("Initializing user-global MEOW directory...")
+	}
+
+	if _, err := ensureDir(meowDir); err != nil {
+		return fmt.Errorf("creating directory %s: %w", meowDir, err)
+	}
+
+	workflowsDir := filepath.Join(meowDir, "workflows")
+	workflowsLibDir := filepath.Join(workflowsDir, "lib")
+	adaptersDir := filepath.Join(meowDir, "adapters")
+
+	workflowsCreated, err := ensureDir(workflowsDir)
+	if err != nil {
+		return fmt.Errorf("creating workflows directory: %w", err)
+	}
+
+	workflowsLibCreated, err := ensureDir(workflowsLibDir)
+	if err != nil {
+		return fmt.Errorf("creating workflows/lib directory: %w", err)
+	}
+
+	adaptersCreated, err := ensureDir(adaptersDir)
+	if err != nil {
+		return fmt.Errorf("creating adapters directory: %w", err)
+	}
+
+	globalConfigContent := `# MEOW Global Configuration
+# These settings apply to all projects unless overridden.
+
+version = "1"
+
+[defaults]
+# Default adapter for spawn steps
+# adapter = "claude"
+
+[agent]
+# Auto-setup hooks when spawning agents
+setup_hooks = true
+`
+
+	configPath := filepath.Join(meowDir, "config.toml")
+	configCreated, err := writeFileIfMissing(configPath, []byte(globalConfigContent))
+	if err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	if force {
+		if configCreated {
+			fmt.Println("  config.toml created")
+		} else {
+			fmt.Println("  config.toml already exists (preserved)")
+		}
+		if workflowsCreated {
+			fmt.Println("  workflows/ created")
+		} else {
+			fmt.Println("  workflows/ already exists (preserved)")
+		}
+		if workflowsLibCreated {
+			fmt.Println("  workflows/lib/ created")
+		} else {
+			fmt.Println("  workflows/lib/ already exists (preserved)")
+		}
+		if adaptersCreated {
+			fmt.Println("  adapters/ created")
+		} else {
+			fmt.Println("  adapters/ already exists (preserved)")
+		}
+		fmt.Println()
+		fmt.Println("Done.")
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("Created ~/.meow/")
+	fmt.Println("├── config.toml      # Global configuration")
+	fmt.Println("├── workflows/       # Your reusable workflows")
+	fmt.Println("│   └── lib/         # Utilities (filtered from meow ls by default)")
+	fmt.Println("└── adapters/        # Custom agent adapters")
+	fmt.Println()
+	fmt.Println("To add a global workflow:")
+	fmt.Println("  cp my-workflow.meow.toml ~/.meow/workflows/")
+	fmt.Println()
+	fmt.Println("To install from a collection:")
+	fmt.Println("  meow collection add github.com/user/collection")
+	fmt.Println("  meow install collection/pack")
+	fmt.Println()
+	fmt.Println("Global workflows are available in all your projects.")
+
+	return nil
+}
+
+func ensureDir(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func writeFileIfMissing(path string, content []byte) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // copyEmbeddedAdapters copies adapter configs from the embedded filesystem.
-func copyEmbeddedAdapters(destDir string) error {
+func copyEmbeddedAdapters(destDir string, skipExisting bool) error {
 	return fs.WalkDir(embeddedAdapters, "adapters", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -197,6 +356,14 @@ func copyEmbeddedAdapters(destDir string) error {
 
 		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 			return fmt.Errorf("creating adapter dir %s: %w", filepath.Dir(destPath), err)
+		}
+
+		if skipExisting {
+			if _, err := os.Stat(destPath); err == nil {
+				return nil
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("checking adapter %s: %w", destPath, err)
+			}
 		}
 
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
