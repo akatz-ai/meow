@@ -1,0 +1,30 @@
+# Test Context Monitor
+#
+# Simple manual test for the context monitor.
+# Spawns Claude, starts context monitor at 25% threshold.
+# Interact with Claude manually to increase context, watch for /compact.
+#
+# Run with: meow run .meow/templates/tests/test-context-monitor.meow.toml
+# Attach to session: tmux attach -t meow-<workflow-id>-test-claude
+# Kill manually with Ctrl+C
+
+[main]
+name = "test-context-monitor"
+description = "Manual test for context monitor at 25% threshold"
+
+[main.variables]
+agent = { default = "test-claude" }
+
+# Spawn the test agent
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent}}"
+
+# Start context monitor with low threshold for testing
+[[main.steps]]
+id = "monitor"
+executor = "expand"
+template = "lib/claude-utils#context-monitor"
+needs = ["spawn"]
+variables = { agent = "{{agent}}", threshold = "25", check_interval = "10" }

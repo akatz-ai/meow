@@ -1,0 +1,93 @@
+# Test Ralph Wiggum Persistence Pattern
+#
+# This test verifies the agent-persistence monitor works correctly:
+# 1. Spawns Claude
+# 2. Sends initial prompt via shell (not agent step - so we don't wait for meow done)
+# 3. RW monitor catches agent-stopped events and nudges (max 3 times)
+# 4. After 3 nudges, monitor exits
+# 5. Kill agent and complete
+#
+# Run with: meow run .meow/templates/tests/test-rw.meow.toml
+
+[main]
+name = "test-rw"
+description = "Test Ralph Wiggum persistence pattern with 3 nudges"
+
+[main.variables]
+agent = { default = "test-claude" }
+
+# Set up Claude Stop hook to emit agent-stopped events
+[[main.steps]]
+id = "setup-hooks"
+executor = "shell"
+command = """
+mkdir -p .claude
+cat > .claude/settings.json << 'EOF'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "meow event agent-stopped --data agent=$MEOW_AGENT"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+echo "Claude Stop hook configured to emit agent-stopped events"
+"""
+
+# Spawn the test agent
+[[main.steps]]
+id = "spawn"
+executor = "spawn"
+agent = "{{agent}}"
+needs = ["setup-hooks"]
+
+# Inject initial prompt via shell (not agent step, so we don't wait for meow done)
+# This triggers Claude to work, stop, and fire the Stop hook
+[[main.steps]]
+id = "inject-prompt"
+executor = "shell"
+needs = ["spawn"]
+command = """
+SESSION="meow-${MEOW_WORKFLOW}-{{agent}}"
+PROMPT="TEST: Say 'Hello #1!' then stop working and wait."
+tmux send-keys -t "$SESSION" -l "$PROMPT"
+sleep 0.1
+tmux send-keys -t "$SESSION" Enter
+echo "Initial prompt injected"
+"""
+
+# Ralph Wiggum persistence monitor - runs in parallel
+# Will nudge Claude 3 times, then exit
+# check_step = "cleanup" because it's pending until monitor completes (not done during test)
+[[main.steps]]
+id = "monitor"
+executor = "expand"
+template = "lib/agent-persistence#monitor"
+needs = ["inject-prompt"]
+variables = { agent = "{{agent}}", check_step = "cleanup", nudge_prompt = "TEST: Say 'Hello again!' then stop.", max_loops = "3", timeout = "30" }
+
+# Cleanup - kill agent after monitor loop completes (3 nudges)
+[[main.steps]]
+id = "cleanup"
+executor = "kill"
+agent = "{{agent}}"
+needs = ["monitor.monitor-loop"]
+
+# Log success
+[[main.steps]]
+id = "done"
+executor = "shell"
+command = """
+echo "=========================================="
+echo "  TEST PASSED: RW monitor completed"
+echo "  3 nudges sent successfully"
+echo "=========================================="
+"""
+needs = ["cleanup"]
