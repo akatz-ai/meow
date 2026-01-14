@@ -181,7 +181,7 @@ description = "Integration agent that merges all task branches"
 
 [integration.variables]
 spawn_args = { default = "", description = "Extra CLI args passed to agent" }
-merge_adapter = { default = "claude", description = "Agent adapter for merge/integration (claude, claude-opus, opencode, codex)" }
+merge_adapter = { default = "opencode", description = "Agent adapter for merge/integration (opencode, claude, claude-opus, codex)" }
 target_branch = { default = "main", description = "Target branch to merge into" }
 skip_merge_to_target = { default = "false", description = "If true, skip final merge to target (just merge tracks)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude only)" }
@@ -234,23 +234,34 @@ prompt = """
 Your job is to merge all feature branches into {{target_branch}}.
 When parallel agents work on the same files, conflicts are expected. Resolve them.
 
-## Step 1: Find Branch Names
+## Step 1: Get Branch Names from Enriched Tasks
 
-Read the track directories list and get branch names:
+The authoritative source for branch names is `.enriched-tasks.json`:
 ```bash
-# List of tracks to merge
-TRACK_DIRS=$(cat ../.track-dirs 2>/dev/null || cat .meow/worktrees/.track-dirs)
-echo "Tracks to merge: $TRACK_DIRS"
-
-# For each track, the branch is in ../<track-dir>/.meow-branch
+# Read branch info from the enriched tasks file (created fresh each sprint)
+cat .meow/worktrees/.enriched-tasks.json | jq -r '.[] | "\(.name): \(.branch)"'
 ```
+
+This file contains the exact branch names created for this sprint run.
+Do NOT rely on `.meow-branch` files in worktree directories - they may be stale.
 
 ## Step 2: Merge Each Branch
 
-For each track directory:
+For each track in the enriched tasks:
 ```bash
-BRANCH=$(cat ../<track-dir>/.meow-branch)
-git merge "$BRANCH" --no-edit -m "Merge: <track-name>"
+# Example: merge agent1-track branch
+BRANCH=$(jq -r '.[] | select(.name == "agent1") | .branch' .meow/worktrees/.enriched-tasks.json)
+git merge "$BRANCH" --no-edit -m "Merge: agent1-track"
+```
+
+Or loop through all:
+```bash
+for row in $(jq -c '.[]' .meow/worktrees/.enriched-tasks.json); do
+  NAME=$(echo "$row" | jq -r '.name')
+  BRANCH=$(echo "$row" | jq -r '.branch')
+  echo "Merging $NAME ($BRANCH)..."
+  git merge "$BRANCH" --no-edit -m "Merge: $NAME-track"
+done
 ```
 
 If the merge succeeds, continue to the next branch.

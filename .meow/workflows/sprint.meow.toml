@@ -25,11 +25,14 @@
 #   # Sequential mode - one agent at a time:
 #   meow run sprint --var tasks='[...]' --var parallel=false
 #
-#   # With adapter selection:
+#   # With adapter selection for implementation agents:
 #   meow run sprint --var tasks='[...]' --var adapter=claude-opus
 #
 #   # With opencode adapter (RW/context monitors disabled automatically):
 #   meow run sprint --var tasks='[...]' --var adapter=opencode
+#
+#   # Override merge/integration agent adapter (default: opencode):
+#   meow run sprint --var tasks='[...]' --var merge_adapter=claude-opus
 #
 # TASK FORMAT:
 #
@@ -80,7 +83,7 @@ target_branch = { default = "main", description = "Target branch for final merge
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
 spawn_args = { default = "", description = "Extra CLI args for spawned agents" }
 adapter = { default = "claude", description = "Agent adapter for implementation agents (claude, claude-opus, claude-sonnet, opencode, codex)" }
-merge_adapter = { default = "claude", description = "Agent adapter for integration/merge agent" }
+merge_adapter = { default = "opencode", description = "Agent adapter for integration/merge agent (opencode, claude, claude-opus, codex)" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude adapters only)" }
 max_nudges = { default = "10", description = "Max RW nudges before force-completing agent" }
 enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (claude adapters only)" }
