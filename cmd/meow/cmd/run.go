@@ -15,8 +15,8 @@ import (
 	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +62,9 @@ func init() {
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
-	templatePath := args[0]
+	templateRef := args[0]
+	workflowRef := templateRef
+	workflowName := runWorkflow
 	ctx := context.Background()
 
 	// Get working directory
@@ -83,14 +85,52 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating runs dir: %w", err)
 	}
 
-	// If template path is not absolute, resolve it
-	if !filepath.IsAbs(templatePath) {
-		templatePath = filepath.Join(dir, templatePath)
+	fileRef := templateRef
+	if strings.Contains(templateRef, "#") {
+		parts := strings.SplitN(templateRef, "#", 2)
+		fileRef = strings.TrimSpace(parts[0])
+		workflowName = strings.TrimSpace(parts[1])
+		if fileRef == "" || workflowName == "" {
+			return fmt.Errorf("invalid workflow reference: %s", templateRef)
+		}
+		if cmd.Flags().Changed("workflow") {
+			return fmt.Errorf("workflow name provided in both --workflow and %s", templateRef)
+		}
 	}
 
-	// Check template file exists
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		return fmt.Errorf("template file not found: %s", templatePath)
+	var module *workflow.Module
+	var templatePath string
+	isExplicitPath := filepath.IsAbs(fileRef) || strings.HasPrefix(fileRef, ".") || strings.HasSuffix(fileRef, ".toml")
+
+	if isExplicitPath {
+		templatePath = fileRef
+		if !filepath.IsAbs(templatePath) {
+			templatePath = filepath.Join(dir, templatePath)
+		}
+		if !strings.HasSuffix(templatePath, ".toml") {
+			if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+				templatePath = templatePath + ".meow.toml"
+			}
+		}
+		if _, err := os.Stat(templatePath); err != nil {
+			return fmt.Errorf("template file not found: %s", templatePath)
+		}
+
+		module, err = workflow.ParseModuleFile(templatePath)
+		if err != nil {
+			return fmt.Errorf("parsing template: %w", err)
+		}
+	} else {
+		loader := workflow.NewLoader(dir)
+		loaded, err := loader.LoadWorkflow(workflowRef)
+		if err != nil {
+			return fmt.Errorf("resolving workflow %q: %w", workflowRef, err)
+		}
+		templatePath = loaded.Path
+		module = loaded.Module
+		if !cmd.Flags().Changed("workflow") {
+			workflowName = loaded.Name
+		}
 	}
 
 	// Parse variables from flags
@@ -103,21 +143,15 @@ func runRun(cmd *cobra.Command, args []string) error {
 		vars[parts[0]] = parts[1]
 	}
 
-	// Load module file
-	module, err := workflow.ParseModuleFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("parsing template: %w", err)
-	}
-
 	// Get workflow (use flag or default to "main")
-	templateWorkflow := module.GetWorkflow(runWorkflow)
+	templateWorkflow := module.GetWorkflow(workflowName)
 	if templateWorkflow == nil {
 		// List available workflows for better error message
 		var available []string
 		for name := range module.Workflows {
 			available = append(available, name)
 		}
-		return fmt.Errorf("workflow %q not found in template. Available: %v", runWorkflow, available)
+		return fmt.Errorf("workflow %q not found in template. Available: %v", workflowName, available)
 	}
 
 	// Generate a unique workflow ID (or use passed ID for detached child)
@@ -136,7 +170,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if runDry {
-		fmt.Printf("Would create workflow with %d steps from template: %s (workflow: %s)\n", len(result.Steps), templatePath, runWorkflow)
+		fmt.Printf("Would create workflow with %d steps from template: %s (workflow: %s)\n", len(result.Steps), templatePath, workflowName)
 		fmt.Printf("Workflow ID: %s\n", result.WorkflowID)
 		fmt.Println()
 		for _, step := range result.Steps {
@@ -150,7 +184,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Handle detached mode: spawn child process and exit
 	if runDetach && !runDetachedChild {
-		return spawnDetachedOrchestrator(dir, templatePath, workflowID)
+		return spawnDetachedOrchestrator(dir, templatePath, workflowID, workflowName)
 	}
 
 	// Create a Workflow object
@@ -305,9 +339,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 }
 
 // spawnDetachedOrchestrator spawns a child process to run the workflow in background
-func spawnDetachedOrchestrator(dir, templatePath, workflowID string) error {
+func spawnDetachedOrchestrator(dir, templatePath, workflowID, workflowName string) error {
 	// Build command args for the child process
-	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", runWorkflow}
+	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", workflowName}
 	for _, v := range runVars {
 		args = append(args, "--var", v)
 	}
