@@ -1,0 +1,37 @@
+# Claude Code CLI adapter for MEOW (Opus model)
+
+[adapter]
+name = "claude-opus"
+description = "Claude Code CLI agent with Opus model"
+
+[spawn]
+# Command to start Claude Code with Opus model
+command = "claude --dangerously-skip-permissions --model opus"
+# Command to resume an existing session (uses {{session_id}} placeholder)
+resume_command = "claude --dangerously-skip-permissions --model opus --resume {{session_id}}"
+# Time to wait for Claude to fully start up before sending prompts
+startup_delay = "3s"
+
+[environment]
+# Prevent Claude from detecting it's in an outer tmux session
+TMUX = ""
+
+[prompt_injection]
+# Keys to send before the prompt to ensure clean state
+pre_keys = ["Escape"]
+# Small delay after pre_keys for the state change to take effect
+pre_delay = "100ms"
+# How to send the prompt text:
+# - "literal": tmux send-keys -l (handles special chars and newlines)
+# - "keys": tmux send-keys without -l (interprets key names)
+method = "literal"
+# Keys to send after the prompt to submit it
+post_keys = ["Enter"]
+# Time to wait between sending prompt and sending post_keys
+post_delay = "500ms"
+
+[graceful_stop]
+# Keys to send to initiate graceful shutdown
+keys = ["C-c"]
+# Time to wait for graceful shutdown before force killing
+wait = "2s"

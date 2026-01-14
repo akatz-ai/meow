@@ -13,37 +13,59 @@
 #
 # USAGE:
 #
-#   # Parallel mode (default) - all agents run concurrently:
-#   meow run sprint --var tasks=my-tasks.json
+#   # Basic usage with beads task system:
+#   meow run sprint --var tasks='[{"name":"impl","beads":["meow-el7q","meow-a2ht"]}]'
+#
+#   # Multiple parallel agents:
+#   meow run sprint --var tasks='[
+#     {"name":"track1","beads":["meow-el7q","meow-a2ht"]},
+#     {"name":"track2","beads":["meow-u7iu","meow-ap08"]}
+#   ]'
 #
 #   # Sequential mode - one agent at a time:
-#   meow run sprint --var tasks=my-tasks.json --var parallel=false
+#   meow run sprint --var tasks='[...]' --var parallel=false
 #
-#   # With options:
-#   meow run sprint \
-#     --var tasks=tasks.json \
-#     --var target_branch=feature/my-feature \
-#     --var skip_merge_to_target=true \
-#     --var parallel=false
+#   # With adapter selection:
+#   meow run sprint --var tasks='[...]' --var adapter=claude-opus
 #
-#   # With model selection (defaults: impl_model=opus, merge_model=opus):
-#   meow run sprint \
-#     --var tasks=tasks.json \
-#     --var impl_model=sonnet \
-#     --var merge_model=opus
+#   # With opencode adapter (RW/context monitors disabled automatically):
+#   meow run sprint --var tasks='[...]' --var adapter=opencode
 #
 # TASK FORMAT:
 #
-#   Each task in the array must have:
-#     - name: string (used for worktree/branch naming, must be valid git branch chars)
-#     - prompt: string (the task prompt given to the agent)
+#   JSON array where each object has:
+#     - name: string (track name, used for worktree/branch naming)
+#     - <task_system>: array of task IDs
 #
-#   Optional fields:
-#     - beads: string (bead IDs to close when done, e.g., "meow-abc meow-xyz")
+#   The task system key (e.g., "beads", "jira", "linear") tells the agent
+#   which system to query for full task details.
+#
+#   Examples:
+#     # Beads task system
+#     [{"name": "impl", "beads": ["meow-el7q", "meow-a2ht"]}]
+#
+#     # Jira task system (future)
+#     [{"name": "impl", "jira": ["PROJ-123", "PROJ-456"]}]
+#
+#   The agent will be told "You've been assigned <task_system>: <ids>"
+#   and should use CLAUDE.md for instructions on interacting with that system.
+#
+# ADAPTERS:
+#
+#   Available adapters (see .meow/adapters/):
+#     - claude          Default Claude Code (opus)
+#     - claude-opus     Claude Code with Opus model
+#     - claude-sonnet   Claude Code with Sonnet model
+#     - claude-haiku    Claude Code with Haiku model
+#     - opencode        OpenCode CLI
+#     - codex           Codex CLI
+#
+#   Note: RW persistence and context monitors only work with claude-* adapters.
 #
 # SEE ALSO:
 #
 #   - lib/sprint-common: Shared templates for setup, integration, cleanup
+#   - lib/agent-track: Single agent lifecycle template
 #
 # ============================================================================
 
@@ -52,17 +74,16 @@ name = "sprint"
 description = "Agent sprint workflow (parallel or sequential)"
 
 [main.variables]
-tasks = { required = true, type = "file", description = "Path to JSON file with [{name, prompt}] task objects" }
+tasks = { required = true, description = "JSON array of task assignments: [{name, <task_system>: [ids]}]" }
 parallel = { default = "true", description = "Run agents in parallel (true) or sequential (false)" }
 target_branch = { default = "main", description = "Target branch for final merge" }
 skip_merge_to_target = { default = "false", description = "If true, push branch for PR instead of merging" }
-spec_file = { default = "docs/MVP-SPEC-v2.md", description = "Spec file for agents to read (use 'none' to skip)" }
-spawn_args = { default = "", description = "Extra CLI args for spawned agents (e.g., --settings /path/to/hooks.json)" }
-impl_model = { default = "opus", description = "Model for implementation agents (opus, sonnet, haiku)" }
-merge_model = { default = "opus", description = "Model for integration/merge agents (opus, sonnet, haiku)" }
-enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
+spawn_args = { default = "", description = "Extra CLI args for spawned agents" }
+adapter = { default = "claude", description = "Agent adapter for implementation agents (claude, claude-opus, claude-sonnet, opencode, codex)" }
+merge_adapter = { default = "claude", description = "Agent adapter for integration/merge agent" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude adapters only)" }
 max_nudges = { default = "10", description = "Max RW nudges before force-completing agent" }
-enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (true/false)" }
+enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (claude adapters only)" }
 context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
 
 # Cleanup is opt-in. Only runs on success - preserves worktrees on failure for debugging.
@@ -114,9 +135,8 @@ parallel = "{{parallel}}"
 needs = ["setup.done"]
 
 [main.steps.variables]
-spec_file = "{{spec_file}}"
+adapter = "{{adapter}}"
 spawn_args = "{{spawn_args}}"
-impl_model = "{{impl_model}}"
 enable_rw = "{{enable_rw}}"
 max_nudges = "{{max_nudges}}"
 enable_context_monitor = "{{enable_context_monitor}}"
@@ -134,7 +154,7 @@ needs = ["agents"]
 
 [main.steps.variables]
 spawn_args = "{{spawn_args}}"
-merge_model = "{{merge_model}}"
+merge_adapter = "{{merge_adapter}}"
 target_branch = "{{target_branch}}"
 skip_merge_to_target = "{{skip_merge_to_target}}"
 enable_rw = "{{enable_rw}}"

@@ -10,16 +10,21 @@
 # The RW monitor ensures agents don't get stuck by re-nudging on unexpected stops.
 # The context monitor auto-compacts when context usage is high.
 #
+# ADAPTER SUPPORT:
+#   Works with any adapter (claude, claude-opus, claude-sonnet, opencode, codex).
+#   RW and context monitors only work with claude adapters (require hooks/screen-scraping).
+#   For non-claude adapters, these monitors are automatically disabled.
+#
 # Variables:
 #   agent_name   (required) - Unique agent identifier
 #   track_name   (required) - Track name for logging/identification
 #   workdir      (required) - Working directory (typically a worktree path)
 #   task_prompt  (required) - The main task prompt for the agent
-#   spec_file    (default: "none") - Spec file to read first, or "none" to skip
-#   spawn_args   (default: "") - Extra CLI args for claude
-#   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor
+#   adapter      (default: "claude") - Agent adapter (claude, claude-opus, claude-sonnet, opencode, codex)
+#   spawn_args   (default: "") - Extra CLI args passed to agent
+#   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor (claude only)
 #   max_nudges   (default: "10") - RW safety limit before force-completing
-#   enable_context_monitor (default: "true") - Enable context usage auto-compact
+#   enable_context_monitor (default: "true") - Enable context usage auto-compact (claude only)
 #   context_threshold (default: "70") - Context % to trigger /compact
 #
 # Usage:
@@ -31,7 +36,8 @@
 #     agent_name = "agent-1",
 #     track_name = "feature-x",
 #     workdir = "{{setup-worktree.create.outputs.path}}",
-#     task_prompt = "Implement feature X..."
+#     task_prompt = "Implement feature X...",
+#     adapter = "claude-opus"
 #   }
 #
 # ============================================================================
@@ -45,22 +51,28 @@ agent_name = { required = true, description = "Unique agent identifier" }
 track_name = { required = true, description = "Track name for identification" }
 workdir = { required = true, description = "Working directory path" }
 task_prompt = { required = true, description = "Main task prompt" }
-spec_file = { default = "none", description = "Spec file to read first (or 'none' to skip - task prompts should be self-contained)" }
-spawn_args = { default = "", description = "Extra CLI args for claude (e.g., --model opus)" }
-enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (true/false)" }
+adapter = { default = "claude", description = "Agent adapter (claude, claude-opus, claude-sonnet, opencode, codex)" }
+spawn_args = { default = "", description = "Extra CLI args passed to agent" }
+enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude adapters only)" }
 max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
-enable_context_monitor = { default = "true", description = "Enable context usage monitor with auto-compact (true/false)" }
+enable_context_monitor = { default = "true", description = "Enable context usage monitor with auto-compact (claude adapters only)" }
 context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
 
 # ============================================================================
-# Step 1: Setup Hooks (for agent-stopped events)
+# Step 1: Setup Hooks (for agent-stopped events, claude adapters only)
 # ============================================================================
 
 [[main.steps]]
 id = "setup-hooks"
-executor = "expand"
+executor = "branch"
+condition = "echo '{{adapter}}' | grep -q '^claude'"
+
+[main.steps.on_true]
 template = "lib/claude-events#setup-stop-hook"
 variables = { worktree = "{{workdir}}" }
+
+[main.steps.on_false]
+inline = [{ id = "skip", executor = "shell", command = "echo 'Hooks not available for {{adapter}} adapter - RW monitor will be disabled'" }]
 
 # ============================================================================
 # Step 2: Spawn Agent
@@ -70,45 +82,48 @@ variables = { worktree = "{{workdir}}" }
 id = "spawn"
 executor = "spawn"
 agent = "{{agent_name}}"
+adapter = "{{adapter}}"
 workdir = "{{workdir}}"
 spawn_args = "{{spawn_args}}"
 needs = ["setup-hooks"]
 
 # ============================================================================
-# Step 3: Ralph Wiggum Persistence Monitor (runs in parallel, optional)
+# Step 3: Ralph Wiggum Persistence Monitor (runs in parallel, claude only)
 # ============================================================================
 #
 # Monitors for unexpected agent stops and re-injects nudge prompts.
 # Runs in parallel with work/review/verify-clean steps.
 # Self-terminates when verify-clean completes.
+# Only works with claude adapters (requires Stop hook events).
 # Disable with enable_rw = "false"
 
 [[main.steps]]
 id = "persistence"
-executor = "expand"
-template = "lib/agent-persistence#optional-monitor"
+executor = "branch"
+condition = "test '{{enable_rw}}' = 'true' && echo '{{adapter}}' | grep -q '^claude'"
 needs = ["spawn"]
 
-[main.steps.variables]
-agent = "{{agent_name}}"
-check_step = "verify-clean"
-enable = "{{enable_rw}}"
-max_loops = "{{max_nudges}}"
-nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`"
+[main.steps.on_true]
+template = "lib/agent-persistence#monitor"
+variables = { agent = "{{agent_name}}", check_step = "verify-clean", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`" }
+
+[main.steps.on_false]
+inline = [{ id = "skip", executor = "shell", command = "echo 'RW persistence monitor skipped (enable_rw={{enable_rw}}, adapter={{adapter}})'" }]
 
 # ============================================================================
-# Step 4: Context Monitor (runs in parallel, optional)
+# Step 4: Context Monitor (runs in parallel, claude only)
 # ============================================================================
 #
 # Monitors agent context usage and auto-compacts when above threshold.
 # Runs in parallel with work/review/verify-clean steps.
 # Self-terminates when agent tmux session is killed.
+# Only works with claude adapters (screen-scrapes claude-specific format).
 # Disable with enable_context_monitor = "false"
 
 [[main.steps]]
 id = "context-monitor"
 executor = "branch"
-condition = "test '{{enable_context_monitor}}' = 'true'"
+condition = "test '{{enable_context_monitor}}' = 'true' && echo '{{adapter}}' | grep -q '^claude'"
 needs = ["spawn"]
 
 [main.steps.on_true]
@@ -117,30 +132,19 @@ variables = { agent = "{{agent_name}}", threshold = "{{context_threshold}}" }
 
 [main.steps.on_false]
 inline = [
-  { id = "skip", executor = "shell", command = "echo 'Context monitor disabled (enable_context_monitor=false)'" }
+  { id = "skip", executor = "shell", command = "echo 'Context monitor skipped (enable_context_monitor={{enable_context_monitor}}, adapter={{adapter}})'" }
 ]
 
 # ============================================================================
-# Step 5: Main Work (with optional spec file)
+# Step 5: Main Work
 # ============================================================================
-#
-# Uses branch to conditionally include spec file reading based on spec_file value.
 
 [[main.steps]]
-id = "check-spec"
-executor = "branch"
-condition = "test '{{spec_file}}' != 'none' && test -f '{{spec_file}}'"
+id = "work"
+executor = "agent"
+agent = "{{agent_name}}"
 needs = ["spawn"]
-
-# Spec file exists - include it in the prompt
-[main.steps.on_true]
-template = ".work-with-spec"
-variables = { agent_name = "{{agent_name}}", track_name = "{{track_name}}", task_prompt = "{{task_prompt}}", spec_file = "{{spec_file}}" }
-
-# No spec file - work without it
-[main.steps.on_false]
-template = ".work-no-spec"
-variables = { agent_name = "{{agent_name}}", track_name = "{{track_name}}", task_prompt = "{{task_prompt}}" }
+prompt = "{{task_prompt}}"
 
 # ============================================================================
 # Step 6: Self-Review
@@ -150,7 +154,7 @@ variables = { agent_name = "{{agent_name}}", track_name = "{{track_name}}", task
 id = "review"
 executor = "agent"
 agent = "{{agent_name}}"
-needs = ["check-spec"]
+needs = ["work"]
 prompt = """
 # Self-Review: {{track_name}} Track
 
@@ -203,120 +207,30 @@ echo "Track {{track_name}} is clean - all changes committed"
 # ============================================================================
 # Step 8: Kill Agent
 # ============================================================================
+#
+# Kill depends on review (not verify-clean) so agent cleanup always happens.
+# This prevents agents from being left alive if verify-clean fails.
 
 [[main.steps]]
 id = "kill"
 executor = "kill"
 agent = "{{agent_name}}"
-needs = ["verify-clean"]
+needs = ["review"]
 graceful = true
 
 # ============================================================================
 # Step 9: Done Marker (for downstream dependencies)
 # ============================================================================
+#
+# Done depends on BOTH kill and verify-clean.
+# - kill ensures agent is cleaned up
+# - verify-clean ensures no uncommitted changes
+# If verify-clean fails, done fails, but agent is still killed.
 
 [[main.steps]]
 id = "done"
 executor = "shell"
 command = "echo '{{track_name}} track complete'"
-needs = ["kill"]
+needs = ["kill", "verify-clean"]
 
 
-# ============================================================================
-# INTERNAL: Work step variants
-# ============================================================================
-
-[work-with-spec]
-name = "work-with-spec"
-description = "Internal: Work step that includes spec file reading"
-internal = true
-
-[work-with-spec.variables]
-agent_name = { required = true }
-track_name = { required = true }
-task_prompt = { required = true }
-spec_file = { required = true }
-
-[[work-with-spec.steps]]
-id = "work"
-executor = "agent"
-agent = "{{agent_name}}"
-prompt = """
-# {{track_name}} Agent Task
-
-## FIRST: Read the Specification
-Before doing ANY work, read the complete specification:
-
-@{{spec_file}}
-
-This is REQUIRED. The spec defines all types, patterns, and constraints you must follow.
-
----
-
-{{task_prompt}}
-
----
-
-## IMPORTANT CONSTRAINTS
-- **ONLY** implement the work described above
-- Do NOT work on unrelated beads or issues you might see
-- Do NOT modify files outside your assignment scope
-- If you discover related work needed, note it but do NOT implement it
-
-## Workflow
-1. If beads are referenced, run `bd show <bead-id>` for full requirements
-2. Write tests first (TDD approach) when implementing code
-3. Implement the minimum code to pass tests
-4. Commit after each logical unit with a clear message
-5. If beads are referenced, close them as you complete: `bd close <bead-id>`
-
-## When Done
-After ALL your assigned work is complete, run:
-
-```
-meow done
-```
-"""
-
-
-[work-no-spec]
-name = "work-no-spec"
-description = "Internal: Work step without spec file"
-internal = true
-
-[work-no-spec.variables]
-agent_name = { required = true }
-track_name = { required = true }
-task_prompt = { required = true }
-
-[[work-no-spec.steps]]
-id = "work"
-executor = "agent"
-agent = "{{agent_name}}"
-prompt = """
-# {{track_name}} Agent Task
-
-{{task_prompt}}
-
----
-
-## IMPORTANT CONSTRAINTS
-- **ONLY** implement the work described above
-- Do NOT work on unrelated beads or issues you might see
-- Do NOT modify files outside your assignment scope
-- If you discover related work needed, note it but do NOT implement it
-
-## Workflow
-1. If beads are referenced, run `bd show <bead-id>` for full requirements
-2. Write tests first (TDD approach) when implementing code
-3. Implement the minimum code to pass tests
-4. Commit after each logical unit with a clear message
-5. If beads are referenced, close them as you complete: `bd close <bead-id>`
-
-## When Done
-After ALL your assigned work is complete, run:
-
-```
-meow done
-```
-"""

@@ -1,4 +1,4 @@
-# MEOW Stack - Agents Instructions
+# MEOW Stack - Agent Instructions
 
 This document provides instructions for agent systems working with the MEOW Stack.
 
@@ -29,7 +29,7 @@ MEOW (Meow Executors Orchestrate Work) is a coordination language for AI agent o
 
 **Core principle: Dumb orchestrator, smart templates.**
 
-The orchestrator is generic - it knows nothing about specific agents, hooks, or what events mean. All agent-specific logic lives in templates.
+The orchestrator is generic—it knows nothing about specific agents, hooks, or what events mean. All agent-specific logic lives in templates.
 
 ## Project Status: Pre-Customer MVP
 
@@ -59,7 +59,7 @@ Delete old code rather than maintaining parallel paths.
 
 ## Async Command Execution
 
-Both **branch** and **shell** execute commands **asynchronously** in goroutines. Shell is syntactic sugar over branch - `handleShell()` converts the config and delegates to `handleBranch()`.
+Both **branch** and **shell** execute commands **asynchronously** in goroutines. Shell is syntactic sugar over branch—`handleShell()` converts the config and delegates to `handleBranch()`.
 
 This is critical for enabling parallel execution patterns:
 
@@ -111,7 +111,7 @@ Agents are kept on task via **events**, not orchestrator logic:
 3. On event, monitor injects a nudge prompt via `fire_forget` mode
 4. Monitor checks if main task is done; loops if not
 
-This is implemented entirely in `lib/agent-persistence.meow.toml`. The orchestrator just routes events - it doesn't know what "agent-stopped" means.
+This is implemented entirely in `lib/agent-persistence.meow.toml`. The orchestrator just routes events—it doesn't know what "agent-stopped" means.
 
 ## Working on Beads
 
