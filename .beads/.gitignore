@@ -1,3 +1,6 @@
 *.db
 *.db-*
 last-touched
+beads.left.*
+beads.base.*
+*.bak*
