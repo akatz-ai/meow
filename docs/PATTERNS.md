@@ -476,4 +476,4 @@ See `lib/claude-events.meow.toml` for a reusable template.
 
 ---
 
-*See `.meow/templates/` for complete working examples.*
+*See `.meow/workflows/` for complete working examples.*

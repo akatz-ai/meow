@@ -8,48 +8,31 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 )
 
-// resolveLibraryPath resolves a library template reference (e.g., "lib/worktree")
-// to an actual file path. Search order:
-// 1. Project: {baseDir}/.meow/lib/{name}.meow.toml
-// 2. User:    ~/.meow/lib/{name}.meow.toml
-//
-// Returns the resolved path and true if found, or empty string and false if not found.
-func resolveLibraryPath(baseDir, libRef string) (string, bool) {
-	// Strip "lib/" prefix to get the template name
-	name := strings.TrimPrefix(libRef, "lib/")
+func isExplicitWorkflowPath(ref string) bool {
+	return filepath.IsAbs(ref) || strings.HasPrefix(ref, ".") || strings.HasSuffix(ref, ".toml")
+}
 
-	// Build candidate paths
-	var candidates []string
-
-	// 1. Project library: .meow/lib/<name>.meow.toml
-	projectPath := filepath.Join(baseDir, ".meow", "lib", name+".meow.toml")
-	candidates = append(candidates, projectPath)
-
-	// Also try without .meow extension for backwards compat
-	projectPathAlt := filepath.Join(baseDir, ".meow", "lib", name+".toml")
-	candidates = append(candidates, projectPathAlt)
-
-	// 2. User library: ~/.meow/lib/<name>.meow.toml
-	if home, err := os.UserHomeDir(); err == nil {
-		userPath := filepath.Join(home, ".meow", "lib", name+".meow.toml")
-		candidates = append(candidates, userPath)
-
-		userPathAlt := filepath.Join(home, ".meow", "lib", name+".toml")
-		candidates = append(candidates, userPathAlt)
+func resolveWorkflowPath(baseDir, ref string) (string, error) {
+	path := ref
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
 	}
 
-	// Try each candidate
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, true
+	if !strings.HasSuffix(path, ".toml") {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			path = path + ".meow.toml"
 		}
 	}
 
-	return "", false
+	if _, err := os.Stat(path); err != nil {
+		return "", err
+	}
+
+	return path, nil
 }
 
 // ExpandResult contains the steps generated from expanding a template.
@@ -140,121 +123,65 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		// Already resolved (local reference)
 	} else if strings.Contains(templateRef, "#") {
 		parts := strings.SplitN(templateRef, "#", 2)
-		filePath := parts[0]
-		workflowName := parts[1]
+		fileRef := strings.TrimSpace(parts[0])
+		workflowName := strings.TrimSpace(parts[1])
+		if fileRef == "" || workflowName == "" {
+			return nil, fmt.Errorf("invalid workflow reference: %s", templateRef)
+		}
 
-		// Check if the file part is a library reference (e.g., "lib/agent-persistence#monitor")
-		if strings.HasPrefix(filePath, "lib/") {
-			resolved, found := resolveLibraryPath(e.BaseDir, filePath)
-			if !found {
-				name := strings.TrimPrefix(filePath, "lib/")
-				var searchPaths []string
-				searchPaths = append(searchPaths, filepath.Join(e.BaseDir, ".meow", "lib", name+".meow.toml"))
-				if home, err := os.UserHomeDir(); err == nil {
-					searchPaths = append(searchPaths, filepath.Join(home, ".meow", "lib", name+".meow.toml"))
-				}
-				return nil, fmt.Errorf("library template %q not found in: %v", filePath, searchPaths)
+		if isExplicitWorkflowPath(fileRef) {
+			modulePath, err := resolveWorkflowPath(e.BaseDir, fileRef)
+			if err != nil {
+				return nil, fmt.Errorf("resolving module path %s: %w", fileRef, err)
 			}
-			filePath = resolved
+
+			module, err := workflow.ParseModuleFile(modulePath)
+			if err != nil {
+				return nil, fmt.Errorf("loading module %s: %w", modulePath, err)
+			}
+
+			wf = module.GetWorkflow(workflowName)
+			if wf == nil {
+				return nil, fmt.Errorf("workflow %q not found in %s", workflowName, modulePath)
+			}
+			resolvedModulePath = modulePath
 		} else {
-			// Resolve file path
-			if !filepath.IsAbs(filePath) {
-				filePath = filepath.Join(e.BaseDir, filePath)
+			loader := workflow.NewLoader(e.BaseDir)
+			loaded, err := loader.LoadWorkflow(templateRef)
+			if err != nil {
+				return nil, err
 			}
-
-			// Try adding .meow.toml extension if file doesn't exist
-			if !strings.HasSuffix(filePath, ".toml") {
-				if _, err := os.Stat(filePath); os.IsNotExist(err) {
-					if _, err := os.Stat(filePath + ".meow.toml"); err == nil {
-						filePath = filePath + ".meow.toml"
-					}
-				}
-			}
+			wf = loaded.Workflow
+			resolvedModulePath = loaded.Path
 		}
-
-		// Load the module
-		module, err := workflow.ParseModuleFile(filePath)
+	} else if isExplicitWorkflowPath(templateRef) {
+		modulePath, err := resolveWorkflowPath(e.BaseDir, templateRef)
 		if err != nil {
-			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
+			return nil, fmt.Errorf("resolving module path %s: %w", templateRef, err)
 		}
 
-		wf = module.GetWorkflow(workflowName)
-		if wf == nil {
-			return nil, fmt.Errorf("workflow %q not found in %s", workflowName, filePath)
-		}
-		resolvedModulePath = filePath
-	} else if strings.HasPrefix(templateRef, "lib/") {
-		// Library reference (e.g., "lib/worktree")
-		// Resolve through library search path:
-		// 1. Project: .meow/lib/<name>.meow.toml
-		// 2. User:    ~/.meow/lib/<name>.meow.toml
-		filePath, found := resolveLibraryPath(e.BaseDir, templateRef)
-		if !found {
-			// Build helpful error message with search paths
-			name := strings.TrimPrefix(templateRef, "lib/")
-			var searchPaths []string
-			searchPaths = append(searchPaths, filepath.Join(e.BaseDir, ".meow", "lib", name+".meow.toml"))
-			if home, err := os.UserHomeDir(); err == nil {
-				searchPaths = append(searchPaths, filepath.Join(home, ".meow", "lib", name+".meow.toml"))
-			}
-			return nil, fmt.Errorf("library template %q not found in: %v", templateRef, searchPaths)
-		}
-
-		// Load the module
-		module, err := workflow.ParseModuleFile(filePath)
+		module, err := workflow.ParseModuleFile(modulePath)
 		if err != nil {
-			return nil, fmt.Errorf("loading library module %s: %w", filePath, err)
+			return nil, fmt.Errorf("loading module %s: %w", modulePath, err)
 		}
 
-		wf = module.DefaultWorkflow()
+		wf = module.GetWorkflow("main")
 		if wf == nil {
-			// Try to get any workflow
-			for _, w := range module.Workflows {
-				wf = w
-				break
+			var available []string
+			for name := range module.Workflows {
+				available = append(available, name)
 			}
+			return nil, fmt.Errorf("workflow %q not found in %s (available: %v)", "main", modulePath, available)
 		}
-		if wf == nil {
-			return nil, fmt.Errorf("no workflow found in library %s", filePath)
-		}
-		resolvedModulePath = filePath
-	} else if strings.HasSuffix(templateRef, ".toml") || strings.Contains(templateRef, "/") {
-		// Explicit file path (not a lib/ reference)
-		filePath := templateRef
-		if !filepath.IsAbs(filePath) {
-			filePath = filepath.Join(e.BaseDir, filePath)
-		}
-
-		// Try adding .meow.toml extension if file doesn't exist
-		if !strings.HasSuffix(filePath, ".toml") {
-			if _, err := os.Stat(filePath); os.IsNotExist(err) {
-				if _, err := os.Stat(filePath + ".meow.toml"); err == nil {
-					filePath = filePath + ".meow.toml"
-				}
-			}
-		}
-
-		// Load the module
-		module, err := workflow.ParseModuleFile(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("loading module %s: %w", filePath, err)
-		}
-
-		wf = module.DefaultWorkflow()
-		if wf == nil {
-			// Try to get any workflow
-			for _, w := range module.Workflows {
-				wf = w
-				break
-			}
-		}
-		if wf == nil {
-			return nil, fmt.Errorf("no workflow found in %s", filePath)
-		}
-		resolvedModulePath = filePath
+		resolvedModulePath = modulePath
 	} else {
-		// Template name - use loader
-		return nil, fmt.Errorf("named template loading not yet supported for expansion: %s", templateRef)
+		loader := workflow.NewLoader(e.BaseDir)
+		loaded, err := loader.LoadWorkflow(templateRef)
+		if err != nil {
+			return nil, err
+		}
+		wf = loaded.Workflow
+		resolvedModulePath = loaded.Path
 	}
 
 	// Create the baker

@@ -616,7 +616,7 @@ This architecture document covers **stable philosophy and design decisions**. Fo
 
 - **Beads** (`bd list`, `bd show <id>`) - What's implemented, in progress, planned
 - **Code comments** - Implementation details
-- **Template files** (`.meow/templates/`) - Working examples
+- **Workflow files** (`.meow/workflows/`) - Working examples
 - **Test files** - Expected behavior
 
 The authority on "what does MEOW do today" is the code and beads, not this document.

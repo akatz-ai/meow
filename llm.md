@@ -55,9 +55,9 @@ internal/adapter/loader.go
 internal/config/config.go
 
 # Key Template Examples
-.meow/lib/agent-persistence.meow.toml
-.meow/lib/agent-track.meow.toml
-.meow/templates/sprint.meow.toml
+.meow/workflows/lib/agent-persistence.meow.toml
+.meow/workflows/lib/agent-track.meow.toml
+.meow/workflows/sprint.meow.toml
 
 EXCLUDE:
 **/*_test.go

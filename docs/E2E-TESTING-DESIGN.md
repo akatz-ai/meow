@@ -128,7 +128,7 @@ With a simulator:
 
 ### Template Patterns Without E2E Coverage
 
-The templates in `.meow/templates/` demonstrate patterns that have no E2E tests:
+The workflows in `.meow/workflows/` demonstrate patterns that have no E2E tests:
 
 1. **test-stop-hook.meow.toml** - Specifically tests `meow prime` integration
 2. **adapter-events-impl.meow.toml** - 4-agent parallel with template expansion

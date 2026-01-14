@@ -1,235 +1,196 @@
 package workflow
 
 import (
-	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// Minimal test template content
-const testTemplateContent = `
-[meta]
-name = "test-template"
-version = "1.0.0"
-description = "Test template"
+func writeModuleFile(t *testing.T, path string, description string, includeHelper bool) {
+	t.Helper()
 
-[[steps]]
+	content := fmt.Sprintf(`
+[main]
+name = "main"
+description = %q
+
+[[main.steps]]
 id = "step1"
-description = "First step"
+executor = "shell"
+command = "echo hello"
+`, description)
+
+	if includeHelper {
+		content += `
+[helper]
+name = "helper"
+description = "helper workflow"
+internal = true
+
+[[helper.steps]]
+id = "helper-step"
+executor = "shell"
+command = "echo helper"
 `
-
-func TestLoader_Load_ProjectTemplate(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create project template
-	templatesDir := filepath.Join(dir, ".meow", "templates")
-	if err := os.MkdirAll(templatesDir, 0755); err != nil {
-		t.Fatalf("Failed to create templates dir: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(templatesDir, "test.toml"), []byte(testTemplateContent), 0644); err != nil {
-		t.Fatalf("Failed to write template: %v", err)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("failed to create module dir: %v", err)
 	}
-
-	loader := NewLoader(dir)
-	tmpl, err := loader.Load("test")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	if tmpl.Meta.Name != "test-template" {
-		t.Errorf("Meta.Name = %s, want test-template", tmpl.Meta.Name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write module: %v", err)
 	}
 }
 
-func TestLoader_Load_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	loader := NewLoader(dir)
+func TestLoader_LoadWorkflow_ProjectOverridesUser(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
 
-	_, err := loader.Load("nonexistent")
+	t.Setenv("HOME", userHome)
+
+	projectPath := filepath.Join(projectDir, ".meow", "workflows", "shared.meow.toml")
+	userPath := filepath.Join(userHome, ".meow", "workflows", "shared.meow.toml")
+
+	writeModuleFile(t, projectPath, "project version", false)
+	writeModuleFile(t, userPath, "user version", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.LoadWorkflow("shared")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Source != "project" {
+		t.Fatalf("Source = %s, want project", result.Source)
+	}
+	if result.Path != projectPath {
+		t.Fatalf("Path = %s, want %s", result.Path, projectPath)
+	}
+	if result.Workflow.Description != "project version" {
+		t.Fatalf("Description = %s, want project version", result.Workflow.Description)
+	}
+}
+
+func TestLoader_LoadWorkflow_UserFallback(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	userPath := filepath.Join(userHome, ".meow", "workflows", "global.meow.toml")
+	writeModuleFile(t, userPath, "user workflow", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.LoadWorkflow("global")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Source != "user" {
+		t.Fatalf("Source = %s, want user", result.Source)
+	}
+	if result.Path != userPath {
+		t.Fatalf("Path = %s, want %s", result.Path, userPath)
+	}
+}
+
+func TestLoader_LoadWorkflow_Subdirectory(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	workflowPath := filepath.Join(projectDir, ".meow", "workflows", "lib", "tool.meow.toml")
+	writeModuleFile(t, workflowPath, "lib workflow", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.LoadWorkflow("lib/tool")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Path != workflowPath {
+		t.Fatalf("Path = %s, want %s", result.Path, workflowPath)
+	}
+}
+
+func TestLoader_LoadWorkflow_WithSection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	workflowPath := filepath.Join(projectDir, ".meow", "workflows", "multi.meow.toml")
+	writeModuleFile(t, workflowPath, "main workflow", true)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.LoadWorkflow("multi#helper")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Name != "helper" {
+		t.Fatalf("Name = %s, want helper", result.Name)
+	}
+	if result.Workflow.Name != "helper" {
+		t.Fatalf("Workflow.Name = %s, want helper", result.Workflow.Name)
+	}
+}
+
+func TestLoader_LoadWorkflow_NotFound(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	loader := NewLoader(projectDir)
+	_, err := loader.LoadWorkflow("missing")
 	if err == nil {
-		t.Fatal("Expected error for nonexistent template")
+		t.Fatal("Expected error for missing workflow")
 	}
 
-	notFoundErr, ok := err.(*TemplateNotFoundError)
+	notFoundErr, ok := err.(*WorkflowNotFoundError)
 	if !ok {
-		t.Fatalf("Expected TemplateNotFoundError, got %T", err)
+		t.Fatalf("Expected WorkflowNotFoundError, got %T", err)
 	}
 
-	if notFoundErr.Name != "nonexistent" {
-		t.Errorf("Name = %s, want nonexistent", notFoundErr.Name)
-	}
-}
-
-func TestLoader_Load_Priority(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create project template with specific content
-	templatesDir := filepath.Join(dir, ".meow", "templates")
-	if err := os.MkdirAll(templatesDir, 0755); err != nil {
-		t.Fatalf("Failed to create templates dir: %v", err)
-	}
-
-	projectContent := `
-[meta]
-name = "project-version"
-version = "1.0.0"
-
-[[steps]]
-id = "step1"
-`
-	if err := os.WriteFile(filepath.Join(templatesDir, "priority.toml"), []byte(projectContent), 0644); err != nil {
-		t.Fatalf("Failed to write template: %v", err)
-	}
-
-	loader := NewLoader(dir)
-	tmpl, err := loader.Load("priority")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	// Should load project version (highest priority)
-	if tmpl.Meta.Name != "project-version" {
-		t.Errorf("Meta.Name = %s, want project-version (project should take priority)", tmpl.Meta.Name)
+	if notFoundErr.Ref != "missing" {
+		t.Fatalf("Ref = %s, want missing", notFoundErr.Ref)
 	}
 }
 
-func TestLoader_LoadFromPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "custom.toml")
+func TestNewLoader(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
 
-	if err := os.WriteFile(path, []byte(testTemplateContent), 0644); err != nil {
-		t.Fatalf("Failed to write template: %v", err)
+	t.Setenv("HOME", userHome)
+
+	loader := NewLoader(projectDir)
+	if loader.ProjectDir != projectDir {
+		t.Fatalf("ProjectDir = %s, want %s", loader.ProjectDir, projectDir)
 	}
 
-	loader := NewLoader(dir)
-	tmpl, err := loader.LoadFromPath(path)
-	if err != nil {
-		t.Fatalf("LoadFromPath failed: %v", err)
+	expectedUserDir := filepath.Join(userHome, ".meow")
+	if loader.UserDir != expectedUserDir {
+		t.Fatalf("UserDir = %s, want %s", loader.UserDir, expectedUserDir)
 	}
 
-	if tmpl.Meta.Name != "test-template" {
-		t.Errorf("Meta.Name = %s, want test-template", tmpl.Meta.Name)
-	}
-}
-
-func TestLoader_List(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create project templates
-	templatesDir := filepath.Join(dir, ".meow", "templates")
-	if err := os.MkdirAll(templatesDir, 0755); err != nil {
-		t.Fatalf("Failed to create templates dir: %v", err)
-	}
-
-	for _, name := range []string{"alpha", "beta"} {
-		content := `[meta]
-name = "` + name + `"
-version = "1.0.0"
-[[steps]]
-id = "step1"
-`
-		if err := os.WriteFile(filepath.Join(templatesDir, name+".toml"), []byte(content), 0644); err != nil {
-			t.Fatalf("Failed to write template: %v", err)
-		}
-	}
-
-	loader := NewLoader(dir)
-	templates, err := loader.List()
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-
-	if len(templates) != 2 {
-		t.Fatalf("Expected 2 templates, got %d", len(templates))
-	}
-
-	names := make(map[string]bool)
-	for _, tmpl := range templates {
-		names[tmpl.Name] = true
-		if tmpl.Source != "project" {
-			t.Errorf("Template %s source = %s, want project", tmpl.Name, tmpl.Source)
-		}
-	}
-
-	if !names["alpha"] || !names["beta"] {
-		t.Errorf("Missing expected templates: %v", names)
+	if loader.EmbeddedDir != "workflows" {
+		t.Fatalf("EmbeddedDir = %s, want workflows", loader.EmbeddedDir)
 	}
 }
 
-func TestLoader_List_NoDuplicates(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create same template in project
-	templatesDir := filepath.Join(dir, ".meow", "templates")
-	if err := os.MkdirAll(templatesDir, 0755); err != nil {
-		t.Fatalf("Failed to create templates dir: %v", err)
-	}
-
-	content := `[meta]
-name = "same"
-version = "1.0.0"
-[[steps]]
-id = "step1"
-`
-	if err := os.WriteFile(filepath.Join(templatesDir, "same.toml"), []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to write template: %v", err)
-	}
-
-	loader := NewLoader(dir)
-	templates, err := loader.List()
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-
-	// Count how many times "same" appears
-	count := 0
-	for _, tmpl := range templates {
-		if tmpl.Name == "same" {
-			count++
-		}
-	}
-
-	if count != 1 {
-		t.Errorf("Expected 'same' template once, got %d times", count)
-	}
-}
-
-func TestTemplateNotFoundError_Error(t *testing.T) {
-	err := &TemplateNotFoundError{
-		Name:        "missing",
-		SearchPaths: []string{"/a/b/c.toml", "/x/y/z.toml"},
+func TestWorkflowNotFoundError_Error(t *testing.T) {
+	err := &WorkflowNotFoundError{
+		Ref:      "missing",
+		Searched: []string{"/a/b/c.meow.toml", "/x/y/z.meow.toml"},
 	}
 
 	msg := err.Error()
 	if msg == "" {
 		t.Error("Error message should not be empty")
-	}
-}
-
-func TestNewLoader(t *testing.T) {
-	loader := NewLoader("/project")
-
-	if loader.ProjectDir != "/project" {
-		t.Errorf("ProjectDir = %s, want /project", loader.ProjectDir)
-	}
-	if loader.EmbeddedDir != "templates" {
-		t.Errorf("EmbeddedDir = %s, want templates", loader.EmbeddedDir)
-	}
-}
-
-// Test embedded loading (requires setting up a mock embed.FS)
-func TestLoader_LoadFromEmbedded_NoEmbedded(t *testing.T) {
-	// Reset embedded FS
-	EmbeddedFS = embed.FS{}
-	defer func() { EmbeddedFS = embed.FS{} }()
-
-	loader := NewLoader("/nonexistent")
-	_, err := loader.Load("test")
-	if err == nil {
-		t.Fatal("Expected error when no embedded templates")
 	}
 }
 

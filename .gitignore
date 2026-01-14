@@ -37,7 +37,6 @@ vendor/
 # MEOW runtime (generated at runtime)
 .meow/runs/
 .meow/logs/
-.meow/workflows/
 .meow/state/
 .meow/worktrees/
 .meow/test-artifacts/
