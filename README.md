@@ -75,11 +75,11 @@ This creates the following structure:
 ├── AGENTS.md        # Guidelines for agents in workflows
 ├── workflows/       # Workflow definitions (starter workflows included)
 │   ├── simple.meow.toml
-│   └── tdd.meow.toml
-├── lib/             # Standard library workflows
-│   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
-│   ├── claude-events.meow.toml      # Hook configuration
-│   └── worktree.meow.toml           # Git worktree helper
+│   ├── tdd.meow.toml
+│   └── lib/          # Standard library workflows
+│       ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
+│       ├── claude-events.meow.toml      # Hook configuration
+│       └── worktree.meow.toml           # Git worktree helper
 ├── adapters/        # Agent adapter configs
 │   ├── claude/
 │   ├── codex/
@@ -87,6 +87,8 @@ This creates the following structure:
 ├── runs/            # Runtime state (gitignored)
 └── logs/            # Per-run logs (gitignored)
 ```
+
+Global workflows live in `~/.meow/workflows/` and can be used in any project. Project workflows in `.meow/workflows/` take precedence when names overlap.
 
 The `AGENTS.md` file contains guidelines for AI agents working within workflows—session protocol, completion signals, and best practices. Include it in agent worktrees or reference from your project's `CLAUDE.md`.
 

@@ -47,11 +47,11 @@ Creates the following structure:
   ├── AGENTS.md        # Guidelines for agents working in workflows
   ├── workflows/       # Workflow definitions (starter workflows included)
   │   ├── simple.meow.toml
-  │   └── tdd.meow.toml
-  ├── lib/             # Standard library workflows
-  │   ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
-  │   ├── claude-events.meow.toml      # Hook configuration
-  │   └── worktree.meow.toml           # Git worktree helper
+  │   ├── tdd.meow.toml
+  │   └── lib/          # Standard library workflows
+  │       ├── agent-persistence.meow.toml  # Ralph Wiggum pattern
+  │       ├── claude-events.meow.toml      # Hook configuration
+  │       └── worktree.meow.toml           # Git worktree helper
   ├── adapters/        # Agent adapter configs (claude, codex, opencode)
   ├── runs/            # Runtime state for active runs (gitignored)
   └── logs/            # Per-run log files (gitignored)
@@ -92,8 +92,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Create directory structure
 	dirs := []string{
 		filepath.Join(meowDir, "workflows"),
-		filepath.Join(meowDir, "lib"),
+		filepath.Join(meowDir, "workflows", "lib"),
 		filepath.Join(meowDir, "runs"),
+
 		filepath.Join(meowDir, "logs"),
 		filepath.Join(meowDir, "adapters"),
 	}
@@ -154,8 +155,8 @@ default_adapter = "claude"
 		return fmt.Errorf("copying adapters: %w", err)
 	}
 
-	// Copy standard library templates
-	if err := copyEmbeddedLib(filepath.Join(meowDir, "lib")); err != nil {
+	// Copy standard library workflows
+	if err := copyEmbeddedLib(filepath.Join(meowDir, "workflows", "lib")); err != nil {
 		return fmt.Errorf("copying lib: %w", err)
 	}
 
@@ -186,7 +187,7 @@ default_adapter = "claude"
 	fmt.Println("  .meow/config.toml    - configuration")
 	fmt.Println("  .meow/AGENTS.md      - agent workflow guidelines")
 	fmt.Println("  .meow/workflows/     - workflow definitions")
-	fmt.Println("  .meow/lib/           - standard library (agent-persistence, etc)")
+	fmt.Println("  .meow/workflows/lib/ - standard library (agent-persistence, etc)")
 	fmt.Println("  .meow/adapters/      - adapter configs")
 	fmt.Println("  .meow/runs/          - run state files")
 	fmt.Println("  .meow/logs/          - per-run log files")

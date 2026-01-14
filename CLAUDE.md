@@ -131,9 +131,9 @@ When assigned a bead to implement:
 | Patterns | `docs/PATTERNS.md` |
 | Types | `internal/types/step.go`, `internal/types/workflow.go` |
 | Orchestrator | `internal/orchestrator/orchestrator.go` |
-| Templates | `internal/template/` |
+| Workflows | `internal/workflow/` |
 | CLI | `cmd/meow/cmd/` |
-| Library Templates | `.meow/templates/lib/` |
+| Library Workflows | `.meow/workflows/lib/` |
 
 ## Commands Reference
 
