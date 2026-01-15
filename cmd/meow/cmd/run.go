@@ -79,8 +79,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Ensure .meow/runs directory exists
-	runsDir := filepath.Join(dir, ".meow", "runs")
+	// Ensure runs directory exists
+	runsDir := cfg.RunsDir(dir)
 	if err := os.MkdirAll(runsDir, 0755); err != nil {
 		return fmt.Errorf("creating runs dir: %w", err)
 	}
@@ -184,7 +184,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Handle detached mode: spawn child process and exit
 	if runDetach && !runDetachedChild {
-		return spawnDetachedOrchestrator(dir, templatePath, workflowID, workflowName)
+		return spawnDetachedOrchestrator(cfg, dir, templatePath, workflowID, workflowName)
 	}
 
 	// Create a Workflow object
@@ -339,7 +339,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 }
 
 // spawnDetachedOrchestrator spawns a child process to run the workflow in background
-func spawnDetachedOrchestrator(dir, templatePath, workflowID, workflowName string) error {
+func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID, workflowName string) error {
 	// Build command args for the child process
 	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", workflowName}
 	for _, v := range runVars {
@@ -356,7 +356,7 @@ func spawnDetachedOrchestrator(dir, templatePath, workflowID, workflowName strin
 	}
 
 	// Create log file for output
-	logDir := filepath.Join(dir, ".meow", "workflows")
+	logDir := cfg.LogsDir(dir)
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("creating log dir: %w", err)
 	}
