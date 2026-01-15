@@ -239,7 +239,7 @@ When parallel agents work on the same files, conflicts are expected. Resolve the
 The authoritative source for branch names is `.enriched-tasks.json`:
 ```bash
 # Read branch info from the enriched tasks file (created fresh each sprint)
-cat .meow/worktrees/.enriched-tasks.json | jq -r '.[] | "\(.name): \(.branch)"'
+cat .meow/worktrees/.enriched-tasks.json | jq -r '.[] | "\\(.name): \\(.branch)"'
 ```
 
 This file contains the exact branch names created for this sprint run.

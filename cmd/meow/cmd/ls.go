@@ -128,7 +128,8 @@ func collectWorkflowEntries(workflowsDir, prefix string, recursive bool, source 
 			}
 			entry, err := buildWorkflowEntry(baseDir, path, source)
 			if err != nil {
-				return err
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+				return nil
 			}
 			if entry.Name != "" {
 				entries = append(entries, entry)
@@ -150,7 +151,8 @@ func collectWorkflowEntries(workflowsDir, prefix string, recursive bool, source 
 			fullPath := filepath.Join(targetDir, entry.Name())
 			workflowEntry, err := buildWorkflowEntry(baseDir, fullPath, source)
 			if err != nil {
-				return nil, err
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+				continue
 			}
 			if workflowEntry.Name != "" {
 				entries = append(entries, workflowEntry)
