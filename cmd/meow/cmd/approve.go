@@ -13,7 +13,7 @@ var approveCmd = &cobra.Command{
 	Short: "Approve a workflow gate",
 	Long: `Approve a workflow gate to allow execution to continue.
 
-This command sends an approval message to the orchestrator for the specified gate.
+This command emits a gate-approved event that can be received by await-approval waiters.
 
 Environment variables:
   MEOW_ORCH_SOCK - Path to orchestrator socket (set by orchestrator)
@@ -64,10 +64,20 @@ func runApprove(cmd *cobra.Command, args []string) error {
 	// Create IPC client
 	client := ipc.NewClient(sockPath)
 
-	// Send approval (approved=true, notes=approver, reason="")
-	err := client.SendApproval(workflowID, gateID, true, approveApprover, "")
+	// Emit gate-approved event
+	data := map[string]any{
+		"gate": gateID,
+	}
+	if approveApprover != "" {
+		data["approver"] = approveApprover
+	}
+	if workflowID != "" {
+		data["workflow"] = workflowID
+	}
+
+	err := client.SendEvent("gate-approved", data)
 	if err != nil {
-		return fmt.Errorf("sending approval: %w", err)
+		return fmt.Errorf("sending approval event: %w", err)
 	}
 
 	if verbose {

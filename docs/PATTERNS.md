@@ -131,8 +131,8 @@ id = "notify"
 executor = "shell"
 command = """
 echo "=== REVIEW REQUIRED ==="
-echo "Approve: meow approve {{workflow_id}} review-gate"
-echo "Reject:  meow reject {{workflow_id}} review-gate --reason '...'"
+echo "Approve: meow approve review-gate --workflow {{workflow_id}}"
+echo "Reject:  meow reject review-gate --workflow {{workflow_id}} --reason '...'"
 """
 
 [[steps]]
@@ -148,7 +148,12 @@ inline = []  # Continue on approval
 template = ".handle-rejection"
 ```
 
-**Note:** The `await-approval` command blocks until `meow approve` or `meow reject` is called (or timeout).
+**How it works:**
+- `meow approve` emits a `gate-approved` event
+- `meow reject` emits a `gate-rejected` event
+- `meow await-approval` waits for either event (exit 0 on approve, exit 1 on reject/timeout)
+
+This uses the same event routing infrastructure as agent events, keeping the orchestrator simple.
 
 ---
 

@@ -214,6 +214,8 @@ This is the minimal set that enables all coordination patterns:
 
 **Gate is NOT an executor.** Human approval gates are implemented as `branch` steps with `condition = "meow await-approval <gate-id>"`. This keeps the executor count minimal and makes approval mechanisms user-customizable.
 
+**Gates use the event system.** The `meow approve` and `meow reject` commands emit `gate-approved` and `gate-rejected` events respectively. The `meow await-approval` command waits for either event. This unifies gate handling with the existing event infrastructure—the orchestrator doesn't have special approval logic.
+
 ---
 
 ## Step Lifecycle

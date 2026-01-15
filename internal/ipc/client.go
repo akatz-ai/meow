@@ -111,35 +111,6 @@ func (c *Client) GetSessionID(agent string) (string, error) {
 	}
 }
 
-// SendApproval sends an approval or rejection for a gate.
-func (c *Client) SendApproval(workflow, gateID string, approved bool, notes, reason string) error {
-	msg := &ApprovalMessage{
-		Type:     MsgApproval,
-		Workflow: workflow,
-		GateID:   gateID,
-		Approved: approved,
-		Notes:    notes,
-		Reason:   reason,
-	}
-
-	response, err := c.Send(msg)
-	if err != nil {
-		return err
-	}
-
-	switch r := response.(type) {
-	case *AckMessage:
-		if !r.Success {
-			return fmt.Errorf("approval was not successful")
-		}
-		return nil
-	case *ErrorMessage:
-		return fmt.Errorf("server error: %s", r.Message)
-	default:
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-}
-
 // SendEvent emits an event to the orchestrator.
 // Returns nil on success (fire-and-forget).
 func (c *Client) SendEvent(eventType string, data map[string]any) error {

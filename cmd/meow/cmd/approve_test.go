@@ -10,7 +10,7 @@ import (
 	"github.com/meow-stack/meow-machine/internal/ipc"
 )
 
-// TestApproveWithEnvSock verifies that approve uses MEOW_ORCH_SOCK
+// TestApproveWithEnvSock verifies that approve emits gate-approved event
 func TestApproveWithEnvSock(t *testing.T) {
 	tmpDir := t.TempDir()
 	sockPath := filepath.Join(tmpDir, "test.sock")
@@ -23,7 +23,7 @@ func TestApproveWithEnvSock(t *testing.T) {
 	defer listener.Close()
 
 	received := false
-	var receivedMsg *ipc.ApprovalMessage
+	var receivedMsg *ipc.EventMessage
 
 	// Handle connection
 	done := make(chan bool)
@@ -49,9 +49,9 @@ func TestApproveWithEnvSock(t *testing.T) {
 			return
 		}
 
-		if approval, ok := msg.(*ipc.ApprovalMessage); ok {
+		if event, ok := msg.(*ipc.EventMessage); ok {
 			received = true
-			receivedMsg = approval
+			receivedMsg = event
 		}
 
 		// Send acknowledgement with newline delimiter
@@ -80,23 +80,23 @@ func TestApproveWithEnvSock(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	if !received {
-		t.Fatal("Approval message was not received")
+		t.Fatal("Event message was not received")
 	}
 
-	if receivedMsg.Workflow != "test-workflow" {
-		t.Errorf("Workflow = %q, want %q", receivedMsg.Workflow, "test-workflow")
+	if receivedMsg.EventType != "gate-approved" {
+		t.Errorf("EventType = %q, want %q", receivedMsg.EventType, "gate-approved")
 	}
 
-	if receivedMsg.GateID != "gate-123" {
-		t.Errorf("GateID = %q, want %q", receivedMsg.GateID, "gate-123")
+	if gate, ok := receivedMsg.Data["gate"].(string); !ok || gate != "gate-123" {
+		t.Errorf("Data[gate] = %v, want %q", receivedMsg.Data["gate"], "gate-123")
 	}
 
-	if !receivedMsg.Approved {
-		t.Error("Approved = false, want true")
+	if workflow, ok := receivedMsg.Data["workflow"].(string); !ok || workflow != "test-workflow" {
+		t.Errorf("Data[workflow] = %v, want %q", receivedMsg.Data["workflow"], "test-workflow")
 	}
 }
 
-// TestApproveWithApprover verifies that --approver flag is sent in notes
+// TestApproveWithApprover verifies that --approver flag is sent in event data
 func TestApproveWithApprover(t *testing.T) {
 	tmpDir := t.TempDir()
 	sockPath := filepath.Join(tmpDir, "test.sock")
@@ -107,7 +107,7 @@ func TestApproveWithApprover(t *testing.T) {
 	}
 	defer listener.Close()
 
-	var receivedMsg *ipc.ApprovalMessage
+	var receivedMsg *ipc.EventMessage
 
 	go func() {
 		conn, err := listener.Accept()
@@ -119,8 +119,8 @@ func TestApproveWithApprover(t *testing.T) {
 		data := make([]byte, 4096)
 		n, _ := conn.Read(data)
 		msg, _ := ipc.ParseMessage(data[:n])
-		if approval, ok := msg.(*ipc.ApprovalMessage); ok {
-			receivedMsg = approval
+		if event, ok := msg.(*ipc.EventMessage); ok {
+			receivedMsg = event
 		}
 
 		ack := &ipc.AckMessage{Type: ipc.MsgAck, Success: true}
@@ -150,8 +150,8 @@ func TestApproveWithApprover(t *testing.T) {
 		t.Fatal("No message received")
 	}
 
-	if receivedMsg.Notes != "John Doe" {
-		t.Errorf("Notes = %q, want %q", receivedMsg.Notes, "John Doe")
+	if approver, ok := receivedMsg.Data["approver"].(string); !ok || approver != "John Doe" {
+		t.Errorf("Data[approver] = %v, want %q", receivedMsg.Data["approver"], "John Doe")
 	}
 }
 
@@ -175,7 +175,7 @@ func TestApproveRequiresWorkflow(t *testing.T) {
 	}
 }
 
-// TestRejectWithReason verifies that --reason flag is sent
+// TestRejectWithReason verifies that --reason flag is sent in event data
 func TestRejectWithReason(t *testing.T) {
 	tmpDir := t.TempDir()
 	sockPath := filepath.Join(tmpDir, "test.sock")
@@ -186,7 +186,7 @@ func TestRejectWithReason(t *testing.T) {
 	}
 	defer listener.Close()
 
-	var receivedMsg *ipc.ApprovalMessage
+	var receivedMsg *ipc.EventMessage
 
 	go func() {
 		conn, err := listener.Accept()
@@ -198,8 +198,8 @@ func TestRejectWithReason(t *testing.T) {
 		data := make([]byte, 4096)
 		n, _ := conn.Read(data)
 		msg, _ := ipc.ParseMessage(data[:n])
-		if approval, ok := msg.(*ipc.ApprovalMessage); ok {
-			receivedMsg = approval
+		if event, ok := msg.(*ipc.EventMessage); ok {
+			receivedMsg = event
 		}
 
 		ack := &ipc.AckMessage{Type: ipc.MsgAck, Success: true}
@@ -229,11 +229,11 @@ func TestRejectWithReason(t *testing.T) {
 		t.Fatal("No message received")
 	}
 
-	if receivedMsg.Approved {
-		t.Error("Approved = true, want false for rejection")
+	if receivedMsg.EventType != "gate-rejected" {
+		t.Errorf("EventType = %q, want %q", receivedMsg.EventType, "gate-rejected")
 	}
 
-	if receivedMsg.Reason != "Tests failing" {
-		t.Errorf("Reason = %q, want %q", receivedMsg.Reason, "Tests failing")
+	if reason, ok := receivedMsg.Data["reason"].(string); !ok || reason != "Tests failing" {
+		t.Errorf("Data[reason] = %v, want %q", receivedMsg.Data["reason"], "Tests failing")
 	}
 }

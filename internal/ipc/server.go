@@ -30,10 +30,6 @@ type Handler interface {
 	// Returns a SessionIDMessage or ErrorMessage.
 	HandleGetSessionID(ctx context.Context, msg *GetSessionIDMessage) any
 
-	// HandleApproval processes a human approval/rejection signal.
-	// Returns an AckMessage or ErrorMessage.
-	HandleApproval(ctx context.Context, msg *ApprovalMessage) any
-
 	// HandleEvent processes an event emitted by an agent.
 	// Returns an AckMessage or ErrorMessage.
 	HandleEvent(ctx context.Context, msg *EventMessage) any
@@ -252,10 +248,6 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) any {
 	case *GetSessionIDMessage:
 		s.logger.Debug("handling get_session_id", "agent", m.Agent)
 		return s.handler.HandleGetSessionID(ctx, m)
-
-	case *ApprovalMessage:
-		s.logger.Debug("handling approval", "workflow", m.Workflow, "gate", m.GateID, "approved", m.Approved)
-		return s.handler.HandleApproval(ctx, m)
 
 	case *EventMessage:
 		s.logger.Debug("handling event", "event_type", m.EventType, "agent", m.Agent)

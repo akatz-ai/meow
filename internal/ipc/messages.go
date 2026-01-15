@@ -16,7 +16,6 @@ const (
 	// Request types (agent → orchestrator)
 	MsgStepDone      MessageType = "step_done"
 	MsgGetSessionID  MessageType = "get_session_id"
-	MsgApproval      MessageType = "approval"
 	MsgEvent         MessageType = "event"
 	MsgAwaitEvent    MessageType = "await_event"
 	MsgGetStepStatus MessageType = "get_step_status"
@@ -32,7 +31,7 @@ const (
 // Valid returns true if this is a recognized message type.
 func (t MessageType) Valid() bool {
 	switch t {
-	case MsgStepDone, MsgGetSessionID, MsgApproval,
+	case MsgStepDone, MsgGetSessionID,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus,
 		MsgAck, MsgError, MsgSessionID,
 		MsgEventMatch, MsgStepStatus:
@@ -44,7 +43,7 @@ func (t MessageType) Valid() bool {
 // IsRequest returns true if this message type is sent from agent to orchestrator.
 func (t MessageType) IsRequest() bool {
 	switch t {
-	case MsgStepDone, MsgGetSessionID, MsgApproval,
+	case MsgStepDone, MsgGetSessionID,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus:
 		return true
 	}
@@ -79,20 +78,6 @@ type StepDoneMessage struct {
 type GetSessionIDMessage struct {
 	Type  MessageType `json:"type"` // Always "get_session_id"
 	Agent string      `json:"agent"`
-}
-
-// ApprovalMessage signals human approval or rejection of a gate.
-// Sent by: meow approve / meow reject
-//
-// Note: GateID is the step ID of the branch step implementing the gate pattern.
-// Gates are not a separate executor - they're implemented as branch + await-approval.
-type ApprovalMessage struct {
-	Type     MessageType `json:"type"` // Always "approval"
-	Workflow string      `json:"workflow"`
-	GateID   string      `json:"gate_id"` // Step ID of the branch implementing the gate
-	Approved bool        `json:"approved"`
-	Notes    string      `json:"notes,omitempty"`
-	Reason   string      `json:"reason,omitempty"` // For rejections
 }
 
 // EventMessage emits an event from an agent.
@@ -175,7 +160,6 @@ type Message interface {
 
 func (m *StepDoneMessage) MessageType() MessageType      { return MsgStepDone }
 func (m *GetSessionIDMessage) MessageType() MessageType  { return MsgGetSessionID }
-func (m *ApprovalMessage) MessageType() MessageType      { return MsgApproval }
 func (m *EventMessage) MessageType() MessageType         { return MsgEvent }
 func (m *AwaitEventMessage) MessageType() MessageType    { return MsgAwaitEvent }
 func (m *GetStepStatusMessage) MessageType() MessageType { return MsgGetStepStatus }
@@ -206,8 +190,6 @@ func ParseMessage(data []byte) (Message, error) {
 		msg = &StepDoneMessage{}
 	case MsgGetSessionID:
 		msg = &GetSessionIDMessage{}
-	case MsgApproval:
-		msg = &ApprovalMessage{}
 	case MsgEvent:
 		msg = &EventMessage{}
 	case MsgAwaitEvent:

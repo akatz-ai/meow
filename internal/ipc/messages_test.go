@@ -13,7 +13,6 @@ func TestMessageType_Valid(t *testing.T) {
 	}{
 		{MsgStepDone, true},
 		{MsgGetSessionID, true},
-		{MsgApproval, true},
 		{MsgEvent, true},
 		{MsgAwaitEvent, true},
 		{MsgGetStepStatus, true},
@@ -34,7 +33,7 @@ func TestMessageType_Valid(t *testing.T) {
 }
 
 func TestMessageType_IsRequest(t *testing.T) {
-	requests := []MessageType{MsgStepDone, MsgGetSessionID, MsgApproval, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
+	requests := []MessageType{MsgStepDone, MsgGetSessionID, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
 	responses := []MessageType{MsgAck, MsgError, MsgSessionID, MsgEventMatch, MsgStepStatus}
 
 	for _, mt := range requests {
@@ -124,63 +123,6 @@ func TestGetSessionIDMessage_Marshal(t *testing.T) {
 
 	if got.Agent != msg.Agent {
 		t.Errorf("Agent = %q, want %q", got.Agent, msg.Agent)
-	}
-}
-
-func TestApprovalMessage_Marshal(t *testing.T) {
-	tests := []struct {
-		name string
-		msg  ApprovalMessage
-	}{
-		{
-			name: "approved",
-			msg: ApprovalMessage{
-				Type:     MsgApproval,
-				Workflow: "run-abc123",
-				GateID:   "review-gate",
-				Approved: true,
-				Notes:    "LGTM",
-			},
-		},
-		{
-			name: "rejected",
-			msg: ApprovalMessage{
-				Type:     MsgApproval,
-				Workflow: "run-abc123",
-				GateID:   "review-gate",
-				Approved: false,
-				Reason:   "Missing error handling",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := Marshal(tt.msg)
-			if err != nil {
-				t.Fatalf("Marshal() error = %v", err)
-			}
-
-			parsed, err := ParseMessage(data)
-			if err != nil {
-				t.Fatalf("ParseMessage() error = %v", err)
-			}
-
-			got, ok := parsed.(*ApprovalMessage)
-			if !ok {
-				t.Fatalf("ParseMessage() returned %T, want *ApprovalMessage", parsed)
-			}
-
-			if got.Workflow != tt.msg.Workflow {
-				t.Errorf("Workflow = %q, want %q", got.Workflow, tt.msg.Workflow)
-			}
-			if got.GateID != tt.msg.GateID {
-				t.Errorf("GateID = %q, want %q", got.GateID, tt.msg.GateID)
-			}
-			if got.Approved != tt.msg.Approved {
-				t.Errorf("Approved = %v, want %v", got.Approved, tt.msg.Approved)
-			}
-		})
 	}
 }
 

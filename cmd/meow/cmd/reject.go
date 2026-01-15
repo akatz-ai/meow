@@ -13,7 +13,7 @@ var rejectCmd = &cobra.Command{
 	Short: "Reject a workflow gate",
 	Long: `Reject a workflow gate. The workflow will take the rejection branch.
 
-This command sends a rejection message to the orchestrator for the specified gate.
+This command emits a gate-rejected event that can be received by await-approval waiters.
 
 Environment variables:
   MEOW_ORCH_SOCK - Path to orchestrator socket (set by orchestrator)
@@ -64,10 +64,20 @@ func runReject(cmd *cobra.Command, args []string) error {
 	// Create IPC client
 	client := ipc.NewClient(sockPath)
 
-	// Send rejection (approved=false, notes="", reason=rejectReason)
-	err := client.SendApproval(workflowID, gateID, false, "", rejectReason)
+	// Emit gate-rejected event
+	data := map[string]any{
+		"gate": gateID,
+	}
+	if rejectReason != "" {
+		data["reason"] = rejectReason
+	}
+	if workflowID != "" {
+		data["workflow"] = workflowID
+	}
+
+	err := client.SendEvent("gate-rejected", data)
 	if err != nil {
-		return fmt.Errorf("sending rejection: %w", err)
+		return fmt.Errorf("sending rejection event: %w", err)
 	}
 
 	if verbose {

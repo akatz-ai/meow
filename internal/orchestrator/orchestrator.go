@@ -112,7 +112,7 @@ type Orchestrator struct {
 	workflowID string
 
 	// Mutex to protect workflow state during concurrent operations.
-	// All state-mutating operations (HandleStepDone, HandleApproval, processWorkflow)
+	// All state-mutating operations (HandleStepDone, processWorkflow)
 	// must acquire this mutex before reading/writing workflow state.
 	wfMu sync.Mutex
 
@@ -146,7 +146,7 @@ func (o *Orchestrator) SetWorkflowID(id string) {
 // Run starts the orchestrator main loop.
 // It blocks until the context is cancelled or all work is done.
 // IPC messages are handled by IPCHandler which delegates to Orchestrator methods
-// (HandleStepDone, HandleApproval) for thread-safe state mutations.
+// (HandleStepDone) for thread-safe state mutations.
 // Handles SIGINT/SIGTERM for graceful shutdown with cleanup.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	ctx, o.cancel = context.WithCancel(ctx)
@@ -577,8 +577,6 @@ func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
 	switch m := msg.(type) {
 	case *ipc.StepDoneMessage:
 		return o.HandleStepDone(ctx, m)
-	case *ipc.ApprovalMessage:
-		return o.HandleApproval(ctx, m)
 	default:
 		o.logger.Warn("unknown IPC message type", "type", fmt.Sprintf("%T", msg))
 		return nil
@@ -655,38 +653,6 @@ func (o *Orchestrator) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 	}
 
 	o.logger.Info("step completed", "step", step.ID, "workflow", wf.ID)
-	return o.store.Save(ctx, wf)
-}
-
-// HandleApproval processes a gate approval/rejection.
-// Thread-safe: acquires wfMu before any state changes.
-// Called by IPCHandler - this is the ONLY code path for approval handling.
-func (o *Orchestrator) HandleApproval(ctx context.Context, msg *ipc.ApprovalMessage) error {
-	o.wfMu.Lock()
-	defer o.wfMu.Unlock()
-
-	wf, err := o.store.Get(ctx, msg.Workflow)
-	if err != nil {
-		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
-	}
-
-	step, ok := wf.GetStep(msg.GateID)
-	if !ok {
-		return fmt.Errorf("gate step %s not found", msg.GateID)
-	}
-
-	if step.Status != types.StepStatusRunning {
-		return fmt.Errorf("gate step %s is not running", msg.GateID)
-	}
-
-	// Gate approval is handled by branch executor via await-approval
-	// This message sets an output that the condition can check
-	if step.Outputs == nil {
-		step.Outputs = make(map[string]any)
-	}
-	step.Outputs["approved"] = msg.Approved
-	step.Outputs["notes"] = msg.Notes
-
 	return o.store.Save(ctx, wf)
 }
 

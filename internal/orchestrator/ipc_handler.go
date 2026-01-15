@@ -21,8 +21,8 @@ type IPCHandler struct {
 }
 
 // NewIPCHandler creates a new IPC handler.
-// The orchestrator reference is used for all state-mutating operations (HandleStepDone,
-// HandleApproval) to ensure proper mutex coordination.
+// The orchestrator reference is used for all state-mutating operations (HandleStepDone)
+// to ensure proper mutex coordination.
 func NewIPCHandler(orch *Orchestrator, store RunStore, agents *TmuxAgentManager, logger *slog.Logger) *IPCHandler {
 	if logger == nil {
 		logger = slog.Default()
@@ -87,27 +87,6 @@ func (h *IPCHandler) HandleGetSessionID(ctx context.Context, msg *ipc.GetSession
 	return &ipc.ErrorMessage{
 		Type:    ipc.MsgError,
 		Message: "no session ID found for agent",
-	}
-}
-
-// HandleApproval processes a human approval/rejection signal.
-// Delegates to Orchestrator.HandleApproval for thread-safe state mutation.
-func (h *IPCHandler) HandleApproval(ctx context.Context, msg *ipc.ApprovalMessage) any {
-	h.logger.Info("handling approval", "workflow", msg.Workflow, "gate", msg.GateID, "approved", msg.Approved)
-
-	// Delegate to orchestrator (which has the mutex)
-	err := h.orch.HandleApproval(ctx, msg)
-	if err != nil {
-		h.logger.Error("approval failed", "error", err)
-		return &ipc.ErrorMessage{
-			Type:    ipc.MsgError,
-			Message: err.Error(),
-		}
-	}
-
-	return &ipc.AckMessage{
-		Type:    ipc.MsgAck,
-		Success: true,
 	}
 }
 

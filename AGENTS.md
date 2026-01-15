@@ -174,16 +174,19 @@ The `bd sync` command requires a clean git working directory. If sync fails:
 ### MEOW CLI (meow)
 
 ```bash
-meow run <template>       # Run a workflow
-meow done --output k=v    # Signal step completion
-meow event <type>         # Emit an event
-meow await-event <type>   # Wait for an event
-meow step-status <id>     # Check step status
-meow approve <wf> <gate>  # Approve a gate
-meow reject <wf> <gate>   # Reject a gate
+meow run <template>              # Run a workflow
+meow done --output k=v           # Signal step completion
+meow event <type>                # Emit an event
+meow await-event <type>          # Wait for an event
+meow await-approval <gate-id>    # Wait for gate approval/rejection
+meow step-status <id>            # Check step status
+meow approve <gate-id>           # Approve a gate (emits gate-approved event)
+meow reject <gate-id>            # Reject a gate (emits gate-rejected event)
 ```
 
 **Note:** Commands like `meow done` and `meow event` exit silently (no-op) when `MEOW_ORCH_SOCK` is not set. This allows hooks to work both inside and outside MEOW workflows.
+
+**Gate commands are syntactic sugar for events.** `meow approve` emits a `gate-approved` event, `meow reject` emits a `gate-rejected` event, and `meow await-approval` waits for either.
 
 ## Testing
 

@@ -15,7 +15,6 @@ type mockHandler struct {
 
 	stepDoneCalls      []*StepDoneMessage
 	getSessionIDCalls  []*GetSessionIDMessage
-	approvalCalls      []*ApprovalMessage
 	eventCalls         []*EventMessage
 	awaitEventCalls    []*AwaitEventMessage
 	getStepStatusCalls []*GetStepStatusMessage
@@ -23,7 +22,6 @@ type mockHandler struct {
 	// Configurable responses
 	stepDoneResponse      any
 	getSessionIDResponse  any
-	approvalResponse      any
 	eventResponse         any
 	awaitEventResponse    any
 	getStepStatusResponse any
@@ -33,7 +31,6 @@ func newMockHandler() *mockHandler {
 	return &mockHandler{
 		stepDoneResponse:      &AckMessage{Type: MsgAck, Success: true},
 		getSessionIDResponse:  &SessionIDMessage{Type: MsgSessionID, SessionID: "test-session-123"},
-		approvalResponse:      &AckMessage{Type: MsgAck, Success: true},
 		eventResponse:         &AckMessage{Type: MsgAck, Success: true},
 		awaitEventResponse:    &EventMatchMessage{Type: MsgEventMatch, EventType: "test", Data: nil, Timestamp: 0},
 		getStepStatusResponse: &StepStatusMessage{Type: MsgStepStatus, StepID: "step-1", Status: "done"},
@@ -52,13 +49,6 @@ func (h *mockHandler) HandleGetSessionID(ctx context.Context, msg *GetSessionIDM
 	defer h.mu.Unlock()
 	h.getSessionIDCalls = append(h.getSessionIDCalls, msg)
 	return h.getSessionIDResponse
-}
-
-func (h *mockHandler) HandleApproval(ctx context.Context, msg *ApprovalMessage) any {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.approvalCalls = append(h.approvalCalls, msg)
-	return h.approvalResponse
 }
 
 func (h *mockHandler) HandleEvent(ctx context.Context, msg *EventMessage) any {
@@ -211,60 +201,6 @@ func TestServer_HandleGetSessionID(t *testing.T) {
 
 	if sessionID != "sess-xyz789" {
 		t.Errorf("sessionID = %q, want %q", sessionID, "sess-xyz789")
-	}
-}
-
-func TestServer_HandleApproval(t *testing.T) {
-	tests := []struct {
-		name     string
-		approved bool
-		notes    string
-		reason   string
-	}{
-		{"approved", true, "LGTM", ""},
-		{"rejected", false, "", "Missing tests"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			socketPath := filepath.Join(t.TempDir(), "test.sock")
-			handler := newMockHandler()
-			server := NewServerWithPath(socketPath, handler, nil)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			if err := server.StartAsync(ctx); err != nil {
-				t.Fatalf("StartAsync() error: %v", err)
-			}
-			defer server.Shutdown()
-
-			time.Sleep(50 * time.Millisecond)
-
-			client := NewClient(socketPath)
-			err := client.SendApproval("run-test", "gate-1", tt.approved, tt.notes, tt.reason)
-			if err != nil {
-				t.Fatalf("SendApproval() error: %v", err)
-			}
-
-			handler.mu.Lock()
-			defer handler.mu.Unlock()
-
-			if len(handler.approvalCalls) != 1 {
-				t.Fatalf("approvalCalls = %d, want 1", len(handler.approvalCalls))
-			}
-
-			call := handler.approvalCalls[0]
-			if call.Approved != tt.approved {
-				t.Errorf("Approved = %v, want %v", call.Approved, tt.approved)
-			}
-			if call.Notes != tt.notes {
-				t.Errorf("Notes = %q, want %q", call.Notes, tt.notes)
-			}
-			if call.Reason != tt.reason {
-				t.Errorf("Reason = %q, want %q", call.Reason, tt.reason)
-			}
-		})
 	}
 }
 
