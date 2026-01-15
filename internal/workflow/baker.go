@@ -48,6 +48,27 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 		return nil, fmt.Errorf("workflow is nil")
 	}
 
+	// Validate that all provided variables are declared in the workflow
+	// This catches typos like --var adapater=x when the variable is "adapter"
+	for k := range vars {
+		if _, ok := workflow.Variables[k]; !ok {
+			// Try to find a similar variable name to suggest
+			suggestion := findSimilarVariable(k, workflow.Variables)
+			if suggestion != "" {
+				return nil, fmt.Errorf("unknown variable %q (did you mean %q?)", k, suggestion)
+			}
+			// List available variables if no close match
+			available := make([]string, 0, len(workflow.Variables))
+			for name := range workflow.Variables {
+				available = append(available, name)
+			}
+			if len(available) > 0 {
+				return nil, fmt.Errorf("unknown variable %q; available variables: %v", k, available)
+			}
+			return nil, fmt.Errorf("unknown variable %q (workflow has no declared variables)", k)
+		}
+	}
+
 	// Apply provided variables to context
 	// For file-type variables, read the file contents
 	for k, v := range vars {
@@ -578,4 +599,62 @@ func (b *Baker) setAgentConfig(step *types.Step, ts *Step) error {
 		Timeout: ts.Timeout,
 	}
 	return nil
+}
+
+// findSimilarVariable finds a variable name similar to the given name using Levenshtein distance.
+// Returns the closest match if the distance is <= 2, otherwise returns empty string.
+func findSimilarVariable(name string, variables map[string]*Var) string {
+	const maxDistance = 2
+	bestMatch := ""
+	bestDist := maxDistance + 1
+
+	for varName := range variables {
+		dist := levenshteinDistance(name, varName)
+		if dist < bestDist {
+			bestDist = dist
+			bestMatch = varName
+		}
+	}
+
+	if bestDist <= maxDistance {
+		return bestMatch
+	}
+	return ""
+}
+
+// levenshteinDistance computes the edit distance between two strings.
+func levenshteinDistance(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+
+	// Create distance matrix
+	matrix := make([][]int, len(a)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(b)+1)
+		matrix[i][0] = i
+	}
+	for j := range matrix[0] {
+		matrix[0][j] = j
+	}
+
+	// Fill in the matrix
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			matrix[i][j] = min(
+				matrix[i-1][j]+1,      // deletion
+				matrix[i][j-1]+1,      // insertion
+				matrix[i-1][j-1]+cost, // substitution
+			)
+		}
+	}
+
+	return matrix[len(a)][len(b)]
 }

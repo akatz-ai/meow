@@ -1089,3 +1089,85 @@ func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
 		t.Errorf("expected error about required variable, got: %v", err)
 	}
 }
+
+// TestBakeWorkflow_UnknownVariable tests error handling for unknown variables (typos)
+func TestBakeWorkflow_UnknownVariable(t *testing.T) {
+	workflow := &Workflow{
+		Name: "unknown-var-test",
+		Variables: map[string]*Var{
+			"adapter": {Default: "claude"},
+		},
+		Steps: []*Step{
+			{ID: "step-1", Executor: ExecutorAgent, Prompt: "Test"},
+		},
+	}
+
+	baker := NewBaker("run-unknown-001")
+
+	// Test 1: Unknown variable with typo should fail with suggestion
+	_, err := baker.BakeWorkflow(workflow, map[string]string{
+		"adapater": "claude-sonnet", // typo: adapater vs adapter
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown variable")
+	}
+	if !strings.Contains(err.Error(), "unknown variable") {
+		t.Errorf("expected 'unknown variable' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "adapater") {
+		t.Errorf("expected error to mention 'adapater', got: %v", err)
+	}
+	// Should suggest the correct variable name
+	if !strings.Contains(err.Error(), "adapter") {
+		t.Errorf("expected error to suggest 'adapter', got: %v", err)
+	}
+
+	// Test 2: Completely unknown variable (no similar match)
+	baker2 := NewBaker("run-unknown-002")
+	_, err = baker2.BakeWorkflow(workflow, map[string]string{
+		"xyz_totally_unknown": "value",
+	})
+	if err == nil {
+		t.Fatal("expected error for completely unknown variable")
+	}
+	if !strings.Contains(err.Error(), "unknown variable") {
+		t.Errorf("expected 'unknown variable' error, got: %v", err)
+	}
+	// Should list available variables
+	if !strings.Contains(err.Error(), "adapter") {
+		t.Errorf("expected error to list available variables, got: %v", err)
+	}
+
+	// Test 3: Known variable should work
+	baker3 := NewBaker("run-known-001")
+	_, err = baker3.BakeWorkflow(workflow, map[string]string{
+		"adapter": "claude-sonnet",
+	})
+	if err != nil {
+		t.Errorf("expected no error for known variable, got: %v", err)
+	}
+}
+
+// TestLevenshteinDistance tests the Levenshtein distance helper function
+func TestLevenshteinDistance(t *testing.T) {
+	tests := []struct {
+		a, b     string
+		expected int
+	}{
+		{"", "", 0},
+		{"a", "", 1},
+		{"", "a", 1},
+		{"abc", "abc", 0},
+		{"adapter", "adapater", 1}, // one insertion
+		{"adapter", "adaper", 1},   // one deletion
+		{"adapter", "adaptor", 1},  // one substitution
+		{"kitten", "sitting", 3},
+	}
+
+	for _, tt := range tests {
+		got := levenshteinDistance(tt.a, tt.b)
+		if got != tt.expected {
+			t.Errorf("levenshteinDistance(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.expected)
+		}
+	}
+}

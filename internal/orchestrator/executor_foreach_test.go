@@ -479,6 +479,24 @@ func TestIsForeachComplete(t *testing.T) {
 			},
 			expected: true,
 		},
+		{
+			name: "mixed done and skipped",
+			steps: map[string]*types.Step{
+				"foreach":        foreachStep,
+				"foreach.0.work": {ID: "foreach.0.work", Status: types.StepStatusDone},
+				"foreach.1.work": {ID: "foreach.1.work", Status: types.StepStatusSkipped},
+			},
+			expected: true,
+		},
+		{
+			name: "all skipped",
+			steps: map[string]*types.Step{
+				"foreach":        foreachStep,
+				"foreach.0.work": {ID: "foreach.0.work", Status: types.StepStatusSkipped},
+				"foreach.1.work": {ID: "foreach.1.work", Status: types.StepStatusSkipped},
+			},
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -932,7 +932,7 @@ func IsBranchComplete(branchStep *types.Step, allSteps map[string]*types.Step) b
 		if !ok {
 			continue // Step not found - treat as complete (may have been cleaned up)
 		}
-		if child.Status != types.StepStatusDone && child.Status != types.StepStatusFailed {
+		if !child.Status.IsTerminal() {
 			return false // Still running
 		}
 	}
