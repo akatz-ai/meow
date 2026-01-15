@@ -65,7 +65,7 @@ func NewHarness(t *testing.T) *Harness {
 		TmuxSocket:    tmuxSocket,
 		RunsDir:       filepath.Join(tempDir, ".meow", "runs"),
 		LogsDir:       filepath.Join(tempDir, ".meow", "logs"),
-		TemplateDir:   filepath.Join(tempDir, ".meow", "templates"),
+		TemplateDir:   filepath.Join(tempDir, ".meow", "workflows"),
 		AdapterDir:    filepath.Join(tempDir, ".meow", "adapters"),
 		SimConfigPath: filepath.Join(tempDir, "sim-config.yaml"),
 		t:             t,
@@ -119,7 +119,7 @@ wait = "200ms"
 	configContent := `version = "1"
 
 [paths]
-workflow_dir = ".meow/templates"
+workflow_dir = ".meow/workflows"
 runs_dir = ".meow/runs"
 logs_dir = ".meow/logs"
 
@@ -217,7 +217,7 @@ func (h *Harness) Env() []string {
 	env := os.Environ()
 	env = append(env,
 		fmt.Sprintf("MEOW_RUNS_DIR=%s", h.RunsDir),
-		fmt.Sprintf("MEOW_TEMPLATE_DIR=%s", h.TemplateDir),
+		fmt.Sprintf("MEOW_WORKFLOW_DIR=%s", h.TemplateDir),
 		fmt.Sprintf("MEOW_ADAPTER_DIR=%s", h.AdapterDir),
 		fmt.Sprintf("MEOW_SIM_CONFIG=%s", h.SimConfigPath),
 		fmt.Sprintf("TMUX_TMPDIR=%s", h.TempDir),

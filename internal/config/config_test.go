@@ -295,6 +295,12 @@ default_adapter = "aider"
 
 	t.Run("default adapter uses default value", func(t *testing.T) {
 		dir := t.TempDir()
+
+		// Isolate from user's global config by setting HOME to temp dir
+		oldHome := os.Getenv("HOME")
+		os.Setenv("HOME", dir)
+		defer os.Setenv("HOME", oldHome)
+
 		cfg, err := LoadFromDir(dir)
 		if err != nil {
 			t.Fatalf("LoadFromDir failed: %v", err)
