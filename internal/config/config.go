@@ -9,15 +9,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// EphemeralCleanup specifies when to clean up ephemeral beads.
-type EphemeralCleanup string
-
-const (
-	EphemeralCleanupOnComplete EphemeralCleanup = "on_complete" // Clean after template completes
-	EphemeralCleanupManual     EphemeralCleanup = "manual"      // Only via `meow clean`
-	EphemeralCleanupNever      EphemeralCleanup = "never"       // Keep forever
-)
-
 // LogLevel specifies the logging verbosity.
 type LogLevel string
 
@@ -41,53 +32,31 @@ type AgentConfig struct {
 	// DefaultAdapter specifies the default adapter to use when spawning agents.
 	// Resolution order: step-level > workflow-level > project-level > global-level.
 	DefaultAdapter string `toml:"default_adapter"`
-
-	// SetupHooks controls whether to create .claude/settings.json with MEOW hooks
-	// when spawning agents. Default: true (agents get hooks for Ralph Wiggum loop).
-	// Set to false to disable automatic hook injection.
-	SetupHooks bool `toml:"setup_hooks"`
 }
 
 // PathsConfig holds path configuration.
 type PathsConfig struct {
-	TemplateDir string `toml:"template_dir"`
-	BeadsDir    string `toml:"beads_dir"`
+	WorkflowDir string `toml:"workflow_dir"`
 	RunsDir     string `toml:"runs_dir"`
 	LogsDir     string `toml:"logs_dir"`
 }
 
-// DefaultsConfig holds default values.
-type DefaultsConfig struct {
-	Agent            string        `toml:"agent"`
-	StopGracePeriod  int           `toml:"stop_grace_period"` // Seconds
-	ConditionTimeout time.Duration `toml:"condition_timeout"`
-}
-
 // OrchestratorConfig holds orchestrator settings.
 type OrchestratorConfig struct {
-	PollInterval      time.Duration `toml:"poll_interval"`
-	HeartbeatInterval time.Duration `toml:"heartbeat_interval"`
-}
-
-// CleanupConfig holds cleanup settings.
-type CleanupConfig struct {
-	Ephemeral EphemeralCleanup `toml:"ephemeral"`
+	PollInterval time.Duration `toml:"poll_interval"`
 }
 
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
 	Level  LogLevel  `toml:"level"`
 	Format LogFormat `toml:"format"`
-	File   string    `toml:"file"`
 }
 
 // Config is the main configuration struct for MEOW.
 type Config struct {
 	Version      string             `toml:"version"`
 	Paths        PathsConfig        `toml:"paths"`
-	Defaults     DefaultsConfig     `toml:"defaults"`
 	Orchestrator OrchestratorConfig `toml:"orchestrator"`
-	Cleanup      CleanupConfig      `toml:"cleanup"`
 	Logging      LoggingConfig      `toml:"logging"`
 	Agent        AgentConfig        `toml:"agent"`
 }
@@ -97,31 +66,19 @@ func Default() *Config {
 	return &Config{
 		Version: "1",
 		Paths: PathsConfig{
-			TemplateDir: ".meow/templates",
-			BeadsDir:    ".beads",
+			WorkflowDir: ".meow/workflows",
 			RunsDir:     ".meow/runs",
 			LogsDir:     ".meow/logs",
 		},
-		Defaults: DefaultsConfig{
-			Agent:            "claude-1",
-			StopGracePeriod:  10,
-			ConditionTimeout: time.Hour,
-		},
 		Orchestrator: OrchestratorConfig{
-			PollInterval:      100 * time.Millisecond,
-			HeartbeatInterval: 30 * time.Second,
-		},
-		Cleanup: CleanupConfig{
-			Ephemeral: EphemeralCleanupOnComplete,
+			PollInterval: 100 * time.Millisecond,
 		},
 		Logging: LoggingConfig{
 			Level:  LogLevelInfo,
 			Format: LogFormatJSON,
-			File:   "", // Per-run logs in .meow/logs/<run-id>.log
 		},
 		Agent: AgentConfig{
-			DefaultAdapter: "",
-			SetupHooks:     true, // Enable Ralph Wiggum loop by default for agents
+			DefaultAdapter: "claude",
 		},
 	}
 }
@@ -178,11 +135,8 @@ func (c *Config) Validate() error {
 	if c.Version == "" {
 		return fmt.Errorf("config version is required")
 	}
-	if c.Paths.TemplateDir == "" {
-		return fmt.Errorf("template_dir is required")
-	}
-	if c.Paths.BeadsDir == "" {
-		return fmt.Errorf("beads_dir is required")
+	if c.Paths.WorkflowDir == "" {
+		return fmt.Errorf("workflow_dir is required")
 	}
 	if c.Orchestrator.PollInterval <= 0 {
 		return fmt.Errorf("poll_interval must be positive")
@@ -190,20 +144,12 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// TemplateDir returns the absolute template directory path.
-func (c *Config) TemplateDir(baseDir string) string {
-	if filepath.IsAbs(c.Paths.TemplateDir) {
-		return c.Paths.TemplateDir
+// WorkflowDir returns the absolute workflow directory path.
+func (c *Config) WorkflowDir(baseDir string) string {
+	if filepath.IsAbs(c.Paths.WorkflowDir) {
+		return c.Paths.WorkflowDir
 	}
-	return filepath.Join(baseDir, c.Paths.TemplateDir)
-}
-
-// BeadsDir returns the absolute beads directory path.
-func (c *Config) BeadsDir(baseDir string) string {
-	if filepath.IsAbs(c.Paths.BeadsDir) {
-		return c.Paths.BeadsDir
-	}
-	return filepath.Join(baseDir, c.Paths.BeadsDir)
+	return filepath.Join(baseDir, c.Paths.WorkflowDir)
 }
 
 // RunsDir returns the absolute runs directory path.

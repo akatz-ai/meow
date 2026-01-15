@@ -55,8 +55,8 @@ func TestInitGlobalCreatesStructure(t *testing.T) {
 	if !strings.Contains(configContent, "MEOW Global Configuration") {
 		t.Fatalf("expected global config header, got: %s", configContent)
 	}
-	if !strings.Contains(configContent, "[defaults]") {
-		t.Fatalf("expected defaults section, got: %s", configContent)
+	if !strings.Contains(configContent, "[agent]") {
+		t.Fatalf("expected agent section, got: %s", configContent)
 	}
 
 	if !strings.Contains(output, "Initializing user-global MEOW directory") {

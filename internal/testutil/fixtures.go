@@ -45,14 +45,13 @@ func NewTestConfig(t *testing.T) *config.Config {
 	tmpDir := t.TempDir()
 
 	cfg := config.Default()
-	cfg.Paths.TemplateDir = filepath.Join(tmpDir, "templates")
-	cfg.Paths.BeadsDir = filepath.Join(tmpDir, "beads")
+	cfg.Paths.WorkflowDir = filepath.Join(tmpDir, "workflows")
 	cfg.Paths.RunsDir = filepath.Join(tmpDir, "runs")
 	cfg.Paths.LogsDir = filepath.Join(tmpDir, "logs")
 	cfg.Logging.Level = config.LogLevelDebug
 
 	// Create the directories
-	for _, dir := range []string{cfg.Paths.TemplateDir, cfg.Paths.BeadsDir, cfg.Paths.RunsDir, cfg.Paths.LogsDir} {
+	for _, dir := range []string{cfg.Paths.WorkflowDir, cfg.Paths.RunsDir, cfg.Paths.LogsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatalf("Failed to create directory %s: %v", dir, err)
 		}
@@ -107,10 +106,9 @@ func NewTestWorkspace(t *testing.T) (string, func()) {
 	// Create standard subdirectories
 	dirs := []string{
 		".meow",
-		".meow/templates",
+		".meow/workflows",
 		".meow/runs",
 		".meow/logs",
-		".beads",
 	}
 
 	for _, dir := range dirs {
@@ -125,14 +123,12 @@ func NewTestWorkspace(t *testing.T) (string, func()) {
 	configContent := `version = "1"
 
 [paths]
-template_dir = ".meow/templates"
-beads_dir = ".beads"
+workflow_dir = ".meow/workflows"
 runs_dir = ".meow/runs"
 logs_dir = ".meow/logs"
 
 [logging]
 level = "debug"
-format = "json"
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -151,7 +147,7 @@ func NewTestWorkspaceWithTemplate(t *testing.T, templateName, templateContent st
 
 	workspace, cleanup := NewTestWorkspace(t)
 
-	templatePath := filepath.Join(workspace, ".meow", "templates", templateName+".toml")
+	templatePath := filepath.Join(workspace, ".meow", "workflows", templateName+".toml")
 	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
 		t.Fatalf("Failed to write template file: %v", err)
 	}

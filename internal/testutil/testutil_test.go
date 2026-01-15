@@ -39,11 +39,8 @@ func TestNewTestConfig(t *testing.T) {
 	}
 
 	// Check that directories were created
-	if _, err := os.Stat(cfg.Paths.TemplateDir); os.IsNotExist(err) {
-		t.Error("Template directory should exist")
-	}
-	if _, err := os.Stat(cfg.Paths.BeadsDir); os.IsNotExist(err) {
-		t.Error("Beads directory should exist")
+	if _, err := os.Stat(cfg.Paths.WorkflowDir); os.IsNotExist(err) {
+		t.Error("Workflow directory should exist")
 	}
 	if _, err := os.Stat(cfg.Paths.RunsDir); os.IsNotExist(err) {
 		t.Error("Runs directory should exist")
@@ -82,10 +79,9 @@ func TestNewTestWorkspace(t *testing.T) {
 	// Check structure
 	requiredDirs := []string{
 		".meow",
-		".meow/templates",
+		".meow/workflows",
 		".meow/runs",
 		".meow/logs",
-		".beads",
 	}
 	for _, dir := range requiredDirs {
 		path := filepath.Join(workspace, dir)

@@ -119,8 +119,7 @@ wait = "200ms"
 	configContent := `version = "1"
 
 [paths]
-template_dir = ".meow/templates"
-beads_dir = ".beads"
+workflow_dir = ".meow/templates"
 runs_dir = ".meow/runs"
 logs_dir = ".meow/logs"
 
@@ -144,7 +143,7 @@ default_adapter = "claude"
 // createConfig creates a test configuration.
 func (h *Harness) createConfig() *config.Config {
 	cfg := config.Default()
-	cfg.Paths.TemplateDir = h.TemplateDir
+	cfg.Paths.WorkflowDir = h.TemplateDir
 	cfg.Paths.RunsDir = h.RunsDir
 	cfg.Paths.LogsDir = h.LogsDir
 	cfg.Agent.DefaultAdapter = "claude"

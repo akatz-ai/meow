@@ -13,30 +13,23 @@ func TestDefault(t *testing.T) {
 	if cfg.Version != "1" {
 		t.Errorf("Version = %s, want 1", cfg.Version)
 	}
-	if cfg.Paths.TemplateDir != ".meow/templates" {
-		t.Errorf("TemplateDir = %s, want .meow/templates", cfg.Paths.TemplateDir)
+	if cfg.Paths.WorkflowDir != ".meow/workflows" {
+		t.Errorf("WorkflowDir = %s, want .meow/workflows", cfg.Paths.WorkflowDir)
 	}
-	if cfg.Paths.BeadsDir != ".beads" {
-		t.Errorf("BeadsDir = %s, want .beads", cfg.Paths.BeadsDir)
+	if cfg.Paths.RunsDir != ".meow/runs" {
+		t.Errorf("RunsDir = %s, want .meow/runs", cfg.Paths.RunsDir)
 	}
-	if cfg.Defaults.Agent != "claude-1" {
-		t.Errorf("Defaults.Agent = %s, want claude-1", cfg.Defaults.Agent)
+	if cfg.Paths.LogsDir != ".meow/logs" {
+		t.Errorf("LogsDir = %s, want .meow/logs", cfg.Paths.LogsDir)
 	}
 	if cfg.Orchestrator.PollInterval != 100*time.Millisecond {
 		t.Errorf("PollInterval = %v, want 100ms", cfg.Orchestrator.PollInterval)
 	}
-	if cfg.Cleanup.Ephemeral != EphemeralCleanupOnComplete {
-		t.Errorf("Cleanup.Ephemeral = %s, want on_complete", cfg.Cleanup.Ephemeral)
-	}
 	if cfg.Logging.Level != LogLevelInfo {
 		t.Errorf("Logging.Level = %s, want info", cfg.Logging.Level)
 	}
-	// Verify default adapter
-	if cfg.Agent.DefaultAdapter != "" {
-		t.Errorf("Agent.DefaultAdapter = %s, want empty", cfg.Agent.DefaultAdapter)
-	}
-	if cfg.Agent.SetupHooks != true {
-		t.Errorf("Agent.SetupHooks = %v, want true", cfg.Agent.SetupHooks)
+	if cfg.Agent.DefaultAdapter != "claude" {
+		t.Errorf("Agent.DefaultAdapter = %s, want claude", cfg.Agent.DefaultAdapter)
 	}
 }
 
@@ -49,25 +42,19 @@ func TestLoad(t *testing.T) {
 version = "2"
 
 [paths]
-template_dir = "custom/templates"
-beads_dir = "custom/beads"
+workflow_dir = "custom/workflows"
 runs_dir = "custom/runs"
 logs_dir = "custom/logs"
 
-[defaults]
-agent = "claude-custom"
-stop_grace_period = 30
-
 [orchestrator]
 poll_interval = "200ms"
-heartbeat_interval = "1m"
-
-[cleanup]
-ephemeral = "manual"
 
 [logging]
 level = "debug"
 format = "text"
+
+[agent]
+default_adapter = "aider"
 `
 
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -82,23 +69,17 @@ format = "text"
 	if cfg.Version != "2" {
 		t.Errorf("Version = %s, want 2", cfg.Version)
 	}
-	if cfg.Paths.TemplateDir != "custom/templates" {
-		t.Errorf("TemplateDir = %s, want custom/templates", cfg.Paths.TemplateDir)
-	}
-	if cfg.Defaults.Agent != "claude-custom" {
-		t.Errorf("Defaults.Agent = %s, want claude-custom", cfg.Defaults.Agent)
-	}
-	if cfg.Defaults.StopGracePeriod != 30 {
-		t.Errorf("StopGracePeriod = %d, want 30", cfg.Defaults.StopGracePeriod)
+	if cfg.Paths.WorkflowDir != "custom/workflows" {
+		t.Errorf("WorkflowDir = %s, want custom/workflows", cfg.Paths.WorkflowDir)
 	}
 	if cfg.Orchestrator.PollInterval != 200*time.Millisecond {
 		t.Errorf("PollInterval = %v, want 200ms", cfg.Orchestrator.PollInterval)
 	}
-	if cfg.Cleanup.Ephemeral != EphemeralCleanupManual {
-		t.Errorf("Cleanup.Ephemeral = %s, want manual", cfg.Cleanup.Ephemeral)
-	}
 	if cfg.Logging.Level != LogLevelDebug {
 		t.Errorf("Logging.Level = %s, want debug", cfg.Logging.Level)
+	}
+	if cfg.Agent.DefaultAdapter != "aider" {
+		t.Errorf("Agent.DefaultAdapter = %s, want aider", cfg.Agent.DefaultAdapter)
 	}
 }
 
@@ -251,25 +232,15 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "missing version",
 			cfg: &Config{
-				Paths: PathsConfig{TemplateDir: "a", BeadsDir: "b"},
+				Paths:        PathsConfig{WorkflowDir: "a"},
 				Orchestrator: OrchestratorConfig{PollInterval: time.Millisecond},
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing template_dir",
+			name: "missing workflow_dir",
 			cfg: &Config{
-				Version: "1",
-				Paths:   PathsConfig{BeadsDir: "b"},
-				Orchestrator: OrchestratorConfig{PollInterval: time.Millisecond},
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing beads_dir",
-			cfg: &Config{
-				Version: "1",
-				Paths:   PathsConfig{TemplateDir: "a"},
+				Version:      "1",
 				Orchestrator: OrchestratorConfig{PollInterval: time.Millisecond},
 			},
 			wantErr: true,
@@ -277,8 +248,8 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "zero poll_interval",
 			cfg: &Config{
-				Version: "1",
-				Paths:   PathsConfig{TemplateDir: "a", BeadsDir: "b"},
+				Version:      "1",
+				Paths:        PathsConfig{WorkflowDir: "a"},
 				Orchestrator: OrchestratorConfig{PollInterval: 0},
 			},
 			wantErr: true,
@@ -322,15 +293,15 @@ default_adapter = "aider"
 		}
 	})
 
-	t.Run("default adapter falls back to claude", func(t *testing.T) {
+	t.Run("default adapter uses default value", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg, err := LoadFromDir(dir)
 		if err != nil {
 			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 
-		if cfg.Agent.DefaultAdapter != "" {
-			t.Errorf("Agent.DefaultAdapter = %s, want empty (default)", cfg.Agent.DefaultAdapter)
+		if cfg.Agent.DefaultAdapter != "claude" {
+			t.Errorf("Agent.DefaultAdapter = %s, want claude (default)", cfg.Agent.DefaultAdapter)
 		}
 	})
 }
@@ -340,11 +311,8 @@ func TestConfig_PathHelpers(t *testing.T) {
 	baseDir := "/project"
 
 	// Test relative paths
-	if got := cfg.TemplateDir(baseDir); got != "/project/.meow/templates" {
-		t.Errorf("TemplateDir = %s, want /project/.meow/templates", got)
-	}
-	if got := cfg.BeadsDir(baseDir); got != "/project/.beads" {
-		t.Errorf("BeadsDir = %s, want /project/.beads", got)
+	if got := cfg.WorkflowDir(baseDir); got != "/project/.meow/workflows" {
+		t.Errorf("WorkflowDir = %s, want /project/.meow/workflows", got)
 	}
 	if got := cfg.RunsDir(baseDir); got != "/project/.meow/runs" {
 		t.Errorf("RunsDir = %s, want /project/.meow/runs", got)
@@ -353,15 +321,10 @@ func TestConfig_PathHelpers(t *testing.T) {
 		t.Errorf("LogsDir = %s, want /project/.meow/logs", got)
 	}
 
-	// Test with absolute paths for all helpers
-	cfg.Paths.TemplateDir = "/absolute/templates"
-	if got := cfg.TemplateDir(baseDir); got != "/absolute/templates" {
-		t.Errorf("TemplateDir (abs) = %s, want /absolute/templates", got)
-	}
-
-	cfg.Paths.BeadsDir = "/absolute/beads"
-	if got := cfg.BeadsDir(baseDir); got != "/absolute/beads" {
-		t.Errorf("BeadsDir (abs) = %s, want /absolute/beads", got)
+	// Test with absolute paths
+	cfg.Paths.WorkflowDir = "/absolute/workflows"
+	if got := cfg.WorkflowDir(baseDir); got != "/absolute/workflows" {
+		t.Errorf("WorkflowDir (abs) = %s, want /absolute/workflows", got)
 	}
 
 	cfg.Paths.RunsDir = "/absolute/runs"

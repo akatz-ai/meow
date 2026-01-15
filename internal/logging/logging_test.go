@@ -17,7 +17,6 @@ func TestNewFromConfig_DefaultsToStderr(t *testing.T) {
 		Logging: config.LoggingConfig{
 			Level:  config.LogLevelInfo,
 			Format: config.LogFormatJSON,
-			File:   "", // No file
 		},
 	}
 

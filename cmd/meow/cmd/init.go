@@ -94,7 +94,7 @@ func initProjectDirectory(dir, meowDir string, force bool) error {
 
 	// Create default config
 	configPath := filepath.Join(meowDir, "config.toml")
-	configContent := `# MEOW Configuration
+	configContent := `# MEOW Project Configuration
 version = "1"
 
 [paths]
@@ -102,28 +102,14 @@ workflow_dir = ".meow/workflows"
 runs_dir = ".meow/runs"
 logs_dir = ".meow/logs"
 
-[defaults]
-agent = "claude-1"
-stop_grace_period = 10
-
 [orchestrator]
 poll_interval = "100ms"
-heartbeat_interval = "30s"
-
-[cleanup]
-ephemeral = "on_complete"
 
 [logging]
 level = "info"
-format = "json"
 
 [agent]
-# setup_hooks controls whether spawned agents get .claude/settings.json with MEOW hooks.
-# When true (default), agents run the Ralph Wiggum loop for autonomous operation.
-# Set to false to disable automatic hook injection for all agents.
-setup_hooks = true
 # default_adapter controls which adapter spawn steps use when none is specified.
-# Change this if you prefer a different default adapter.
 default_adapter = "claude"
 `
 	if _, err := writeFileIfMissing(configPath, []byte(configContent)); err != nil {
@@ -204,18 +190,20 @@ func initGlobalDirectory(meowDir string, force bool) error {
 		return fmt.Errorf("creating adapters directory: %w", err)
 	}
 
+	// Copy default adapters (skip existing ones)
+	if err := copyEmbeddedAdapters(adaptersDir, true); err != nil {
+		return fmt.Errorf("copying adapters: %w", err)
+	}
+
 	globalConfigContent := `# MEOW Global Configuration
 # These settings apply to all projects unless overridden.
 
 version = "1"
 
-[defaults]
-# Default adapter for spawn steps
-# adapter = "claude"
-
 [agent]
-# Auto-setup hooks when spawning agents
-setup_hooks = true
+# default_adapter controls which adapter spawn steps use when none is specified.
+# Uncomment to set a global default:
+# default_adapter = "claude"
 `
 
 	configPath := filepath.Join(meowDir, "config.toml")
