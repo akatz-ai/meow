@@ -244,7 +244,8 @@ func TestCompleteAgentStep_WrongType(t *testing.T) {
 		t.Fatal("expected validation error for wrong type")
 	}
 
-	if !strings.Contains(result.ValidationErrors[0], "expected number") {
+	// With string coercion, the error message now says "cannot parse" instead of "expected number"
+	if !strings.Contains(result.ValidationErrors[0], "cannot parse") || !strings.Contains(result.ValidationErrors[0], "as number") {
 		t.Errorf("expected type error, got %q", result.ValidationErrors[0])
 	}
 }
@@ -529,6 +530,140 @@ func TestStartAgentStep_FireForgetEscapeKey(t *testing.T) {
 	// Prompt should be just "Escape" without any meow done additions
 	if result.Prompt != "Escape" {
 		t.Errorf("expected prompt to be just 'Escape', got %q", result.Prompt)
+	}
+}
+
+// --- String Type Coercion Tests ---
+// These test that string values from `meow done --output key=value` can be coerced
+// to the expected types (boolean, number, json) since CLI args are always strings.
+
+func TestValidateAgentOutputs_StringToBooleanCoercion(t *testing.T) {
+	defs := map[string]types.AgentOutputDef{
+		"success": {Required: true, Type: "boolean"},
+	}
+
+	testCases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"true", "true", false},
+		{"false", "false", false},
+		{"TRUE", "TRUE", false},
+		{"FALSE", "FALSE", false},
+		{"True", "True", false},
+		{"1", "1", false},
+		{"0", "0", false},
+		{"yes", "yes", false},
+		{"no", "no", false},
+		{"invalid", "maybe", true},
+		{"empty", "", true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := map[string]any{
+				"success": tc.value,
+			}
+			errs := ValidateAgentOutputs(outputs, defs, "")
+			if tc.wantErr && len(errs) == 0 {
+				t.Errorf("expected error for value %q, got none", tc.value)
+			}
+			if !tc.wantErr && len(errs) > 0 {
+				t.Errorf("unexpected error for value %q: %v", tc.value, errs)
+			}
+		})
+	}
+}
+
+func TestValidateAgentOutputs_StringToNumberCoercion(t *testing.T) {
+	defs := map[string]types.AgentOutputDef{
+		"count": {Required: true, Type: "number"},
+	}
+
+	testCases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"integer", "42", false},
+		{"negative", "-10", false},
+		{"float", "3.14", false},
+		{"negative_float", "-2.5", false},
+		{"zero", "0", false},
+		{"not_a_number", "abc", true},
+		{"empty", "", true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := map[string]any{
+				"count": tc.value,
+			}
+			errs := ValidateAgentOutputs(outputs, defs, "")
+			if tc.wantErr && len(errs) == 0 {
+				t.Errorf("expected error for value %q, got none", tc.value)
+			}
+			if !tc.wantErr && len(errs) > 0 {
+				t.Errorf("unexpected error for value %q: %v", tc.value, errs)
+			}
+		})
+	}
+}
+
+func TestValidateAgentOutputs_StringToJSONCoercion(t *testing.T) {
+	defs := map[string]types.AgentOutputDef{
+		"data": {Required: true, Type: "json"},
+	}
+
+	testCases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"object", `{"foo":"bar"}`, false},
+		{"array", `[1,2,3]`, false},
+		{"nested", `{"items":[1,2,3]}`, false},
+		{"invalid_json", `{not valid}`, true},
+		{"plain_string", `hello`, true},
+		{"empty", "", true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := map[string]any{
+				"data": tc.value,
+			}
+			errs := ValidateAgentOutputs(outputs, defs, "")
+			if tc.wantErr && len(errs) == 0 {
+				t.Errorf("expected error for value %q, got none", tc.value)
+			}
+			if !tc.wantErr && len(errs) > 0 {
+				t.Errorf("unexpected error for value %q: %v", tc.value, errs)
+			}
+		})
+	}
+}
+
+func TestValidateAgentOutputs_NativeTypesStillWork(t *testing.T) {
+	// Ensure that native Go types (from --output-json) still work
+	defs := map[string]types.AgentOutputDef{
+		"bool_val":   {Required: true, Type: "boolean"},
+		"num_val":    {Required: true, Type: "number"},
+		"json_val":   {Required: true, Type: "json"},
+		"string_val": {Required: true, Type: "string"},
+	}
+
+	outputs := map[string]any{
+		"bool_val":   true,                      // native bool
+		"num_val":    42,                        // native int
+		"json_val":   map[string]any{"a": "b"}, // native map
+		"string_val": "hello",                   // native string
+	}
+
+	errs := ValidateAgentOutputs(outputs, defs, "")
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for native types, got %v", errs)
 	}
 }
 

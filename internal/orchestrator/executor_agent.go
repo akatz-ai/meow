@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -194,7 +196,17 @@ func ValidateAgentOutputs(outputs map[string]any, defs map[string]types.AgentOut
 }
 
 // validateOutputType checks that a value matches its declared type.
+// If the value is a string, it attempts to coerce it to the expected type.
 func validateOutputType(name string, val any, declaredType, agentWorkdir string) string {
+	// If value is a string, try to coerce to expected type
+	if strVal, ok := val.(string); ok && declaredType != "string" && declaredType != "file_path" {
+		coerced, err := coerceStringToType(strVal, declaredType)
+		if err != "" {
+			return fmt.Sprintf("output %s: %s", name, err)
+		}
+		val = coerced
+	}
+
 	switch declaredType {
 	case "string":
 		if _, ok := val.(string); !ok {
@@ -233,6 +245,41 @@ func validateOutputType(name string, val any, declaredType, agentWorkdir string)
 	}
 
 	return ""
+}
+
+// coerceStringToType attempts to convert a string value to the expected type.
+// Returns the coerced value and an error message (empty string if successful).
+func coerceStringToType(s string, targetType string) (any, string) {
+	switch targetType {
+	case "boolean":
+		switch strings.ToLower(s) {
+		case "true", "1", "yes":
+			return true, ""
+		case "false", "0", "no":
+			return false, ""
+		default:
+			return nil, fmt.Sprintf("cannot parse %q as boolean (use true/false/1/0/yes/no)", s)
+		}
+	case "number":
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f, ""
+		}
+		return nil, fmt.Sprintf("cannot parse %q as number", s)
+	case "json":
+		var v any
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			return nil, fmt.Sprintf("cannot parse %q as JSON: %v", s, err)
+		}
+		// JSON must be object or array
+		switch v.(type) {
+		case map[string]any, []any:
+			return v, ""
+		default:
+			return nil, fmt.Sprintf("JSON must be an object or array, got %T", v)
+		}
+	default:
+		return s, ""
+	}
 }
 
 // validateFilePath checks that a file path exists and is within the allowed directory.
