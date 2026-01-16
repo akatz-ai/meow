@@ -104,11 +104,11 @@ description = "Merge both track branches into integration worktree"
 needs = ["agent-1.done", "agent-2.done", "worktree-integration.create"]
 command = """
 set -e
-cd .meow/worktrees/{{integration_track}}-track
+cd {{worktree-integration.create.outputs.path}}
 
-# Read branch names
-BRANCH_1=$(cat ../.meow/worktrees/{{track_name_1}}-track/.meow-branch 2>/dev/null || cat .meow/worktrees/{{track_name_1}}-track/.meow-branch)
-BRANCH_2=$(cat ../.meow/worktrees/{{track_name_2}}-track/.meow-branch 2>/dev/null || cat .meow/worktrees/{{track_name_2}}-track/.meow-branch)
+# Use template outputs for branch names
+BRANCH_1="{{worktree-1.create.outputs.branch}}"
+BRANCH_2="{{worktree-2.create.outputs.branch}}"
 
 echo "Merging $BRANCH_1..."
 git merge "$BRANCH_1" --no-edit -m "Merge {{track_name_1}} track"
