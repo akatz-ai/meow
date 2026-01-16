@@ -74,7 +74,7 @@ func init() {
 	statusCmd.Flags().StringVar(&statusFilter, "filter", "", "Filter by status (running, done, failed, stopped)")
 	statusCmd.Flags().BoolVarP(&statusAll, "all", "a", false, "Show all workflows (not just active)")
 	statusCmd.Flags().BoolVar(&statusAllSteps, "all-steps", false, "Show all steps (not just running)")
-	statusCmd.Flags().BoolVar(&statusAgents, "agents-only", false, "Focus on agent status")
+	statusCmd.Flags().BoolVar(&statusAgents, "agents", false, "Focus on agent status")
 	statusCmd.Flags().BoolVarP(&statusQuiet, "quiet", "q", false, "Minimal output")
 	statusCmd.Flags().BoolVar(&statusNoColor, "no-color", false, "Disable colors")
 }
