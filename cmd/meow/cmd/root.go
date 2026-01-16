@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +29,13 @@ MEOW enables complex multi-agent workflows with crash recovery and context manag
 For more information, see: https://github.com/meow-stack/meow-machine`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		// When no subcommand is given, list available workflows (like `make` with no args)
+		if err := listWorkflows(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	},
 }
 
 // Execute runs the root command.
@@ -83,6 +92,93 @@ func checkBeadsDir() error {
 	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
 		return fmt.Errorf("no .beads directory found. Are you in a beads project?")
 	}
+
+	return nil
+}
+
+// listWorkflows lists all available workflows from all sources.
+func listWorkflows() error {
+	dir, err := getWorkDir()
+	if err != nil {
+		return err
+	}
+
+	// Check if we're in a MEOW project - if not, that's OK, we just won't have project workflows
+	meowDir := dir + "/.meow"
+	inMeowProject := true
+	if _, err := os.Stat(meowDir); os.IsNotExist(err) {
+		inMeowProject = false
+	}
+
+	var projectDir string
+	if inMeowProject {
+		projectDir = dir
+	}
+
+	loader := workflow.NewLoader(projectDir)
+	available, err := loader.ListAvailable()
+	if err != nil {
+		return fmt.Errorf("listing workflows: %w", err)
+	}
+
+	// Check if we have any workflows at all
+	totalCount := 0
+	for _, wfs := range available {
+		totalCount += len(wfs)
+	}
+
+	if totalCount == 0 {
+		if inMeowProject {
+			fmt.Println("No workflows found.")
+			fmt.Println()
+			fmt.Println("Create a workflow in .meow/workflows/ to get started.")
+		} else {
+			fmt.Println("No workflows found.")
+			fmt.Println()
+			fmt.Println("Run 'meow init' to create a MEOW project, or")
+			fmt.Println("add workflows to ~/.meow/workflows/ for global access.")
+		}
+		return nil
+	}
+
+	fmt.Println("Available workflows:")
+	fmt.Println()
+
+	// Define display order
+	sourceOrder := []struct {
+		key   string
+		label string
+		path  string
+	}{
+		{"project", "Project", ".meow/workflows/"},
+		{"library", "Library", "lib/"},
+		{"user", "User", "~/.meow/workflows/"},
+		{"embedded", "Built-in", "<embedded>"},
+	}
+
+	for _, source := range sourceOrder {
+		workflows := available[source.key]
+		if len(workflows) == 0 {
+			continue
+		}
+
+		// Sort workflows by name
+		sort.Slice(workflows, func(i, j int) bool {
+			return workflows[i].Name < workflows[j].Name
+		})
+
+		fmt.Printf("  %s (%s):\n", source.label, source.path)
+		for _, wf := range workflows {
+			if wf.Description != "" {
+				fmt.Printf("    %-20s %s\n", wf.Name, wf.Description)
+			} else {
+				fmt.Printf("    %s\n", wf.Name)
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("Run: meow run <workflow> [--var key=value]")
 
 	return nil
 }
