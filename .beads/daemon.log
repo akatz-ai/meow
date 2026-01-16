@@ -680,3 +680,9 @@ time=2026-01-16T18:36:52.389-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-
 time=2026-01-16T18:36:52.390-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
 time=2026-01-16T18:37:12.285-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
 time=2026-01-16T18:37:12.286-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T18:37:12.346-05:00 level=INFO msg="Git ref change detected: %s" !BADKEY=/data/projects/meow/.git/refs/heads/main.lock
+time=2026-01-16T18:37:13.347-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T18:37:13.347-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T18:37:13.349-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
+time=2026-01-16T18:37:14.015-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T18:37:14.015-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
