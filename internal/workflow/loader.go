@@ -301,6 +301,165 @@ func (c *LoadContext) Depth() int {
 	return len(c.stack)
 }
 
+// AvailableWorkflow describes a workflow available for execution.
+type AvailableWorkflow struct {
+	Name        string // Workflow file name (without .meow.toml)
+	Description string // From workflow metadata
+	Source      string // "project", "library", "user", or "embedded"
+	Path        string // Full path to the file
+	Internal    bool   // Whether the workflow is marked internal
+}
+
+// ListAvailable returns all workflows available from all sources.
+// Workflows are returned grouped by source, with internal workflows excluded.
+func (l *Loader) ListAvailable() (map[string][]AvailableWorkflow, error) {
+	result := make(map[string][]AvailableWorkflow)
+
+	// Project workflows (.meow/workflows/*.meow.toml, excluding lib/)
+	if l.ProjectDir != "" {
+		projectDir := filepath.Join(l.ProjectDir, ".meow", "workflows")
+		projectWorkflows, err := l.listFromDir(projectDir, "project")
+		if err == nil && len(projectWorkflows) > 0 {
+			result["project"] = projectWorkflows
+		}
+
+		// Library workflows (.meow/workflows/lib/*.meow.toml)
+		libDir := filepath.Join(projectDir, "lib")
+		libWorkflows, err := l.listFromDir(libDir, "library")
+		if err == nil && len(libWorkflows) > 0 {
+			result["library"] = libWorkflows
+		}
+	}
+
+	// User workflows (~/.meow/workflows/*.meow.toml)
+	if l.UserDir != "" {
+		userDir := filepath.Join(l.UserDir, "workflows")
+		userWorkflows, err := l.listFromDir(userDir, "user")
+		if err == nil && len(userWorkflows) > 0 {
+			result["user"] = userWorkflows
+		}
+	}
+
+	// Embedded workflows
+	if EmbeddedFS != (embed.FS{}) {
+		embeddedWorkflows, err := l.listFromEmbedded()
+		if err == nil && len(embeddedWorkflows) > 0 {
+			result["embedded"] = embeddedWorkflows
+		}
+	}
+
+	return result, nil
+}
+
+// listFromDir lists workflows from a filesystem directory.
+func (l *Loader) listFromDir(dir string, source string) ([]AvailableWorkflow, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var workflows []AvailableWorkflow
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // Skip subdirectories (lib/ handled separately)
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".meow.toml") {
+			continue
+		}
+
+		baseName := strings.TrimSuffix(name, ".meow.toml")
+		fullPath := filepath.Join(dir, name)
+
+		// Parse module to get description and internal flag
+		module, err := ParseModuleFile(fullPath)
+		if err != nil {
+			// Skip files that fail to parse
+			continue
+		}
+
+		// Get the main workflow's description
+		mainWf := module.DefaultWorkflow()
+		if mainWf == nil {
+			continue
+		}
+
+		// Skip internal workflows
+		if mainWf.Internal {
+			continue
+		}
+
+		workflows = append(workflows, AvailableWorkflow{
+			Name:        baseName,
+			Description: mainWf.Description,
+			Source:      source,
+			Path:        fullPath,
+			Internal:    mainWf.Internal,
+		})
+	}
+
+	return workflows, nil
+}
+
+// listFromEmbedded lists workflows from the embedded filesystem.
+func (l *Loader) listFromEmbedded() ([]AvailableWorkflow, error) {
+	entries, err := fs.ReadDir(EmbeddedFS, l.EmbeddedDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var workflows []AvailableWorkflow
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".meow.toml") {
+			continue
+		}
+
+		baseName := strings.TrimSuffix(name, ".meow.toml")
+		embeddedPath := path.Join(l.EmbeddedDir, name)
+
+		// Parse module to get description
+		data, err := EmbeddedFS.ReadFile(embeddedPath)
+		if err != nil {
+			continue
+		}
+
+		module, err := ParseModuleString(string(data), embeddedPath)
+		if err != nil {
+			continue
+		}
+
+		mainWf := module.DefaultWorkflow()
+		if mainWf == nil {
+			continue
+		}
+
+		// Skip internal workflows
+		if mainWf.Internal {
+			continue
+		}
+
+		workflows = append(workflows, AvailableWorkflow{
+			Name:        baseName,
+			Description: mainWf.Description,
+			Source:      "embedded",
+			Path:        embeddedPath,
+			Internal:    mainWf.Internal,
+		})
+	}
+
+	return workflows, nil
+}
+
 // CircularReferenceError is returned when a circular reference is detected.
 type CircularReferenceError struct {
 	Reference string   // The reference that caused the cycle
