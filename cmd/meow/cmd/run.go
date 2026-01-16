@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/meow-stack/meow-machine/internal/cli"
 	"github.com/meow-stack/meow-machine/internal/config"
 	"github.com/meow-stack/meow-machine/internal/ipc"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
@@ -47,6 +48,7 @@ var (
 	runWorkflowID    string // internal: workflow ID for detached child
 	runVars          []string
 	runWorkflow      string
+	runYes           bool
 )
 
 func init() {
@@ -58,6 +60,7 @@ func init() {
 	runCmd.Flags().MarkHidden("_workflow-id")
 	runCmd.Flags().StringArrayVar(&runVars, "var", nil, "variable values (format: name=value)")
 	runCmd.Flags().StringVar(&runWorkflow, "workflow", "main", "workflow name to run (default: main)")
+	runCmd.Flags().BoolVarP(&runYes, "yes", "y", false, "auto-confirm prompts (create .meow/ if missing)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -71,6 +74,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 	dir, err := getWorkDir()
 	if err != nil {
 		return err
+	}
+
+	// Check if .meow/ exists, offer to create if missing
+	meowDir := filepath.Join(dir, ".meow")
+	if _, err := os.Stat(meowDir); os.IsNotExist(err) {
+		if !runYes {
+			confirmed, err := cli.Confirm("No .meow/ directory found. Create one?", true)
+			if err != nil {
+				return fmt.Errorf("prompt failed: %w", err)
+			}
+			if !confirmed {
+				return fmt.Errorf("no .meow/ directory. Run 'meow init' or 'meow init --minimal' first")
+			}
+		}
+		// Create minimal structure
+		if err := initMinimalFromRun(dir); err != nil {
+			return fmt.Errorf("initializing .meow/: %w", err)
+		}
+		fmt.Println() // blank line before workflow output
 	}
 
 	// Load config (defaults + global + project)
@@ -395,5 +417,17 @@ func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID
 	fmt.Printf("Use 'meow status %s' to check progress\n", workflowID)
 	fmt.Printf("Use 'meow stop %s' to stop the workflow\n", workflowID)
 
+	return nil
+}
+
+// initMinimalFromRun creates only the minimal .meow structure needed for running workflows.
+func initMinimalFromRun(dir string) error {
+	meowDir := filepath.Join(dir, ".meow")
+	for _, subdir := range []string{"runs", "logs"} {
+		if err := os.MkdirAll(filepath.Join(meowDir, subdir), 0755); err != nil {
+			return err
+		}
+	}
+	fmt.Println("Created .meow/runs/ and .meow/logs/")
 	return nil
 }

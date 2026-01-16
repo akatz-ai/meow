@@ -57,7 +57,7 @@ func checkWorkDir() error {
 	// Check for .meow directory
 	meowDir := dir + "/.meow"
 	if _, err := os.Stat(meowDir); os.IsNotExist(err) {
-		return fmt.Errorf("not a MEOW project (no .meow directory). Run 'meow init' first")
+		return fmt.Errorf("not a MEOW project (no .meow directory).\n  Run 'meow init' for full setup, or 'meow init --minimal' for just runs/logs")
 	}
 
 	return nil

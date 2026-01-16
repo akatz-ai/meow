@@ -44,12 +44,18 @@ To install workflow collections, use 'meow install' (coming soon).`,
 func init() {
 	initCmd.Flags().BoolP("global", "g", false, "initialize ~/.meow/ instead of .meow/")
 	initCmd.Flags().Bool("force", false, "reinitialize even if directory exists")
+	initCmd.Flags().Bool("minimal", false, "only create runs/ and logs/ directories (minimum for running workflows)")
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	global, _ := cmd.Flags().GetBool("global")
 	force, _ := cmd.Flags().GetBool("force")
+	minimal, _ := cmd.Flags().GetBool("minimal")
+
+	if minimal && global {
+		return fmt.Errorf("--minimal and --global cannot be used together")
+	}
 
 	if global {
 		home, err := os.UserHomeDir()
@@ -63,6 +69,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	dir, err := getWorkDir()
 	if err != nil {
 		return err
+	}
+
+	if minimal {
+		return initMinimalDirectory(dir)
 	}
 
 	meowDir := filepath.Join(dir, ".meow")
@@ -145,6 +155,32 @@ default_adapter = "claude"
 	fmt.Println("  1. Add workflows to .meow/workflows/")
 	fmt.Println("  2. Run a workflow:  meow run <workflow>")
 	fmt.Println("  3. Check status:    meow status")
+
+	return nil
+}
+
+func initMinimalDirectory(dir string) error {
+	meowDir := filepath.Join(dir, ".meow")
+
+	// Check if full init already exists
+	if _, err := os.Stat(meowDir); err == nil {
+		return fmt.Errorf("MEOW project already initialized (found .meow directory)")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking .meow directory: %w", err)
+	}
+
+	// Create only runs and logs directories
+	for _, subdir := range []string{"runs", "logs"} {
+		path := filepath.Join(meowDir, subdir)
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return fmt.Errorf("creating %s: %w", subdir, err)
+		}
+	}
+
+	fmt.Printf("Initialized minimal MEOW project in %s\n", dir)
+	fmt.Println("  Created: .meow/runs/, .meow/logs/")
+	fmt.Println()
+	fmt.Println("Run 'meow init' for full setup (config, adapters, workflows)")
 
 	return nil
 }
