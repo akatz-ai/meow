@@ -1,7 +1,7 @@
 {
-  "pid": 280943,
-  "parent_pid": 280913,
-  "database": "/data/projects/meow-machine/.beads/beads.db",
+  "pid": 1798719,
+  "parent_pid": 1798699,
+  "database": "/data/projects/meow/.beads/beads.db",
   "version": "0.43.0",
-  "started_at": "2026-01-13T02:43:01.419437395Z"
+  "started_at": "2026-01-16T22:52:46.748136157Z"
 }
