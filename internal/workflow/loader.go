@@ -318,14 +318,14 @@ func (l *Loader) ListAvailable() (map[string][]AvailableWorkflow, error) {
 	// Project workflows (.meow/workflows/*.meow.toml, excluding lib/)
 	if l.ProjectDir != "" {
 		projectDir := filepath.Join(l.ProjectDir, ".meow", "workflows")
-		projectWorkflows, err := l.listFromDir(projectDir, "project", false)
+		projectWorkflows, err := l.listFromDir(projectDir, "project")
 		if err == nil && len(projectWorkflows) > 0 {
 			result["project"] = projectWorkflows
 		}
 
 		// Library workflows (.meow/workflows/lib/*.meow.toml)
 		libDir := filepath.Join(projectDir, "lib")
-		libWorkflows, err := l.listFromDir(libDir, "library", false)
+		libWorkflows, err := l.listFromDir(libDir, "library")
 		if err == nil && len(libWorkflows) > 0 {
 			result["library"] = libWorkflows
 		}
@@ -334,7 +334,7 @@ func (l *Loader) ListAvailable() (map[string][]AvailableWorkflow, error) {
 	// User workflows (~/.meow/workflows/*.meow.toml)
 	if l.UserDir != "" {
 		userDir := filepath.Join(l.UserDir, "workflows")
-		userWorkflows, err := l.listFromDir(userDir, "user", false)
+		userWorkflows, err := l.listFromDir(userDir, "user")
 		if err == nil && len(userWorkflows) > 0 {
 			result["user"] = userWorkflows
 		}
@@ -352,7 +352,7 @@ func (l *Loader) ListAvailable() (map[string][]AvailableWorkflow, error) {
 }
 
 // listFromDir lists workflows from a filesystem directory.
-func (l *Loader) listFromDir(dir string, source string, includeSubdirs bool) ([]AvailableWorkflow, error) {
+func (l *Loader) listFromDir(dir string, source string) ([]AvailableWorkflow, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil, nil
 	}
