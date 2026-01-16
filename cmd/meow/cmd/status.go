@@ -42,6 +42,7 @@ var (
 	statusAgents    bool
 	statusQuiet     bool
 	statusNoColor   bool
+	statusStrict    bool
 )
 
 var statusCmd = &cobra.Command{
@@ -77,6 +78,7 @@ func init() {
 	statusCmd.Flags().BoolVar(&statusAgents, "agents-only", false, "Focus on agent status")
 	statusCmd.Flags().BoolVarP(&statusQuiet, "quiet", "q", false, "Minimal output")
 	statusCmd.Flags().BoolVar(&statusNoColor, "no-color", false, "Disable colors")
+	statusCmd.Flags().BoolVar(&statusStrict, "strict", false, "Exit non-zero when no workflows match (for scripts)")
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -211,13 +213,32 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 	}
 
 	if len(workflows) == 0 {
-		if statusFilter != "" {
-			return &StatusExitError{Code: ExitNoWorkflows, Message: fmt.Sprintf("no workflows with status: %s", statusFilter)}
-		} else if statusAll {
-			return &StatusExitError{Code: ExitNoWorkflows, Message: "no workflows found\n\nUse 'meow run <template>' to start a workflow."}
-		} else {
-			return &StatusExitError{Code: ExitNoWorkflows, Message: "no active workflows\n\nUse 'meow status -a' to see all workflows."}
+		if statusStrict {
+			// Script mode: exit non-zero when nothing matches
+			if statusFilter != "" {
+				return &StatusExitError{Code: ExitNoWorkflows, Message: fmt.Sprintf("no workflows with status: %s", statusFilter)}
+			} else if statusAll {
+				return &StatusExitError{Code: ExitNoWorkflows, Message: "no workflows found"}
+			} else {
+				return &StatusExitError{Code: ExitNoWorkflows, Message: "no active workflows"}
+			}
 		}
+
+		// Human-friendly mode: exit 0 with helpful message
+		if statusFilter != "" {
+			fmt.Printf("No workflows with status: %s\n\n", statusFilter)
+			fmt.Println("Run 'meow status -a' to see all workflows.")
+		} else if statusAll {
+			fmt.Println("No workflows found.")
+			fmt.Println()
+			fmt.Println("Run 'meow run <template>' to start a workflow.")
+		} else {
+			fmt.Println("No active workflows.")
+			fmt.Println()
+			fmt.Println("Run 'meow run <template>' to start a workflow.")
+			fmt.Println("Run 'meow status -a' to see all workflows.")
+		}
+		return nil
 	}
 
 	// If only one workflow, show detailed view automatically
