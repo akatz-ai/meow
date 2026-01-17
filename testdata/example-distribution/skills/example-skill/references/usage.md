@@ -63,45 +63,37 @@ meow run example-task --var task="Update documentation" --var priority="low"
 
 The `example-task` workflow demonstrates several key MEOW patterns:
 
-1. **Input Validation** - Uses helper workflow to validate inputs
-2. **Template Expansion** - Shows how to use `expand` executor with library workflows
-3. **Sequential Steps** - Demonstrates step dependencies with `needs`
-4. **Variable Substitution** - Uses `{{variable}}` syntax in commands
-5. **Reusable Components** - Helper workflows in `lib/` directory
+1. **Input Validation** - Inline shell-based validation
+2. **Sequential Steps** - Demonstrates step dependencies with `needs`
+3. **Variable Substitution** - Uses `{{variable}}` syntax in commands
+4. **Shell Executor** - Shows how to use shell commands in workflow steps
 
 ## Helper Workflows
 
-### validate-inputs
+The skill includes a `lib/example-helpers.meow.toml` workflow that demonstrates reusable validation patterns. This can be used as a template for creating your own helper workflows.
+
+### example-helpers
 
 Validates that required inputs are not empty.
 
-Usage in workflow:
 ```toml
-[[main.steps]]
-id = "validate"
-executor = "expand"
-template = "lib/example-helpers.meow.toml"
-expand_from = "validate-inputs"
+[meta]
+name = "example-helpers"
+description = "Helper workflow for input validation"
 
-[main.steps.variables]
-input = "{{task}}"
-type = "task"
-```
+[variables]
+input = { description = "Input value to validate" }
+type = { description = "Type of validation to perform" }
 
-### log-completion
-
-Logs a completion message with timestamp.
-
-Usage in workflow:
-```toml
-[[main.steps]]
-id = "log-complete"
-executor = "expand"
-template = "lib/example-helpers.meow.toml"
-expand_from = "log-completion"
-
-[main.steps.variables]
-message = "Task completed: {{task}}"
+[[steps]]
+id = "check-empty"
+executor = "shell"
+command = """if [ -z "{{input}}" ]; then
+  echo "Error: {{type}} input cannot be empty" >&2
+  exit 1
+fi
+echo "Input validation passed"
+"""
 ```
 
 ## Integration with Claude

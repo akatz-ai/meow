@@ -21,7 +21,8 @@ command = """if [ -z "{{task}}" ]; then
   echo "Error: task input cannot be empty" >&2
   exit 1
 fi
-echo "Validation passed""""
+echo "Validation passed"
+"""
 
 # Step 2: Log task start
 [[steps]]

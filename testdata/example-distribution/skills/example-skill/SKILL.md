@@ -72,7 +72,7 @@ The workflow will:
 1. Validate the task input
 2. Log the task start with priority
 3. Execute the task
-4. Log completion with timestamp
+4. Log completion
 
 ## References
 
