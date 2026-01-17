@@ -504,3 +504,96 @@ func (c *VarContext) SubstituteForShell(input string) (string, error) {
 
 	return result, lastErr
 }
+
+// Eval evaluates an expression and returns the typed value.
+// For pure references like "{{task}}", returns the actual map/array/etc.
+// For mixed content like "prefix-{{task}}", returns string.
+func (c *VarContext) Eval(expr string) (any, error) {
+	trimmed := strings.TrimSpace(expr)
+
+	// Check for pure reference: exactly "{{path}}" with no surrounding text
+	if strings.HasPrefix(trimmed, "{{") && strings.HasSuffix(trimmed, "}}") {
+		inner := strings.TrimSpace(trimmed[2 : len(trimmed)-2])
+		// Ensure no nested references (no {{ inside the inner content)
+		if !strings.Contains(inner, "{{") {
+			val, err := c.resolve(inner)
+			if err != nil {
+				// If deferred, return the original expression as a string
+				if err == errDeferred {
+					return expr, nil
+				}
+				return nil, err
+			}
+			return val, nil
+		}
+	}
+
+	// Mixed content - return as string
+	return c.Substitute(expr)
+}
+
+// Render always returns a string, stringifying embedded values.
+// Alias for Substitute for clarity in call sites.
+func (c *VarContext) Render(s string) (string, error) {
+	return c.Substitute(s)
+}
+
+// EvalMap recursively evaluates a map[string]any, applying Eval to string values.
+func (c *VarContext) EvalMap(m map[string]any) (map[string]any, error) {
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			evaled, err := c.Eval(val)
+			if err != nil {
+				return nil, fmt.Errorf("key %q: %w", k, err)
+			}
+			result[k] = evaled
+		case map[string]any:
+			evaled, err := c.EvalMap(val)
+			if err != nil {
+				return nil, fmt.Errorf("key %q: %w", k, err)
+			}
+			result[k] = evaled
+		case []any:
+			evaled, err := c.EvalSlice(val)
+			if err != nil {
+				return nil, fmt.Errorf("key %q: %w", k, err)
+			}
+			result[k] = evaled
+		default:
+			result[k] = v // Pass through non-strings
+		}
+	}
+	return result, nil
+}
+
+// EvalSlice recursively evaluates a []any, applying Eval to string elements.
+func (c *VarContext) EvalSlice(s []any) ([]any, error) {
+	result := make([]any, len(s))
+	for i, v := range s {
+		switch val := v.(type) {
+		case string:
+			evaled, err := c.Eval(val)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			result[i] = evaled
+		case map[string]any:
+			evaled, err := c.EvalMap(val)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			result[i] = evaled
+		case []any:
+			evaled, err := c.EvalSlice(val)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			result[i] = evaled
+		default:
+			result[i] = v
+		}
+	}
+	return result, nil
+}

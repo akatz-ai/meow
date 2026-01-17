@@ -1417,3 +1417,464 @@ func TestVarContext_Has_Unset(t *testing.T) {
 		t.Errorf("Get('unset') should return empty string, got %q", ctx.Get("unset"))
 	}
 }
+
+// Tests for Eval/Render/EvalMap/EvalSlice methods (meow-n16t)
+
+func TestVarContext_Eval_PureReference_ReturnsTypedValue(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("task", map[string]any{
+		"name": "test-task",
+		"id":   42,
+	})
+
+	result, err := ctx.Eval("{{task}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Should return the actual map, not a JSON string
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if m["name"] != "test-task" {
+		t.Errorf("expected name='test-task', got %v", m["name"])
+	}
+	if m["id"] != 42 {
+		t.Errorf("expected id=42, got %v", m["id"])
+	}
+}
+
+func TestVarContext_Eval_PureReference_WithWhitespace(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+
+	// Test with whitespace around the reference
+	result, err := ctx.Eval("  {{ items }}  ")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Should return the actual slice
+	s, ok := result.([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", result)
+	}
+	if len(s) != 3 {
+		t.Errorf("expected 3 items, got %d", len(s))
+	}
+}
+
+func TestVarContext_Eval_MixedContent_ReturnsString(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("task", map[string]any{
+		"name": "test",
+	})
+
+	result, err := ctx.Eval("prefix-{{task}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Mixed content should return string
+	s, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", result)
+	}
+	if !strings.HasPrefix(s, "prefix-") {
+		t.Errorf("expected prefix, got %q", s)
+	}
+}
+
+func TestVarContext_Eval_MultipleReferences_ReturnsString(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("a", "hello")
+	ctx.SetVariable("b", "world")
+
+	result, err := ctx.Eval("{{a}} {{b}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Multiple references should return string
+	s, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", result)
+	}
+	if s != "hello world" {
+		t.Errorf("expected 'hello world', got %q", s)
+	}
+}
+
+func TestVarContext_Eval_NestedPath_ReturnsTypedValue(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("config", map[string]any{
+		"database": map[string]any{
+			"host": "localhost",
+			"port": 5432,
+		},
+	})
+
+	result, err := ctx.Eval("{{config.database}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Should return the nested map
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if m["host"] != "localhost" {
+		t.Errorf("expected host='localhost', got %v", m["host"])
+	}
+}
+
+func TestVarContext_Eval_ScalarValue(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("count", 42)
+	ctx.SetVariable("enabled", true)
+	ctx.SetVariable("name", "test")
+
+	tests := []struct {
+		name     string
+		input    string
+		expected any
+	}{
+		{"integer", "{{count}}", 42},
+		{"boolean", "{{enabled}}", true},
+		{"string", "{{name}}", "test"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ctx.Eval(tt.input)
+			if err != nil {
+				t.Fatalf("Eval failed: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("expected %v (%T), got %v (%T)", tt.expected, tt.expected, result, result)
+			}
+		})
+	}
+}
+
+func TestVarContext_Eval_UndefinedVariable(t *testing.T) {
+	ctx := NewVarContext()
+
+	_, err := ctx.Eval("{{undefined}}")
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("expected error about undefined, got: %v", err)
+	}
+}
+
+func TestVarContext_Eval_StepOutput(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetOutputs("build-step", map[string]any{
+		"result": map[string]any{
+			"status": "success",
+			"files":  []any{"a.go", "b.go"},
+		},
+	})
+
+	result, err := ctx.Eval("{{build-step.outputs.result}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Should return the nested map
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if m["status"] != "success" {
+		t.Errorf("expected status='success', got %v", m["status"])
+	}
+}
+
+func TestVarContext_Render_ReturnsString(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("name", "world")
+
+	result, err := ctx.Render("Hello, {{name}}!")
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	if result != "Hello, world!" {
+		t.Errorf("expected 'Hello, world!', got %q", result)
+	}
+}
+
+func TestVarContext_Render_MapBecomesJSON(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("config", map[string]any{
+		"key": "value",
+	})
+
+	result, err := ctx.Render("Config: {{config}}")
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	// Map should be JSON-stringified
+	if !strings.Contains(result, `"key"`) {
+		t.Errorf("expected JSON in result, got %q", result)
+	}
+}
+
+func TestVarContext_EvalMap_Basic(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+	ctx.SetVariable("name", "test")
+
+	input := map[string]any{
+		"typed":  "{{items}}",
+		"string": "prefix-{{name}}",
+		"static": 42,
+	}
+
+	result, err := ctx.EvalMap(input)
+	if err != nil {
+		t.Fatalf("EvalMap failed: %v", err)
+	}
+
+	// "typed" should be actual slice
+	items, ok := result["typed"].([]any)
+	if !ok {
+		t.Fatalf("expected []any for 'typed', got %T", result["typed"])
+	}
+	if len(items) != 3 {
+		t.Errorf("expected 3 items, got %d", len(items))
+	}
+
+	// "string" should be string (mixed content)
+	s, ok := result["string"].(string)
+	if !ok {
+		t.Fatalf("expected string for 'string', got %T", result["string"])
+	}
+	if s != "prefix-test" {
+		t.Errorf("expected 'prefix-test', got %q", s)
+	}
+
+	// "static" should pass through unchanged
+	if result["static"] != 42 {
+		t.Errorf("expected 42 for 'static', got %v", result["static"])
+	}
+}
+
+func TestVarContext_EvalMap_Nested(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("data", map[string]any{
+		"inner": "value",
+	})
+
+	input := map[string]any{
+		"outer": map[string]any{
+			"ref": "{{data}}",
+		},
+	}
+
+	result, err := ctx.EvalMap(input)
+	if err != nil {
+		t.Fatalf("EvalMap failed: %v", err)
+	}
+
+	outer, ok := result["outer"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for 'outer', got %T", result["outer"])
+	}
+
+	// "ref" should be the actual map
+	ref, ok := outer["ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for 'ref', got %T", outer["ref"])
+	}
+	if ref["inner"] != "value" {
+		t.Errorf("expected inner='value', got %v", ref["inner"])
+	}
+}
+
+func TestVarContext_EvalMap_Error(t *testing.T) {
+	ctx := NewVarContext()
+
+	input := map[string]any{
+		"bad": "{{undefined}}",
+	}
+
+	_, err := ctx.EvalMap(input)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "bad") {
+		t.Errorf("expected error to mention key 'bad', got: %v", err)
+	}
+}
+
+func TestVarContext_EvalSlice_Basic(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("config", map[string]any{
+		"host": "localhost",
+	})
+	ctx.SetVariable("name", "test")
+
+	input := []any{
+		"{{config}}",
+		"prefix-{{name}}",
+		42,
+	}
+
+	result, err := ctx.EvalSlice(input)
+	if err != nil {
+		t.Fatalf("EvalSlice failed: %v", err)
+	}
+
+	// First element should be actual map
+	m, ok := result[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for [0], got %T", result[0])
+	}
+	if m["host"] != "localhost" {
+		t.Errorf("expected host='localhost', got %v", m["host"])
+	}
+
+	// Second element should be string (mixed content)
+	s, ok := result[1].(string)
+	if !ok {
+		t.Fatalf("expected string for [1], got %T", result[1])
+	}
+	if s != "prefix-test" {
+		t.Errorf("expected 'prefix-test', got %q", s)
+	}
+
+	// Third element should pass through unchanged
+	if result[2] != 42 {
+		t.Errorf("expected 42 for [2], got %v", result[2])
+	}
+}
+
+func TestVarContext_EvalSlice_NestedMaps(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{1, 2, 3})
+
+	input := []any{
+		map[string]any{
+			"list": "{{items}}",
+		},
+	}
+
+	result, err := ctx.EvalSlice(input)
+	if err != nil {
+		t.Fatalf("EvalSlice failed: %v", err)
+	}
+
+	m, ok := result[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for [0], got %T", result[0])
+	}
+
+	// "list" should be actual slice
+	items, ok := m["list"].([]any)
+	if !ok {
+		t.Fatalf("expected []any for 'list', got %T", m["list"])
+	}
+	if len(items) != 3 {
+		t.Errorf("expected 3 items, got %d", len(items))
+	}
+}
+
+func TestVarContext_EvalSlice_NestedSlice(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("val", "resolved")
+
+	input := []any{
+		[]any{
+			"{{val}}",
+			"static",
+		},
+	}
+
+	result, err := ctx.EvalSlice(input)
+	if err != nil {
+		t.Fatalf("EvalSlice failed: %v", err)
+	}
+
+	inner, ok := result[0].([]any)
+	if !ok {
+		t.Fatalf("expected []any for [0], got %T", result[0])
+	}
+	if inner[0] != "resolved" {
+		t.Errorf("expected 'resolved' for [0][0], got %v", inner[0])
+	}
+	if inner[1] != "static" {
+		t.Errorf("expected 'static' for [0][1], got %v", inner[1])
+	}
+}
+
+func TestVarContext_EvalSlice_Error(t *testing.T) {
+	ctx := NewVarContext()
+
+	input := []any{
+		"{{undefined}}",
+	}
+
+	_, err := ctx.EvalSlice(input)
+	if err == nil {
+		t.Fatal("expected error for undefined variable")
+	}
+	if !strings.Contains(err.Error(), "index 0") {
+		t.Errorf("expected error to mention index, got: %v", err)
+	}
+}
+
+func TestVarContext_EvalMap_WithSlice(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("data", map[string]any{"key": "value"})
+
+	input := map[string]any{
+		"array": []any{
+			"{{data}}",
+		},
+	}
+
+	result, err := ctx.EvalMap(input)
+	if err != nil {
+		t.Fatalf("EvalMap failed: %v", err)
+	}
+
+	arr, ok := result["array"].([]any)
+	if !ok {
+		t.Fatalf("expected []any for 'array', got %T", result["array"])
+	}
+
+	m, ok := arr[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for array[0], got %T", arr[0])
+	}
+	if m["key"] != "value" {
+		t.Errorf("expected key='value', got %v", m["key"])
+	}
+}
+
+func TestVarContext_Eval_DeferredVariable(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.DeferUndefinedVariables = true
+
+	// With deferred mode, undefined variables should be left as-is
+	result, err := ctx.Eval("{{item}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	// Should return the original expression as string
+	s, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", result)
+	}
+	if s != "{{item}}" {
+		t.Errorf("expected '{{item}}', got %q", s)
+	}
+}
