@@ -708,7 +708,7 @@ func coerceVariable(_ string, value any, def *Var) (any, error) {
 
 	case VarTypeString:
 		// Stringify if structured
-		return stringifyValue(value), nil
+		return StringifyValue(value), nil
 
 	default:
 		// For other types (int, bool, or empty/unspecified), pass through
