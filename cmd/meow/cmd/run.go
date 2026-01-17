@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -47,6 +48,7 @@ var (
 	runDetachedChild bool   // internal flag for child process
 	runWorkflowID    string // internal: workflow ID for detached child
 	runVars          []string
+	runVarsJSON      []string
 	runWorkflow      string
 	runYes           bool
 )
@@ -59,6 +61,7 @@ func init() {
 	runCmd.Flags().MarkHidden("_detached-child")
 	runCmd.Flags().MarkHidden("_workflow-id")
 	runCmd.Flags().StringArrayVar(&runVars, "var", nil, "variable values (format: name=value)")
+	runCmd.Flags().StringArrayVar(&runVarsJSON, "var-json", nil, "variable with JSON value (format: name={...} or name=[...])")
 	runCmd.Flags().StringVar(&runWorkflow, "workflow", "main", "workflow name to run (default: main)")
 	runCmd.Flags().BoolVarP(&runYes, "yes", "y", false, "auto-confirm prompts (create .meow/ if missing)")
 	rootCmd.AddCommand(runCmd)
@@ -163,6 +166,19 @@ func runRun(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("invalid variable format: %s (expected name=value)", v)
 		}
 		vars[parts[0]] = parts[1]
+	}
+
+	// Parse JSON variables
+	for _, v := range runVarsJSON {
+		parts := strings.SplitN(v, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid --var-json format: %s (expected name={...})", v)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(parts[1]), &parsed); err != nil {
+			return fmt.Errorf("--var-json %s: invalid JSON: %w", parts[0], err)
+		}
+		vars[parts[0]] = parsed
 	}
 
 	// Get workflow (use flag or default to "main")
@@ -366,6 +382,9 @@ func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID
 	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", workflowName}
 	for _, v := range runVars {
 		args = append(args, "--var", v)
+	}
+	for _, v := range runVarsJSON {
+		args = append(args, "--var-json", v)
 	}
 	if verbose {
 		args = append(args, "--verbose")
