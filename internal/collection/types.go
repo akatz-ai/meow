@@ -2,8 +2,9 @@ package collection
 
 // Collection represents a MEOW workflow collection manifest.
 type Collection struct {
-	Collection CollectionMeta `toml:"collection"`
-	Packs      []Pack         `toml:"packs"`
+	Collection CollectionMeta    `toml:"collection"`
+	Packs      []Pack            `toml:"packs"`
+	Skills     map[string]string `toml:"skills,omitempty"` // name -> manifest path
 }
 
 // CollectionMeta contains metadata for the collection.

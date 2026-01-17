@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/meow-stack/meow-machine/internal/skill"
 	"github.com/meow-stack/meow-machine/internal/workflow"
 )
 
@@ -65,6 +66,7 @@ func (c *Collection) Validate(baseDir string) *ValidationResult {
 
 	validateCollectionMeta(c.Collection, result)
 	validatePacks(c.Packs, baseDir, result)
+	validateSkills(c.Skills, baseDir, result)
 
 	return result
 }
@@ -319,4 +321,56 @@ func tightenUpper(current versionBound, candidate semver, inclusive bool) versio
 		current.inclusive = false
 	}
 	return current
+}
+
+func validateSkills(skills map[string]string, baseDir string, result *ValidationResult) {
+	// Empty skills section is valid
+	if len(skills) == 0 {
+		return
+	}
+
+	for name, skillPath := range skills {
+		fieldPrefix := fmt.Sprintf("skills[%s]", name)
+
+		// Skill path must be relative
+		if filepath.IsAbs(skillPath) {
+			result.Add(fieldPrefix, "skill path must be relative to repo root")
+			continue
+		}
+
+		// Skill path must end with skill.toml
+		if !strings.HasSuffix(skillPath, "skill.toml") {
+			result.Add(fieldPrefix, "skill path must end with skill.toml")
+			continue
+		}
+
+		// Check skill path exists
+		fullPath := filepath.Join(baseDir, filepath.FromSlash(skillPath))
+		if _, err := os.Stat(fullPath); err != nil {
+			result.Add(fieldPrefix, "skill path does not exist")
+			continue
+		}
+
+		// Load and validate skill manifest
+		skillDir := filepath.Dir(fullPath)
+		s, err := skill.LoadFromDir(skillDir)
+		if err != nil {
+			result.Add(fieldPrefix, fmt.Sprintf("failed to load skill manifest: %v", err))
+			continue
+		}
+
+		// Validate skill manifest
+		validationResult := s.Validate(skillDir)
+		if validationResult.HasErrors() {
+			for _, e := range validationResult.Errors {
+				result.Add(fieldPrefix, fmt.Sprintf("skill validation failed: %s", e.Error()))
+			}
+			continue
+		}
+
+		// Check skill name matches the key
+		if s.Skill.Name != name {
+			result.Add(fieldPrefix, fmt.Sprintf("skill name %q does not match key %q", s.Skill.Name, name))
+		}
+	}
 }
