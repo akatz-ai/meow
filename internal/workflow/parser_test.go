@@ -1576,3 +1576,107 @@ inline = [
 		t.Errorf("expected label = 'test', got %v", labelVal)
 	}
 }
+
+// ============================================================================
+// VarType JSON and Object Tests
+// ============================================================================
+
+func TestParseString_VarTypeJSON(t *testing.T) {
+	// Test that type = "json" is a valid variable type
+	toml := `
+[meta]
+name = "test-json-var"
+version = "1.0.0"
+
+[variables]
+config = { required = true, type = "json", description = "JSON config string to parse" }
+
+[[steps]]
+id = "step-1"
+executor = "shell"
+command = "echo test"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	v := tmpl.Variables["config"]
+	if v.Type != VarTypeJSON {
+		t.Errorf("expected type 'json', got %q", v.Type)
+	}
+}
+
+func TestParseString_VarTypeObject(t *testing.T) {
+	// Test that type = "object" is a valid variable type
+	toml := `
+[meta]
+name = "test-object-var"
+version = "1.0.0"
+
+[variables]
+task = { required = true, type = "object", description = "Structured task object" }
+
+[[steps]]
+id = "step-1"
+executor = "shell"
+command = "echo test"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	v := tmpl.Variables["task"]
+	if v.Type != VarTypeObject {
+		t.Errorf("expected type 'object', got %q", v.Type)
+	}
+}
+
+func TestParseString_AllVarTypes(t *testing.T) {
+	// Test that all valid variable types are accepted
+	toml := `
+[meta]
+name = "test-all-var-types"
+version = "1.0.0"
+
+[variables]
+str_var = { type = "string" }
+int_var = { type = "int" }
+bool_var = { type = "bool" }
+file_var = { type = "file" }
+json_var = { type = "json" }
+object_var = { type = "object" }
+
+[[steps]]
+id = "step-1"
+executor = "shell"
+command = "echo test"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		expected VarType
+	}{
+		{"str_var", VarTypeString},
+		{"int_var", VarTypeInt},
+		{"bool_var", VarTypeBool},
+		{"file_var", VarTypeFile},
+		{"json_var", VarTypeJSON},
+		{"object_var", VarTypeObject},
+	}
+
+	for _, tc := range tests {
+		v := tmpl.Variables[tc.name]
+		if v.Type != tc.expected {
+			t.Errorf("variable %q: expected type %q, got %q", tc.name, tc.expected, v.Type)
+		}
+	}
+}

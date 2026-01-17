@@ -40,7 +40,9 @@ const (
 	VarTypeString VarType = "string"
 	VarTypeInt    VarType = "int"
 	VarTypeBool   VarType = "bool"
-	VarTypeFile   VarType = "file" // Value is a file path; contents are read and used
+	VarTypeFile   VarType = "file"   // Value is a file path; contents are read and used
+	VarTypeJSON   VarType = "json"   // Parse JSON string into any
+	VarTypeObject VarType = "object" // Expects structured value (map/array)
 )
 
 // Var defines a template variable.
@@ -427,8 +429,8 @@ func (t *Template) Validate() error {
 
 	// Validate variables
 	for name, v := range t.Variables {
-		if v.Type != "" && v.Type != VarTypeString && v.Type != VarTypeInt && v.Type != VarTypeBool && v.Type != VarTypeFile {
-			return fmt.Errorf("variable %q: invalid type %q (must be string, int, bool, or file)", name, v.Type)
+		if v.Type != "" && v.Type != VarTypeString && v.Type != VarTypeInt && v.Type != VarTypeBool && v.Type != VarTypeFile && v.Type != VarTypeJSON && v.Type != VarTypeObject {
+			return fmt.Errorf("variable %q: invalid type %q (must be string, int, bool, file, json, or object)", name, v.Type)
 		}
 	}
 

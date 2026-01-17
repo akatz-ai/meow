@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -69,35 +70,21 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]any) (*BakeResu
 		}
 	}
 
-	// Apply provided variables to context
-	// For file-type variables, read the file contents
+	// Apply provided variables to context with type coercion
 	for k, v := range vars {
-		if varDef, ok := workflow.Variables[k]; ok && varDef.Type == VarTypeFile {
-			// File-type variables must be strings (file paths)
-			filePath, ok := v.(string)
-			if !ok {
-				return nil, fmt.Errorf("file-type variable %q must be a string, got %T", k, v)
-			}
-			// Read file contents
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				return nil, fmt.Errorf("reading file for variable %q: %w", k, err)
-			}
-			b.VarContext.Set(k, strings.TrimSpace(string(content)))
-		} else {
-			b.VarContext.Set(k, v)
+		varDef := workflow.Variables[k] // May be nil for undeclared vars (caught above)
+		coerced, err := coerceVariable(k, v, varDef)
+		if err != nil {
+			return nil, fmt.Errorf("variable %q: %w", k, err)
 		}
+		b.VarContext.Set(k, coerced)
 	}
 
-	// Apply variable defaults from workflow
+	// Apply variable defaults from workflow (preserving types)
 	for name, v := range workflow.Variables {
 		if v.Default != nil && !b.VarContext.Has(name) {
-			switch d := v.Default.(type) {
-			case string:
-				b.VarContext.Set(name, d)
-			default:
-				b.VarContext.Set(name, fmt.Sprintf("%v", d))
-			}
+			// Keep typed values - don't stringify!
+			b.VarContext.Set(name, v.Default)
 		}
 	}
 
@@ -677,4 +664,54 @@ func levenshteinDistance(a, b string) int {
 	}
 
 	return matrix[len(a)][len(b)]
+}
+
+// coerceVariable coerces a variable value to the appropriate type based on its definition.
+// Returns the coerced value and any error.
+func coerceVariable(name string, value any, def *Var) (any, error) {
+	// No definition = pass through unchanged
+	if def == nil {
+		return value, nil
+	}
+
+	switch def.Type {
+	case VarTypeFile:
+		// File-type variables must be strings (file paths)
+		s, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("file variable requires string path, got %T", value)
+		}
+		content, err := os.ReadFile(s)
+		if err != nil {
+			return nil, fmt.Errorf("reading file: %w", err)
+		}
+		return strings.TrimSpace(string(content)), nil
+
+	case VarTypeJSON:
+		// If string, parse as JSON
+		if s, ok := value.(string); ok {
+			var parsed any
+			if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+				return nil, fmt.Errorf("invalid JSON: %w", err)
+			}
+			return parsed, nil
+		}
+		// Already structured, pass through
+		return value, nil
+
+	case VarTypeObject:
+		// Must be structured, error if string
+		if _, ok := value.(string); ok {
+			return nil, fmt.Errorf("expected object, got string")
+		}
+		return value, nil
+
+	case VarTypeString:
+		// Stringify if structured
+		return stringifyValue(value), nil
+
+	default:
+		// For other types (int, bool, or empty/unspecified), pass through
+		return value, nil
+	}
 }

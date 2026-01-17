@@ -1171,3 +1171,284 @@ func TestLevenshteinDistance(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// coerceVariable Tests
+// ============================================================================
+
+func TestCoerceVariable_NoDefinition(t *testing.T) {
+	// Variables without a definition should pass through unchanged
+	val, err := coerceVariable("myvar", "hello", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != "hello" {
+		t.Errorf("expected 'hello', got %v", val)
+	}
+
+	// Maps should also pass through
+	m := map[string]any{"key": "value"}
+	val, err = coerceVariable("myvar", m, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := val.(map[string]any); !ok {
+		t.Errorf("expected map[string]any, got %T", val)
+	}
+}
+
+func TestCoerceVariable_VarTypeJSON_ParsesString(t *testing.T) {
+	// type = "json" with string value should parse JSON
+	def := &Var{Type: VarTypeJSON}
+
+	// Parse JSON object
+	val, err := coerceVariable("config", `{"key": "value", "count": 42}`, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := val.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", val)
+	}
+	if m["key"] != "value" {
+		t.Errorf("expected key='value', got %v", m["key"])
+	}
+	if m["count"] != float64(42) { // JSON numbers are float64
+		t.Errorf("expected count=42, got %v", m["count"])
+	}
+
+	// Parse JSON array
+	val, err = coerceVariable("items", `["a", "b", "c"]`, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr, ok := val.([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", val)
+	}
+	if len(arr) != 3 {
+		t.Errorf("expected 3 items, got %d", len(arr))
+	}
+}
+
+func TestCoerceVariable_VarTypeJSON_PassthroughStructured(t *testing.T) {
+	// type = "json" with already-structured value should pass through
+	def := &Var{Type: VarTypeJSON}
+
+	m := map[string]any{"key": "value"}
+	val, err := coerceVariable("config", m, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := val.(map[string]any); !ok {
+		t.Fatalf("expected map[string]any, got %T", val)
+	}
+}
+
+func TestCoerceVariable_VarTypeJSON_InvalidJSON(t *testing.T) {
+	// type = "json" with invalid JSON should error
+	def := &Var{Type: VarTypeJSON}
+
+	_, err := coerceVariable("config", `{invalid json}`, def)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "invalid JSON") {
+		t.Errorf("expected 'invalid JSON' error, got: %v", err)
+	}
+}
+
+func TestCoerceVariable_VarTypeObject_ErrorsOnString(t *testing.T) {
+	// type = "object" with string value should error
+	def := &Var{Type: VarTypeObject}
+
+	_, err := coerceVariable("task", "some string", def)
+	if err == nil {
+		t.Fatal("expected error for string value with object type")
+	}
+	if !strings.Contains(err.Error(), "expected object") {
+		t.Errorf("expected 'expected object' error, got: %v", err)
+	}
+}
+
+func TestCoerceVariable_VarTypeObject_PassthroughMap(t *testing.T) {
+	// type = "object" with map value should pass through
+	def := &Var{Type: VarTypeObject}
+
+	m := map[string]any{"key": "value", "nested": map[string]any{"a": 1}}
+	val, err := coerceVariable("task", m, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result, ok := val.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", val)
+	}
+	if result["key"] != "value" {
+		t.Errorf("expected key='value', got %v", result["key"])
+	}
+}
+
+func TestCoerceVariable_VarTypeObject_PassthroughSlice(t *testing.T) {
+	// type = "object" with slice value should pass through
+	def := &Var{Type: VarTypeObject}
+
+	arr := []any{"a", "b", "c"}
+	val, err := coerceVariable("items", arr, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result, ok := val.([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", val)
+	}
+	if len(result) != 3 {
+		t.Errorf("expected 3 items, got %d", len(result))
+	}
+}
+
+func TestCoerceVariable_VarTypeString_StringifyMap(t *testing.T) {
+	// type = "string" with map value should JSON-stringify
+	def := &Var{Type: VarTypeString}
+
+	m := map[string]any{"key": "value"}
+	val, err := coerceVariable("config", m, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	str, ok := val.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", val)
+	}
+	if str != `{"key":"value"}` {
+		t.Errorf("expected JSON string, got %q", str)
+	}
+}
+
+func TestCoerceVariable_VarTypeString_PassthroughString(t *testing.T) {
+	// type = "string" with string value should pass through
+	def := &Var{Type: VarTypeString}
+
+	val, err := coerceVariable("name", "hello", def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != "hello" {
+		t.Errorf("expected 'hello', got %v", val)
+	}
+}
+
+func TestCoerceVariable_DefaultTypes(t *testing.T) {
+	// Test that default/unspecified types pass through
+	def := &Var{} // No type specified
+
+	// String
+	val, err := coerceVariable("str", "hello", def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != "hello" {
+		t.Errorf("expected 'hello', got %v", val)
+	}
+
+	// Map
+	m := map[string]any{"key": "value"}
+	val, err = coerceVariable("obj", m, def)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := val.(map[string]any); !ok {
+		t.Errorf("expected map, got %T", val)
+	}
+}
+
+// ============================================================================
+// Default Values Preserve Type Tests
+// ============================================================================
+
+func TestBakeWorkflow_DefaultObjectPreservesType(t *testing.T) {
+	// Test that object defaults are not stringified
+	workflow := &Workflow{
+		Name: "default-object-test",
+		Variables: map[string]*Var{
+			"config": {
+				Type:    VarTypeObject,
+				Default: map[string]any{"key": "value", "count": int64(42)},
+			},
+		},
+		Steps: []*Step{
+			{
+				ID:       "step-1",
+				Executor: ExecutorExpand,
+				Template: ".worker",
+				Variables: map[string]any{
+					"task_config": "{{config}}",
+				},
+			},
+		},
+	}
+
+	baker := NewBaker("run-001")
+	result, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// The config variable should be stored as a map, not a string
+	configVal := baker.VarContext.Variables["config"]
+	configMap, ok := configVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected config to be map[string]any, got %T (%v)", configVal, configVal)
+	}
+	if configMap["key"] != "value" {
+		t.Errorf("expected config.key='value', got %v", configMap["key"])
+	}
+
+	// The expanded step should have the config passed through
+	step := result.Steps[0]
+	if step.Expand == nil {
+		t.Fatal("expected ExpandConfig")
+	}
+	// When substituted in a string context ({{config}}), maps are JSON-stringified
+	taskConfigVal := step.Expand.Variables["task_config"]
+	taskConfigStr, ok := taskConfigVal.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", taskConfigVal)
+	}
+	if !strings.Contains(taskConfigStr, "key") {
+		t.Errorf("expected JSON-stringified config, got %q", taskConfigStr)
+	}
+}
+
+func TestBakeWorkflow_DefaultIntPreservesType(t *testing.T) {
+	// Test that int defaults are kept as integers (not stringified)
+	workflow := &Workflow{
+		Name: "default-int-test",
+		Variables: map[string]*Var{
+			"max_count": {
+				Type:    VarTypeInt,
+				Default: int64(100),
+			},
+		},
+		Steps: []*Step{
+			{
+				ID:       "step-1",
+				Executor: ExecutorAgent,
+				Agent:    "claude",
+				Prompt:   "Max count is {{max_count}}",
+			},
+		},
+	}
+
+	baker := NewBaker("run-001")
+	_, err := baker.BakeWorkflow(workflow, nil)
+	if err != nil {
+		t.Fatalf("BakeWorkflow failed: %v", err)
+	}
+
+	// The max_count variable should be stored as int64, not string
+	val := baker.VarContext.Variables["max_count"]
+	if _, ok := val.(int64); !ok {
+		t.Errorf("expected int64, got %T (%v)", val, val)
+	}
+}
