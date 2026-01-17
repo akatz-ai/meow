@@ -136,34 +136,6 @@ func (c *IPCClient) StepDone(outputs map[string]any) error {
 	return nil
 }
 
-// GetPrompt retrieves the current prompt from the orchestrator.
-func (c *IPCClient) GetPrompt() (string, error) {
-	msg := map[string]any{
-		"type":  "get_prompt",
-		"agent": c.agentID,
-	}
-
-	resp, err := c.sendAndReceive(msg)
-	if err != nil {
-		return "", err
-	}
-
-	var result struct {
-		Type    string `json:"type"`
-		Content string `json:"content"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("parsing response: %w", err)
-	}
-
-	if result.Type == "error" {
-		return "", fmt.Errorf("orchestrator error: %s", result.Message)
-	}
-
-	return result.Content, nil
-}
-
 // Event sends an event to the orchestrator (fire-and-forget).
 func (c *IPCClient) Event(eventType string, data map[string]any) error {
 	msg := map[string]any{

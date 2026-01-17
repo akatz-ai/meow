@@ -3,7 +3,7 @@
 # Tests the workflow pattern of:
 # 1. Agent receives first prompt, completes with meow done
 # 2. Same agent receives second prompt, completes with meow done
-# 3. Stop hook (meow prime) injects prompts automatically
+# 3. Orchestrator injects prompts via tmux send-keys
 #
 # Usage:
 #   meow run .meow/templates/test-multi-step-agent.meow.toml

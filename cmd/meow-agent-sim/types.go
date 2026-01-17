@@ -83,7 +83,6 @@ type EventDef struct {
 // IPCClientInterface defines the interface for orchestrator communication
 type IPCClientInterface interface {
     StepDone(outputs map[string]any) error
-    GetPrompt() (string, error)
     Event(eventType string, data map[string]any) error
     Close() error
 }

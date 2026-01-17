@@ -10,11 +10,9 @@ import (
 
 // mockIPCClient implements IPCClientInterface for testing.
 type mockIPCClient struct {
-	stepDoneCalls  []map[string]any
-	eventCalls     []mockEvent
-	promptResponse string
-	promptError    error
-	stepDoneError  error
+	stepDoneCalls []map[string]any
+	eventCalls    []mockEvent
+	stepDoneError error
 }
 
 type mockEvent struct {
@@ -32,10 +30,6 @@ func newMockIPCClient() *mockIPCClient {
 func (m *mockIPCClient) StepDone(outputs map[string]any) error {
 	m.stepDoneCalls = append(m.stepDoneCalls, outputs)
 	return m.stepDoneError
-}
-
-func (m *mockIPCClient) GetPrompt() (string, error) {
-	return m.promptResponse, m.promptError
 }
 
 func (m *mockIPCClient) Event(eventType string, data map[string]any) error {

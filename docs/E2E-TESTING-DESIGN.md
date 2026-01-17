@@ -59,10 +59,8 @@ MEOW orchestrates agents through a "propulsion" model:
 │                                                                             │
 │  4. Agent reaches prompt → Stop hook fires                                 │
 │     - Runs: meow event agent-stopped                                       │
-│     - Runs: meow prime --format prompt                                     │
-│       │                                                                     │
-│       └──► If prompt returned: present to user (autonomous mode)           │
-│       └──► If empty: wait for human input (interactive mode)               │
+│     - Templates use await-event to detect and respond to agent stops       │
+│     - Orchestrator may inject nudge prompt via tmux send-keys              │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -73,7 +71,7 @@ The orchestrator's correctness depends on:
 
 1. **Timing**: `waitForClaudeReady()` must detect Claude's prompt indicator
 2. **IPC Protocol**: Single-line JSON over Unix sockets must parse correctly
-3. **Hook Behavior**: Stop hook must call `meow prime` and handle empty responses
+3. **Hook Behavior**: Stop hook must emit `agent-stopped` event
 4. **Event Routing**: Events must match waiters with correct filtering
 5. **State Transitions**: Steps must move through pending→running→completing→done
 6. **Crash Recovery**: Interrupted workflows must resume correctly
@@ -81,7 +79,7 @@ The orchestrator's correctness depends on:
 Unit tests mock these interactions but cannot verify the **integration** works. For example:
 - Does `send-keys -l` correctly handle multiline prompts with unicode?
 - Does the stop hook fire at the right time?
-- Does `meow prime` return the correct prompt based on step state?
+- Does the event system correctly route `agent-stopped` events?
 
 ### Token Cost Problem
 
@@ -117,7 +115,7 @@ With a simulator:
 
 | Scenario | Gap | Risk |
 |----------|-----|------|
-| Stop hook → meow prime cycle | No test | Agent might get stuck |
+| Stop hook → agent-stopped event | No test | Agent might get stuck |
 | Event emission → await-event | No test | Branch conditions might fail |
 | Prompt injection reliability | No test | Prompts might not arrive |
 | Parallel agent synchronization | No test | Race conditions |
@@ -130,7 +128,7 @@ With a simulator:
 
 The workflows in `.meow/workflows/` demonstrate patterns that have no E2E tests:
 
-1. **test-stop-hook.meow.toml** - Specifically tests `meow prime` integration
+1. **ralph-wiggum-demo.meow.toml** - Agent persistence via event monitoring
 2. **adapter-events-impl.meow.toml** - 4-agent parallel with template expansion
 3. **dual-agent-task.meow.toml** - Serialized worktrees, parallel work tracks
 4. **test-multi-agent-join.meow.toml** - Fork-join with 3 agents
@@ -189,8 +187,7 @@ The workflows in `.meow/workflows/` demonstrate patterns that have no E2E tests:
 │  │                        ▼                                             │   │
 │  │                   Print question                                     │   │
 │  │                   Show prompt "> "                                  │   │
-│  │                   Fire Stop hook (→ meow prime returns empty        │   │
-│  │                                    in interactive mode)             │   │
+│  │                   Fire Stop hook (→ emits agent-stopped event)      │   │
 │  │                   Wait for user input                               │   │
 │  │                        │                                             │   │
 │  │                        ▼                                             │   │
@@ -225,9 +222,7 @@ The workflows in `.meow/workflows/` demonstrate patterns that have no E2E tests:
 │  │                                                                      │   │
 │  │  Stop Hook (fires when transitioning to IDLE or ASKING):            │   │
 │  │  1. Call: meow event agent-stopped                                  │   │
-│  │  2. Call: meow prime --format prompt                                │   │
-│  │  3. If prompt returned and not in ASKING state:                     │   │
-│  │     → Feed prompt to self (simulates orchestrator re-injection)     │   │
+│  │  2. Orchestrator handles prompt injection via tmux send-keys        │   │
 │  │                                                                      │   │
 │  │  Tool Hooks (during WORKING state, if configured):                  │   │
 │  │  1. Before action: meow event tool-starting --data tool=$TOOL       │   │
@@ -252,7 +247,6 @@ The workflows in `.meow/workflows/` demonstrate patterns that have no E2E tests:
 │  │  IPC ────────────► meow CLI commands                                │   │
 │  │                    - meow done --output k=v                         │   │
 │  │                    - meow event <type> --data k=v                   │   │
-│  │                    - meow prime --format prompt                     │   │
 │  │                                                                      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -297,11 +291,7 @@ The simulator MUST implement these behaviors to be a valid Claude Code substitut
 When transitioning to IDLE (showing prompt):
 
 1. Run: `meow event agent-stopped` (fire and forget)
-2. Run: `meow prime --format prompt`
-3. If prompt returned and state is autonomous:
-   - Feed prompt to own input (self-injection)
-4. If empty or state is asking:
-   - Stay at prompt, wait for external input
+2. Wait for external input (orchestrator injects via tmux send-keys)
 
 ### Environment Variables
 
@@ -329,7 +319,7 @@ timing:
 
 # Hook configuration
 hooks:
-  fire_stop_hook: true      # Whether to call meow event + meow prime on idle
+  fire_stop_hook: true      # Whether to emit agent-stopped event on idle
   fire_tool_events: true    # Whether to emit PreToolUse/PostToolUse events
 
 # Behavior definitions (evaluated in order, first match wins)
@@ -833,10 +823,9 @@ func TestE2E_InteractiveMode(t *testing.T) {
     time.Sleep(500 * time.Millisecond)
     assert.True(t, h.SimulatorAtPrompt("worker"))
 
-    // Stop hook should have fired but returned empty (interactive mode)
-    primeResults := run.MeowPrimeCalls()
-    assert.NotEmpty(t, primeResults)
-    assert.Empty(t, primeResults[len(primeResults)-1].Response)
+    // Stop hook should have fired agent-stopped event
+    events := run.EventsOfType("agent-stopped")
+    assert.GreaterOrEqual(t, len(events), 1)
 
     // Inject user response
     h.InjectToSimulator("worker", "yes, continue")
@@ -1128,7 +1117,7 @@ func (r *WorkflowRun) WaitForDone(timeout time.Duration) error {
 
 ### Phase 2: Hook Emulation
 
-1. Implement stop hook (meow event + meow prime)
+1. Implement stop hook (meow event agent-stopped)
 2. Implement tool event emission
 3. Test with real orchestrator
 
