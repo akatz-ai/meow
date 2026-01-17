@@ -135,6 +135,48 @@ When assigned a bead to implement:
 | CLI | `cmd/meow/cmd/` |
 | Library Workflows | `.meow/workflows/lib/` |
 
+## Code Navigation
+
+### LLM Context Files (.llmd/)
+
+Pre-generated context files for efficient codebase understanding. Use these instead of reading many files individually.
+
+| File | Contents | When to Use |
+|------|----------|-------------|
+| `.llmd/docs.md` | CLAUDE.md + ARCHITECTURE.md + PATTERNS.md | Understanding design philosophy |
+| `.llmd/types.md` | Step, Workflow, Agent, Adapter types | Understanding data structures |
+| `.llmd/orchestrator.md` | Main engine + all 7 executors | Understanding execution flow |
+| `.llmd/workflow.md` | Parser, loader, validation, vars | Understanding template processing |
+| `.llmd/ipc.md` | IPC messages, server, client | Understanding agent communication |
+| `.llmd/agent.md` | Agent store, tmux wrapper | Understanding agent lifecycle |
+| `.llmd/adapter.md` | Adapter registry, loader | Understanding agent adapters |
+| `.llmd/meow-lib.md` | Library templates (persistence, events, etc.) | Understanding reusable patterns |
+| `.llmd/meow-workflows.md` | Main workflow templates | Understanding workflow examples |
+| `.llmd/cli.md` | CLI commands (run, done, event, etc.) | Understanding CLI implementation |
+
+**Usage:** Reference with `@.llmd/orchestrator.md` or read directly.
+
+**Regeneration:** Runs automatically on commit (post-commit hook). Manual: `.llmd/generate.sh`
+
+### LSP Tool
+
+Use the LSP tool for targeted code navigation (requires `gopls`, configured in `.claude/plugin.json`).
+
+| Operation | Use Case | Example |
+|-----------|----------|---------|
+| `goToDefinition` | Find where a symbol is defined | Jump to `Step` struct definition |
+| `findReferences` | Find all usages of a symbol | Where is `handleBranch()` called? |
+| `hover` | Get type info and docs | What's the signature of `Save()`? |
+| `documentSymbol` | List all symbols in a file | Outline of `orchestrator.go` |
+| `incomingCalls` | What calls this function | Who calls `tick()`? |
+| `outgoingCalls` | What does this function call | What does `handleAgent()` call? |
+| `goToImplementation` | Find interface implementations | What implements `RunStore`? |
+
+**When to use which:**
+- **Glob/Grep**: "Find files matching pattern" or "search for text"
+- **LSP**: "Jump to definition" or "find all callers"
+- **.llmd/**: "Understand how this subsystem works"
+
 ## Commands Reference
 
 ### Beads CLI (bd)
