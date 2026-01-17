@@ -23,7 +23,7 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/meow-stack/meow-machine/cmd/meow/cmd.Version={{.Version}}
+      - -X github.com/akatz-ai/meow/cmd/meow/cmd.Version={{.Version}}
 
 archives:
   - id: default

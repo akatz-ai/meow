@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/meow-stack/meow-machine/cmd/meow/cmd"
+	"github.com/akatz-ai/meow/cmd/meow/cmd"
 )
 
 func main() {

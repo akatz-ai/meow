@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +32,7 @@ Just tmux, TOML, and a binary.
 Built on 7 primitive executors (shell, spawn, kill, expand, branch, foreach, agent),
 MEOW enables complex multi-agent workflows with crash recovery and context management.
 
-For more information, see: https://github.com/meow-stack/meow-machine`,
+For more information, see: https://github.com/akatz-ai/meow`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {

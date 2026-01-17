@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/agent"
-	"github.com/meow-stack/meow-machine/internal/cli"
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/types"
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/agent"
+	"github.com/akatz-ai/meow/internal/cli"
+	"github.com/akatz-ai/meow/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/types"
+	"github.com/akatz-ai/meow/internal/workflow"
 	"github.com/spf13/cobra"
 )
 

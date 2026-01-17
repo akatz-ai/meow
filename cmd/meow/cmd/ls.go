@@ -10,7 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/workflow"
 	"github.com/spf13/cobra"
 )
 

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/agent"
+	"github.com/akatz-ai/meow/internal/agent"
 	"github.com/spf13/cobra"
 )
 

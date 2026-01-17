@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/meow-stack/meow-machine/internal/adapter"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/adapter"
+	"github.com/akatz-ai/meow/internal/types"
 	"github.com/spf13/cobra"
 )
 

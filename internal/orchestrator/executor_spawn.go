@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // AgentStarter is the interface for starting agents in tmux sessions.

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // mockAgentStarter is a mock implementation of AgentStarter for testing.

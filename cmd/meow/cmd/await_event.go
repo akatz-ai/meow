@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/ipc"
+	"github.com/akatz-ai/meow/internal/ipc"
 	"github.com/spf13/cobra"
 )
 

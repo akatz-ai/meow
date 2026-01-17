@@ -2,7 +2,7 @@
 # Build automation for meow-machine
 
 BINARY := meow
-MODULE := github.com/meow-stack/meow-machine
+MODULE := github.com/akatz-ai/meow
 MAIN := ./cmd/meow
 
 # Version from git

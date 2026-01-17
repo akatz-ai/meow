@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/meow-stack/meow-machine/internal/config"
+	"github.com/akatz-ai/meow/internal/config"
 )
 
 // NewFromConfig creates a new slog.Logger based on configuration.

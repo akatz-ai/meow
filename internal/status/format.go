@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/types"
+	"github.com/akatz-ai/meow/internal/workflow"
 )
 
 // FormatOptions controls output formatting.

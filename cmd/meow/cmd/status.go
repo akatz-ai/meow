@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/status"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/status"
+	"github.com/akatz-ai/meow/internal/types"
 	"github.com/spf13/cobra"
 )
 

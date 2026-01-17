@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // TestExpandInlineSteps_ShellWithVariables tests that inline shell steps get variable substitution

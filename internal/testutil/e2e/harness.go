@@ -12,8 +12,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/meow-stack/meow-machine/internal/config"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/config"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // Harness provides test isolation for E2E tests.

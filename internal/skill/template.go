@@ -140,7 +140,7 @@ func GenerateSetupSection(workflows []string) string {
 	sb.WriteString("```\n\n")
 	sb.WriteString("Or with Go:\n\n")
 	sb.WriteString("```bash\n")
-	sb.WriteString("go install github.com/meow-stack/meow-machine/cmd/meow@latest\n")
+	sb.WriteString("go install github.com/akatz-ai/meow/cmd/meow@latest\n")
 	sb.WriteString("```\n\n")
 
 	// Workflow Setup section (only if workflows provided)

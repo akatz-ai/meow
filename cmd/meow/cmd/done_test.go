@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/ipc"
+	"github.com/akatz-ai/meow/internal/ipc"
 )
 
 // TestDoneUsesOrchSockEnvVar verifies that meow done uses the socket path

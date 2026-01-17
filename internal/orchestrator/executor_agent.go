@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // AgentMode determines how the stop hook behaves for agent steps.

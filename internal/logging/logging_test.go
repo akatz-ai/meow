@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/meow-stack/meow-machine/internal/config"
+	"github.com/akatz-ai/meow/internal/config"
 )
 
 func TestNewFromConfig_DefaultsToStderr(t *testing.T) {

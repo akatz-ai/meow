@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // BranchOutcome indicates which branch was taken.

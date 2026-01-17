@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // fileTemplateLoader implements TemplateLoader using FileTemplateExpander.

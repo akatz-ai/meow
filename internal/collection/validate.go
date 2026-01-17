@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/skill"
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/skill"
+	"github.com/akatz-ai/meow/internal/workflow"
 )
 
 var (

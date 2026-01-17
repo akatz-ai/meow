@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/ipc"
+	"github.com/akatz-ai/meow/internal/ipc"
 )
 
 func TestEventRouter_RegisterAndRoute(t *testing.T) {

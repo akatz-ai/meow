@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/testutil/e2e"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/testutil/e2e"
+	"github.com/akatz-ai/meow/internal/types"
 	"gopkg.in/yaml.v3"
 )
 

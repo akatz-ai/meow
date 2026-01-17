@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/adapter"
+	"github.com/akatz-ai/meow/internal/adapter"
 	"github.com/spf13/cobra"
 )
 

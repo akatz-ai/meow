@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // TestMinimalViableSlice validates the end-to-end flow:

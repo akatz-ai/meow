@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // Baker transforms template workflows into executable steps.

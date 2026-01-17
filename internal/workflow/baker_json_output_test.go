@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/workflow"
 )
 
 func TestBaker_PreservesOutputType(t *testing.T) {

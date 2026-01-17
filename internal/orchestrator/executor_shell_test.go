@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 func TestExecuteShell_BasicCommand(t *testing.T) {

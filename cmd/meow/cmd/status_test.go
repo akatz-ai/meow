@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 func TestStatusExitError(t *testing.T) {

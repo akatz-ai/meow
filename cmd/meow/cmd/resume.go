@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/meow-stack/meow-machine/internal/config"
-	"github.com/meow-stack/meow-machine/internal/ipc"
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/config"
+	"github.com/akatz-ai/meow/internal/ipc"
+	"github.com/akatz-ai/meow/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/types"
 	"github.com/spf13/cobra"
 )
 

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/orchestrator"
 	"github.com/spf13/cobra"
 )
 

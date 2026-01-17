@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // mockTemplateLoader is a mock implementation of TemplateLoader for testing.

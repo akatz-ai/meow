@@ -8,7 +8,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/meow-stack/meow-machine/internal/skill"
+	"github.com/akatz-ai/meow/internal/skill"
 	"github.com/spf13/cobra"
 )
 

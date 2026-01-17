@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/meow-stack/meow-machine/internal/types"
-	"github.com/meow-stack/meow-machine/internal/workflow"
+	"github.com/akatz-ai/meow/internal/types"
+	"github.com/akatz-ai/meow/internal/workflow"
 )
 
 func isExplicitWorkflowPath(ref string) bool {

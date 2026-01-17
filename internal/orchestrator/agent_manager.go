@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/adapter"
-	"github.com/meow-stack/meow-machine/internal/agent"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/adapter"
+	"github.com/akatz-ai/meow/internal/agent"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // TmuxAgentManager implements AgentManager using tmux sessions.

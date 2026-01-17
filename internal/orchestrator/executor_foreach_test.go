@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // foreachMockLoader implements TemplateLoader for foreach testing.

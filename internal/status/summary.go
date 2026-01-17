@@ -3,7 +3,7 @@ package status
 import (
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // WorkflowSummary contains computed information about a workflow for display.

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meow-stack/meow-machine/internal/ipc"
+	"github.com/akatz-ai/meow/internal/ipc"
 )
 
 // EventRouter routes events to registered waiters.

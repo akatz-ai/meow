@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/BurntSushi/toml"
-	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/akatz-ai/meow/internal/types"
 )
 
 // Registry manages adapter loading and caching.
