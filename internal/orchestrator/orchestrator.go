@@ -363,69 +363,14 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error
 		dispatchedSteps[step.ID] = step
 	}
 
-	// If we dispatched any steps, we need to save. But first re-read the workflow
-	// to avoid overwriting concurrent IPC handler updates (race condition fix).
+	// Save if we dispatched any steps.
+	// Note: All state mutations (including IPC handler) go through wfMu mutex,
+	// so no merge logic is needed - we hold the lock for the entire operation.
 	if len(dispatchedSteps) > 0 {
-		freshWf, err := o.store.Get(ctx, wf.ID)
-		if err != nil {
-			return fmt.Errorf("re-reading workflow before save: %w", err)
-		}
-
-		// Merge step states between our copy and fresh copy.
-		// Strategy: use the more "advanced" state for each step.
-		// - Our copy has synchronous step completions (shell/spawn/kill/expand)
-		// - Fresh copy may have IPC handler completions (agent steps)
-		for stepID, ourStep := range wf.Steps {
-			freshStep, ok := freshWf.GetStep(stepID)
-			if !ok {
-				// New step (from expand) - add to fresh
-				freshWf.Steps[stepID] = ourStep
-				continue
-			}
-
-			// Use the more advanced state
-			ourRank := stepStatusRank(ourStep.Status)
-			freshRank := stepStatusRank(freshStep.Status)
-
-			if ourRank > freshRank {
-				// Our step is more advanced - copy our state to fresh
-				freshStep.Status = ourStep.Status
-				freshStep.StartedAt = ourStep.StartedAt
-				freshStep.DoneAt = ourStep.DoneAt
-				freshStep.Outputs = ourStep.Outputs
-				freshStep.Error = ourStep.Error
-				freshStep.ExpandedInto = ourStep.ExpandedInto
-			}
-
-			// Always preserve InterruptedAt if set (for timeout tracking)
-			if ourStep.InterruptedAt != nil && freshStep.InterruptedAt == nil {
-				freshStep.InterruptedAt = ourStep.InterruptedAt
-			}
-			// If fresh is more advanced (IPC handler completed it), keep fresh state
-		}
-
-		return o.store.Save(ctx, freshWf)
+		return o.store.Save(ctx, wf)
 	}
 
 	return nil
-}
-
-// stepStatusRank returns a numeric rank for step status (higher = more advanced).
-func stepStatusRank(status types.StepStatus) int {
-	switch status {
-	case types.StepStatusPending:
-		return 0
-	case types.StepStatusRunning:
-		return 1
-	case types.StepStatusCompleting:
-		return 2
-	case types.StepStatusDone:
-		return 3
-	case types.StepStatusFailed:
-		return 3 // Same as done - both terminal
-	default:
-		return 0
-	}
 }
 
 // dispatch routes a step to the appropriate executor handler.
@@ -654,19 +599,6 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 	}
 }
 
-// handleIPC processes an IPC message from an agent.
-// Note: This method is currently unused since the IPC server routes messages
-// directly through IPCHandler. It's kept for potential future use with channel-based IPC.
-func (o *Orchestrator) handleIPC(ctx context.Context, msg ipc.Message) error {
-	switch m := msg.(type) {
-	case *ipc.StepDoneMessage:
-		return o.HandleStepDone(ctx, m)
-	default:
-		o.logger.Warn("unknown IPC message type", "type", fmt.Sprintf("%T", msg))
-		return nil
-	}
-}
-
 // HandleStepDone processes a meow done message from an agent.
 // Thread-safe: acquires wfMu before any state changes.
 // Called by IPCHandler - this is the ONLY code path for step completion.
@@ -738,47 +670,6 @@ func (o *Orchestrator) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 
 	o.logger.Info("step completed", "step", step.ID, "workflow", wf.ID)
 	return o.store.Save(ctx, wf)
-}
-
-// validateOutputs checks that outputs match the expected schema.
-func (o *Orchestrator) validateOutputs(step *types.Step, outputs map[string]any) error {
-	if step.Agent == nil {
-		return nil
-	}
-
-	for name, def := range step.Agent.Outputs {
-		val, ok := outputs[name]
-		if !ok {
-			if def.Required {
-				return fmt.Errorf("missing required output: %s", name)
-			}
-			continue
-		}
-
-		// Type validation
-		switch def.Type {
-		case "string":
-			if _, ok := val.(string); !ok {
-				return fmt.Errorf("output %s: expected string, got %T", name, val)
-			}
-		case "number":
-			switch val.(type) {
-			case int, int64, float64:
-				// OK
-			default:
-				return fmt.Errorf("output %s: expected number, got %T", name, val)
-			}
-		case "boolean":
-			if _, ok := val.(bool); !ok {
-				return fmt.Errorf("output %s: expected boolean, got %T", name, val)
-			}
-		case "file_path":
-			// File path validation would check against agent's workdir
-			// Stub for now - executor track will implement
-		}
-	}
-
-	return nil
 }
 
 // TimeoutGracePeriod is the duration to wait after sending C-c before marking a step as failed.
