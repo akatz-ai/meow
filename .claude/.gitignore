@@ -1,2 +1,6 @@
 # MEOW-generated hooks - do not commit
 settings.json
+
+# Claude Code runtime configs (machine-specific)
+lsp.json
+plugin.json

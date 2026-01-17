@@ -3,4 +3,5 @@
 last-touched
 beads.left.*
 beads.base.*
-*.bak*
+*.bak
+daemon.*

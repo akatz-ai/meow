@@ -1,6 +1,9 @@
 # bv (beads viewer) local config and caches
 .bv/
 
+# General cache directory
+.cache/
+
 # Build artifacts
 a.out
 
