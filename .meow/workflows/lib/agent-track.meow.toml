@@ -2,13 +2,15 @@
 # MEOW Library: Agent Track Lifecycle
 # ============================================================================
 #
-# Complete agent lifecycle: spawn → work → review → verify-clean → kill
+# Agent lifecycle framework: spawn → protocol → kill → done
 # With Ralph Wiggum persistence monitor and context monitor running in parallel.
 #
-# This is the battle-tested pattern extracted from dual/quad agent workflows.
-# Each agent works in isolation, self-reviews, ensures clean git state, then exits.
-# The RW monitor ensures agents don't get stuck by re-nudging on unexpected stops.
-# The context monitor auto-compacts when context usage is high.
+# The protocol defines the actual work. This template handles lifecycle only:
+#   - Hook setup (for agent events)
+#   - Agent spawn
+#   - Parallel monitors (RW persistence, context monitor)
+#   - Protocol expansion (delegates work to protocol template)
+#   - Graceful shutdown
 #
 # ADAPTER SUPPORT:
 #   Works with any adapter (claude, claude-opus, claude-sonnet, opencode, codex).
@@ -19,13 +21,14 @@
 #   agent_name   (required) - Unique agent identifier
 #   track_name   (required) - Track name for logging/identification
 #   workdir      (required) - Working directory (typically a worktree path)
-#   task_prompt  (required) - The main task prompt for the agent
+#   task         (required) - Task object passed to protocol (contains task_system, task_ids, etc.)
+#   protocol     (default: "tdd") - Protocol template to expand (tdd, code-review, explorer, security-audit)
 #   adapter      (default: "claude") - Agent adapter (claude, claude-opus, claude-sonnet, opencode, codex)
 #   spawn_args   (default: "") - Extra CLI args passed to agent
 #   enable_rw    (default: "true") - Enable Ralph Wiggum persistence monitor (claude only)
 #   max_nudges   (default: "10") - RW safety limit before force-completing
 #   enable_context_monitor (default: "true") - Enable context usage auto-compact (claude only)
-#   context_threshold (default: "70") - Context % to trigger /compact
+#   context_threshold (default: "80") - Context % to trigger /compact
 #
 # Usage:
 #   [[main.steps]]
@@ -36,7 +39,8 @@
 #     agent_name = "agent-1",
 #     track_name = "feature-x",
 #     workdir = "{{setup-worktree.create.outputs.path}}",
-#     task_prompt = "Implement feature X...",
+#     task = "{{task}}",
+#     protocol = "tdd",
 #     adapter = "claude-opus"
 #   }
 #
@@ -44,19 +48,20 @@
 
 [main]
 name = "agent-track"
-description = "Complete agent lifecycle with work, review, cleanup, and parallel monitors"
+description = "Agent lifecycle framework - protocol defines the work"
 
 [main.variables]
 agent_name = { required = true, description = "Unique agent identifier" }
 track_name = { required = true, description = "Track name for identification" }
 workdir = { required = true, description = "Working directory path" }
-task_prompt = { required = true, description = "Main task prompt" }
+task = { required = true, description = "Task object passed to protocol" }
+protocol = { default = "tdd", description = "Protocol to expand (tdd, code-review, explorer, security-audit)" }
 adapter = { default = "claude", description = "Agent adapter (claude, claude-opus, claude-sonnet, opencode, codex)" }
 spawn_args = { default = "", description = "Extra CLI args passed to agent" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude adapters only)" }
 max_nudges = { default = "10", description = "Max nudges before force-completing (Ralph Wiggum safety limit)" }
 enable_context_monitor = { default = "true", description = "Enable context usage monitor with auto-compact (claude adapters only)" }
-context_threshold = { default = "70", description = "Context % to trigger auto-compact (0-100)" }
+context_threshold = { default = "80", description = "Context % to trigger auto-compact (0-100)" }
 
 # ============================================================================
 # Step 1: Setup Hooks (for agent-stopped events, claude adapters only)
@@ -92,8 +97,8 @@ needs = ["setup-hooks"]
 # ============================================================================
 #
 # Monitors for unexpected agent stops and re-injects nudge prompts.
-# Runs in parallel with work/review/verify-clean steps.
-# Self-terminates when verify-clean completes.
+# Runs in parallel with protocol steps.
+# Self-terminates when the protocol step completes.
 # Only works with claude adapters (requires Stop hook events).
 # Disable with enable_rw = "false"
 
@@ -105,7 +110,7 @@ needs = ["spawn"]
 
 [main.steps.on_true]
 template = "lib/agent-persistence#monitor"
-variables = { agent = "{{agent_name}}", check_step = "verify-clean", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nRemember:\n- Complete your current work\n- Run tests to verify\n- Commit your changes\n- When fully done, run: `meow done`" }
+variables = { agent = "{{agent_name}}", check_step = "protocol", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your assigned task for {{track_name}}.\n\nWhen fully done, run: `meow done`" }
 
 [main.steps.on_false]
 inline = [{ id = "skip", executor = "shell", command = "echo 'RW persistence monitor skipped (enable_rw={{enable_rw}}, adapter={{adapter}})'" }]
@@ -115,7 +120,7 @@ inline = [{ id = "skip", executor = "shell", command = "echo 'RW persistence mon
 # ============================================================================
 #
 # Monitors agent context usage and auto-compacts when above threshold.
-# Runs in parallel with work/review/verify-clean steps.
+# Runs in parallel with protocol steps.
 # Self-terminates when agent tmux session is killed.
 # Only works with claude adapters (screen-scrapes claude-specific format).
 # Disable with enable_context_monitor = "false"
@@ -136,101 +141,47 @@ inline = [
 ]
 
 # ============================================================================
-# Step 5: Main Work
-# ============================================================================
-
-[[main.steps]]
-id = "work"
-executor = "agent"
-agent = "{{agent_name}}"
-needs = ["spawn"]
-prompt = "{{task_prompt}}"
-
-# ============================================================================
-# Step 6: Self-Review
-# ============================================================================
-
-[[main.steps]]
-id = "review"
-executor = "agent"
-agent = "{{agent_name}}"
-needs = ["work"]
-prompt = """
-# Self-Review: {{track_name}} Track
-
-Take a step back and carefully reread your most recent code changes with fresh eyes.
-
-## Review Checklist
-1. **Read each file you modified** - look at the actual code, not your memory of it
-2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
-3. **Check for logical errors** - does the code actually do what it claims?
-4. **Verify test coverage** - do tests actually test the important behavior?
-5. **Check imports** - any unused imports? Missing imports that will cause build failures?
-6. **Run tests** - `go test -short ./...`
-
-## Actions
-- Fix anything you spot without waiting for direction
-- If you make fixes, commit them with message: "fix: self-review corrections for {{track_name}}"
-
-## When Done
-```
-meow done
-```
-"""
-
-# ============================================================================
-# Step 7: Verify Clean Git State
-# ============================================================================
-
-[[main.steps]]
-id = "verify-clean"
-executor = "shell"
-needs = ["review"]
-command = """
-cd "{{workdir}}"
-
-# Check for uncommitted changes (excluding workflow metadata and beads daemon files)
-# Excluded:
-#   - .meow-branch: workflow metadata tracking current branch
-#   - .beads/daemon.*: beads daemon lock/log files that change during operation
-#   - .beads/issues.jsonl: beads database that syncs separately
-CHANGES=$(git status --porcelain | grep -v -E '^\\?\\? \\.meow-branch$|^\\?\\? \\.beads/daemon\\.|^\\?\\? \\.beads/issues\\.jsonl$|^ M \\.beads/daemon\\.|^ M \\.beads/issues\\.jsonl$' || true)
-if [ -n "$CHANGES" ]; then
-    echo "ERROR: Uncommitted changes in {{track_name}} track!" >&2
-    echo "$CHANGES" >&2
-    exit 1
-fi
-
-echo "Track {{track_name}} is clean - all changes committed"
-"""
-
-# ============================================================================
-# Step 8: Kill Agent
+# Step 5: Protocol (the main work - delegates to protocol template)
 # ============================================================================
 #
-# Kill depends on review (not verify-clean) so agent cleanup always happens.
-# This prevents agents from being left alive if verify-clean fails.
+# The protocol template defines the actual work steps.
+# This is the core change: instead of hardcoding work/review steps,
+# we expand a protocol template that defines the workflow personality.
+#
+# Available protocols:
+#   - tdd: Test-Driven Development (default)
+#   - code-review: Code review workflow
+#   - explorer: Codebase exploration
+#   - security-audit: Security audit workflow
+
+[[main.steps]]
+id = "protocol"
+executor = "expand"
+template = "lib/protocols/{{protocol}}"
+needs = ["spawn"]
+
+[main.steps.variables]
+agent = "{{agent_name}}"
+track_name = "{{track_name}}"
+task = "{{task}}"
+
+# ============================================================================
+# Step 6: Kill Agent
+# ============================================================================
 
 [[main.steps]]
 id = "kill"
 executor = "kill"
 agent = "{{agent_name}}"
-needs = ["review"]
+needs = ["protocol"]
 graceful = true
 
 # ============================================================================
-# Step 9: Done Marker (for downstream dependencies)
+# Step 7: Done Marker (for downstream dependencies)
 # ============================================================================
-#
-# Done depends on BOTH kill and verify-clean.
-# - kill ensures agent is cleaned up
-# - verify-clean ensures no uncommitted changes
-# If verify-clean fails, done fails, but agent is still killed.
 
 [[main.steps]]
 id = "done"
 executor = "shell"
 command = "echo '{{track_name}} track complete'"
-needs = ["kill", "verify-clean"]
-
-
+needs = ["kill"]

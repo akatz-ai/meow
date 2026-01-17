@@ -1,0 +1,125 @@
+# TDD Protocol - Test-Driven Development workflow
+#
+# This is the default protocol. Implements: failing tests → code → refactor → review
+#
+# Variables:
+#   agent (required) - Agent ID to use for steps
+#   track_name (required) - Track name for logging
+#   task (required) - Task object with task_system, task_ids, etc.
+
+[main]
+name = "tdd-protocol"
+description = "Test-Driven Development protocol"
+
+[main.variables]
+agent = { required = true, description = "Agent ID" }
+track_name = { required = true, description = "Track name for logging" }
+task = { required = true, description = "Task object with task_system, task_ids" }
+
+# Step 1: Understand requirements and write failing tests
+[[main.steps]]
+id = "write-tests"
+executor = "agent"
+agent = "{{agent}}"
+prompt = """
+# Your Assignment
+
+You've been assigned {{task.task_system}}: {{task.task_ids}}
+
+## Phase 1: Understand & Write Failing Tests
+
+1. For each ID above, query the task system to see full requirements
+   - For beads: `bd show <bead-id>`
+   - For other systems: see CLAUDE.md for instructions
+
+2. Write failing tests that verify the expected behavior:
+   - Understand what success looks like
+   - Write tests that will pass when feature is complete
+   - Run tests - confirm they FAIL for the right reason
+
+3. Commit your tests: `git commit -m "test: add failing tests for {{track_name}}"`
+
+## Important
+- ONLY work on the tasks assigned above
+- Do NOT work on unrelated tasks you might discover
+- If you find related work needed, note it but do NOT implement it
+
+When tests are written and failing: `meow done`
+"""
+
+# Step 2: Implement to make tests pass
+[[main.steps]]
+id = "implement"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["write-tests"]
+prompt = """
+# Phase 2: Implement to Pass Tests
+
+Your failing tests define what needs to be built. Now implement:
+
+1. Write the minimum code to make tests pass
+2. Run tests frequently - stop when they pass
+3. Do NOT over-engineer or add extras
+
+4. Commit your implementation:
+   `git commit -m "feat: implement {{track_name}}"`
+
+5. Close/complete tasks as you finish them:
+   - For beads: `bd close <bead-id>`
+   - For other systems: see CLAUDE.md
+
+When tests pass: `meow done`
+"""
+
+# Step 3: Refactor (optional)
+[[main.steps]]
+id = "refactor"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["implement"]
+prompt = """
+# Phase 3: Refactor (if needed)
+
+With tests passing, you have a safety net. Improve the code:
+
+1. Remove duplication
+2. Improve naming
+3. Simplify complex logic
+4. Extract reusable functions
+
+Rules:
+- Keep tests passing after each change
+- Make small, incremental improvements
+- If nothing needs refactoring, that's fine
+
+If you made changes: `git commit -m "refactor: clean up {{track_name}}"`
+
+When done (or if no refactoring needed): `meow done`
+"""
+
+# Step 4: Self-review
+[[main.steps]]
+id = "review"
+executor = "agent"
+agent = "{{agent}}"
+needs = ["refactor"]
+prompt = """
+# Phase 4: Self-Review
+
+Take a step back and carefully reread your most recent code changes with fresh eyes.
+
+## Review Checklist
+1. **Read each file you modified** - look at the actual code, not your memory of it
+2. **Check for obvious bugs** - nil pointer dereferences, off-by-one errors, typos
+3. **Check for logical errors** - does the code actually do what it claims?
+4. **Verify test coverage** - do tests actually test the important behavior?
+5. **Check imports** - any unused imports? Missing imports that will cause build failures?
+6. **Run tests** - use project's test command (see CLAUDE.md)
+
+## Actions
+- Fix anything you spot without waiting for direction
+- If you make fixes, commit them: `git commit -m "fix: self-review corrections for {{track_name}}"`
+
+When review is complete: `meow done`
+"""

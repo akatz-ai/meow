@@ -85,7 +85,6 @@ for i in $(seq 0 $((TASK_COUNT - 1))); do
 
   echo "  Creating worktree: $WORKTREE ($BRANCH) [$TASK_SYSTEM: $TASK_IDS]" >&2
   git worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
-  echo "$BRANCH" > "$WORKTREE/.meow-branch"
 
   # Add to enriched array (includes workdir and branch)
   ENRICHED=$(printf '%s' "$ENRICHED" | jq -c \
@@ -116,7 +115,6 @@ fi
 
 echo "  Creating integration worktree: $INT_WORKTREE ($INT_BRANCH)" >&2
 git worktree add -b "$INT_BRANCH" "$INT_WORKTREE" HEAD >&2
-echo "$INT_BRANCH" > "$INT_WORKTREE/.meow-branch"
 
 echo "Setup complete: $TASK_COUNT task worktrees + integration" >&2
 
@@ -218,7 +216,7 @@ needs = ["spawn"]
 
 [integration.steps.on_true]
 template = "lib/agent-persistence#monitor"
-variables = { agent = "agent-integration", check_step = "review", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your integration task.\n\nRemember:\n- Merge all track branches\n- Resolve any conflicts\n- Run tests to verify\n- Push to target branch\n- When fully done, run: `meow done`" }
+variables = { agent = "agent-integration", check_step = "review", max_loops = "{{max_nudges}}", nudge_prompt = "You stopped unexpectedly. Continue with your integration task.\n\nRemember:\n- Merge all track branches\n- Resolve any conflicts\n- Run tests to verify\n- Update local target branch (do NOT push to remote)\n- When fully done, run: `meow done`" }
 
 [integration.steps.on_false]
 inline = [{ id = "skip", executor = "shell", command = "echo 'RW persistence monitor skipped (enable_rw={{enable_rw}}, merge_adapter={{merge_adapter}})'" }]
@@ -229,21 +227,31 @@ executor = "agent"
 agent = "agent-integration"
 needs = ["spawn"]
 prompt = """
-# Integration Agent: Merge All Sprint Tracks into {{target_branch}}
+# Integration Agent: Merge All Sprint Tracks
 
-Your job is to merge all feature branches into {{target_branch}}.
+You are inside the integration worktree (`.meow/worktrees/sprint-integration-track`).
+Resolve the sprint metadata paths relative to the parent worktrees directory.
+
+```bash
+WORKTREES_DIR="$(dirname "$PWD")"
+TARGET_BRANCH=$(cat "$WORKTREES_DIR/.target-branch")
+TASKS_FILE="$WORKTREES_DIR/.enriched-tasks.json"
+echo "Worktrees dir: $WORKTREES_DIR"
+echo "Merging to: $TARGET_BRANCH"
+```
+
+Your job is to merge all feature branches into the target branch stored in `$WORKTREES_DIR/.target-branch`.
 When parallel agents work on the same files, conflicts are expected. Resolve them.
 
-## Step 1: Get Branch Names from Enriched Tasks
+## Step 1: Get Target Branch and Feature Branch Names
 
-The authoritative source for branch names is `.enriched-tasks.json`:
+The authoritative source for branch names is `$TASKS_FILE`:
 ```bash
 # Read branch info from the enriched tasks file (created fresh each sprint)
-cat .meow/worktrees/.enriched-tasks.json | jq -r '.[] | "\\(.name): \\(.branch)"'
+cat "$TASKS_FILE" | jq -r '.[] | "\\(.name): \\(.branch)"'
 ```
 
 This file contains the exact branch names created for this sprint run.
-Do NOT rely on `.meow-branch` files in worktree directories - they may be stale.
 
 ## Step 2: Merge Each Branch
 
@@ -256,7 +264,7 @@ git merge "$BRANCH" --no-edit -m "Merge: agent1-track"
 
 Or loop through all:
 ```bash
-for row in $(jq -c '.[]' .meow/worktrees/.enriched-tasks.json); do
+for row in $(jq -c '.[]' "$TASKS_FILE"); do
   NAME=$(echo "$row" | jq -r '.name')
   BRANCH=$(echo "$row" | jq -r '.branch')
   echo "Merging $NAME ($BRANCH)..."
@@ -270,36 +278,40 @@ If the merge succeeds, continue to the next branch.
 
 When you see "CONFLICT" in the output:
 1. Run `git status` to see conflicted files
-2. For `.meow-branch` conflicts: just pick either version
-   ```bash
-   git checkout --theirs .meow-branch
-   git add .meow-branch
-   ```
-3. For test file conflicts (e.g., `*_test.go`):
+2. For test file conflicts:
    - Both branches typically added content at the end
    - Keep BOTH sets of content (combine them)
    - Remove conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
-4. For other conflicts:
+3. For other conflicts:
    - Read both versions carefully
    - Combine logically (don't lose either side's changes)
-5. Stage resolved files: `git add <file>`
-6. Complete the merge: `git commit -m "Merge: <track-name> (conflicts resolved)"`
-7. Continue with the next branch
+4. Stage resolved files: `git add <file>`
+5. Complete the merge: `git commit -m "Merge: <track-name> (conflicts resolved)"`
+6. Continue with the next branch
 
 ## Step 3: Verify Build and Tests
 
-1. Run `go build ./...` to verify build passes
-2. Run `go test -short ./...` to verify tests pass
+Check CLAUDE.md or AGENTS.md for project-specific build/test commands, then:
+1. Run the project's build command to verify compilation passes
+2. Run the project's test command to verify tests pass
 3. If tests fail, fix the issues and commit
 
-## Step 4: Push to {{target_branch}}
+## Step 4: Update Local Target Branch
 
-After all merges pass tests, push directly to {{target_branch}}:
+After all merges pass tests, update the local target branch:
 ```bash
-git push origin HEAD:{{target_branch}}
+WORKTREES_DIR="$(dirname "$PWD")"
+TARGET_BRANCH=$(cat "$WORKTREES_DIR/.target-branch")
+
+# Update local target branch to point to current HEAD (with all merges)
+# This works even if target branch is checked out elsewhere
+git branch -f "$TARGET_BRANCH" HEAD
 ```
 
-When pushed successfully: `meow done`
+**IMPORTANT: Do NOT push to remote.** This workflow uses ephemeral local branches.
+The target branch is updated locally only. Pushing happens separately if needed.
+
+When local target branch is updated: `meow done`
 """
 
 [[integration.steps]]
@@ -310,13 +322,27 @@ needs = ["work"]
 prompt = """
 # Integration Review
 
-All tracks should be merged and pushed to {{target_branch}}. Final verification:
+All tracks should be merged to the local target branch. Final verification:
+
+```bash
+WORKTREES_DIR="$(dirname "$PWD")"
+TARGET_BRANCH=$(cat "$WORKTREES_DIR/.target-branch")
+```
 
 1. `git log --oneline -20` - verify all merges present
 2. `git status` - verify clean state
-3. Verify remote is updated: `git log origin/{{target_branch}} --oneline -5`
+3. Verify local target branch was updated:
+   ```bash
+   INTEGRATION_HEAD=$(git rev-parse HEAD)
+   TARGET_HEAD=$(git rev-parse "$TARGET_BRANCH")
+   echo "Integration HEAD: $INTEGRATION_HEAD"
+   echo "Target $TARGET_BRANCH: $TARGET_HEAD"
+   [ "$INTEGRATION_HEAD" = "$TARGET_HEAD" ] && echo "✓ Target branch updated" || echo "✗ Target branch NOT updated - run: git branch -f $TARGET_BRANCH HEAD"
+   ```
 
-If anything looks wrong, fix it and push again.
+**IMPORTANT: Do NOT push to remote or fetch from origin.** This is a local-only workflow.
+
+If the target branch wasn't updated, run: `git branch -f "$TARGET_BRANCH" HEAD`
 
 When verified: `meow done`
 """
@@ -340,11 +366,12 @@ needs = ["kill"]
 # ============================================================================
 #
 # Wraps lib/agent-track for sprint foreach iterations.
-# Constructs task_prompt from task system (beads, jira, etc.)
+# Passes task object and protocol to agent-track for protocol-based execution.
 #
 # Variables:
-#   task (required) - Task object with {name, task_system, task_ids, workdir, branch}
+#   task (required) - Task object with {name, task_system, task_ids, workdir, branch, optional protocol}
 #   i (required) - Task index (for agent naming)
+#   protocol (default: "tdd") - Default protocol (can be overridden by task.protocol)
 #   + all the standard agent track options
 #
 # Usage:
@@ -352,61 +379,54 @@ needs = ["kill"]
 #   id = "agent"
 #   executor = "expand"
 #   template = "lib/sprint-common#agent-track-wrapper"
-#   variables = { task = "{{task}}", i = "{{i}}", adapter = "claude-opus", ... }
+#   variables = { task = "{{task}}", i = "{{i}}", protocol = "tdd", adapter = "claude-opus", ... }
 
 [agent-track-wrapper]
 name = "agent-track-wrapper"
-description = "Wrapper for agent track - constructs prompt from task system"
+description = "Wrapper for agent track - passes task object and protocol to agent-track"
 
 [agent-track-wrapper.variables]
-task = { required = true, description = "Task object with name, task_system, task_ids, workdir" }
+task = { required = true, description = "Task object with name, task_system, task_ids, workdir, optional protocol" }
 i = { required = true, description = "Task index for agent naming" }
+protocol = { default = "tdd", description = "Default protocol (can be overridden by task.protocol)" }
 adapter = { default = "claude", description = "Agent adapter (claude, claude-opus, claude-sonnet, opencode, codex)" }
 spawn_args = { default = "", description = "Extra CLI args passed to agent" }
 enable_rw = { default = "true", description = "Enable Ralph Wiggum persistence monitor (claude only)" }
 max_nudges = { default = "10", description = "Max nudges before force-completing" }
 enable_context_monitor = { default = "true", description = "Enable context usage auto-compact (claude only)" }
-context_threshold = { default = "70", description = "Context % to trigger /compact" }
+context_threshold = { default = "80", description = "Context % to trigger /compact" }
 
+# Step 1: Resolve protocol - task.protocol overrides default if present
+[[agent-track-wrapper.steps]]
+id = "resolve-protocol"
+executor = "shell"
+description = "Check if task has protocol override"
+command = """
+# Check if task has protocol override
+TASK_PROTOCOL=$(echo '{{task}}' | jq -r '.protocol // empty' 2>/dev/null || echo "")
+if [ -n "$TASK_PROTOCOL" ]; then
+  echo "$TASK_PROTOCOL"
+else
+  echo "{{protocol}}"
+fi
+"""
+
+[agent-track-wrapper.steps.outputs]
+resolved_protocol = { source = "stdout" }
+
+# Step 2: Expand agent-track with resolved protocol
 [[agent-track-wrapper.steps]]
 id = "track"
 executor = "expand"
 template = "lib/agent-track"
+needs = ["resolve-protocol"]
 
 [agent-track-wrapper.steps.variables]
 agent_name = "agent-{{i}}"
 track_name = "{{task.name}}"
 workdir = "{{task.workdir}}"
-task_prompt = """
-# Your Assignment
-
-You've been assigned {{task.task_system}}: {{task.task_ids}}
-
-## Process
-
-1. For each ID above, query the task system to see full requirements
-   - For beads: `bd show <bead-id>`
-   - For other systems: see CLAUDE.md for instructions
-
-2. Implement each task following TDD approach:
-   - Write failing tests first
-   - Implement minimum code to pass
-   - Refactor if needed
-
-3. Commit after each logical unit with clear messages
-
-4. Close/complete tasks as you finish them:
-   - For beads: `bd close <bead-id>`
-   - For other systems: see CLAUDE.md
-
-5. When ALL tasks are complete, run: `meow done`
-
-## Important
-
-- ONLY work on the tasks assigned above
-- Do NOT work on unrelated tasks you might discover
-- If you find related work needed, note it but do NOT implement it
-"""
+task = "{{task}}"
+protocol = "{{resolve-protocol.outputs.resolved_protocol}}"
 adapter = "{{adapter}}"
 spawn_args = "{{spawn_args}}"
 enable_rw = "{{enable_rw}}"
@@ -494,7 +514,8 @@ echo ""
 echo "Tasks completed:"
 jq -r '.[] | "  - \\(.name): \\(.branch)"' .meow/worktrees/.enriched-tasks.json
 echo ""
-echo "Target branch: {{target_branch}}"
+TARGET_BRANCH=$(cat .meow/worktrees/.target-branch 2>/dev/null || echo "{{target_branch}}")
+echo "Target branch: $TARGET_BRANCH"
 echo "Skip merge mode: {{skip_merge_to_target}}"
 echo "=============================================="
 """
