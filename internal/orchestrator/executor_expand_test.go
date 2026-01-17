@@ -518,25 +518,168 @@ func TestExecuteExpand_SourceModulePropagation(t *testing.T) {
 	}
 }
 
-func TestSubstituteVars(t *testing.T) {
+func TestBuildVarContextRender(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		vars     map[string]any
 		expected string
 	}{
-		{"no vars", nil, "no vars"},
-		{"{{name}}", map[string]any{"name": "value"}, "value"},
-		{"pre {{x}} post", map[string]any{"x": "middle"}, "pre middle post"},
-		{"{{a}} and {{b}}", map[string]any{"a": "1", "b": "2"}, "1 and 2"},
-		{"{{missing}}", map[string]any{}, "{{missing}}"}, // Unmatched vars left as-is
-		{"", map[string]any{"x": "y"}, ""},
+		{"no vars", "no vars", nil, "no vars"},
+		{"simple substitution", "{{name}}", map[string]any{"name": "value"}, "value"},
+		{"prefix and suffix", "pre {{x}} post", map[string]any{"x": "middle"}, "pre middle post"},
+		{"multiple vars", "{{a}} and {{b}}", map[string]any{"a": "1", "b": "2"}, "1 and 2"},
+		{"missing var deferred", "{{missing}}", map[string]any{}, "{{missing}}"}, // Unmatched vars left as-is
+		{"empty input", "", map[string]any{"x": "y"}, ""},
+		{"non-string value", "count: {{n}}", map[string]any{"n": 42}, "count: 42"},
 	}
 
 	for _, tc := range tests {
-		result := substituteVars(tc.input, tc.vars)
-		if result != tc.expected {
-			t.Errorf("substituteVars(%q, %v) = %q, expected %q",
-				tc.input, tc.vars, result, tc.expected)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := buildVarContext(tc.vars)
+			result, err := ctx.Render(tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result != tc.expected {
+				t.Errorf("buildVarContext(%v).Render(%q) = %q, expected %q",
+					tc.vars, tc.input, result, tc.expected)
+			}
+		})
 	}
+}
+
+func TestSubstituteStepVariablesTyped(t *testing.T) {
+	t.Run("shell step stringifies embedded values", func(t *testing.T) {
+		step := &types.Step{
+			ID:       "test",
+			Executor: types.ExecutorShell,
+			Shell: &types.ShellConfig{
+				Command: "echo {{task}}",
+			},
+		}
+		ctx := buildVarContext(map[string]any{
+			"task": map[string]any{"name": "foo", "priority": 1},
+		})
+		if err := substituteStepVariablesTyped(step, ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Embedded map should be JSON-stringified
+		expected := `echo {"name":"foo","priority":1}`
+		if step.Shell.Command != expected {
+			t.Errorf("shell.command = %q, expected %q", step.Shell.Command, expected)
+		}
+	})
+
+	t.Run("expand step variables preserves types", func(t *testing.T) {
+		step := &types.Step{
+			ID:       "test",
+			Executor: types.ExecutorExpand,
+			Expand: &types.ExpandConfig{
+				Template: ".template",
+				Variables: map[string]any{
+					"task": "{{upstream_task}}", // Pure reference - should preserve type
+				},
+			},
+		}
+		taskValue := map[string]any{"name": "foo", "priority": 1}
+		ctx := buildVarContext(map[string]any{
+			"upstream_task": taskValue,
+		})
+		if err := substituteStepVariablesTyped(step, ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Variables map should preserve the map type, not stringify
+		result, ok := step.Expand.Variables["task"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected task to be map[string]any, got %T", step.Expand.Variables["task"])
+		}
+		if result["name"] != "foo" {
+			t.Errorf("task.name = %v, expected 'foo'", result["name"])
+		}
+		if result["priority"] != float64(1) && result["priority"] != 1 {
+			t.Errorf("task.priority = %v, expected 1", result["priority"])
+		}
+	})
+
+	t.Run("mixed content stringifies", func(t *testing.T) {
+		step := &types.Step{
+			ID:       "test",
+			Executor: types.ExecutorShell,
+			Shell: &types.ShellConfig{
+				Command: "prefix-{{task}}-suffix",
+			},
+		}
+		ctx := buildVarContext(map[string]any{
+			"task": map[string]any{"name": "foo"},
+		})
+		if err := substituteStepVariablesTyped(step, ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := `prefix-{"name":"foo"}-suffix`
+		if step.Shell.Command != expected {
+			t.Errorf("shell.command = %q, expected %q", step.Shell.Command, expected)
+		}
+	})
+
+	t.Run("agent prompt renders correctly", func(t *testing.T) {
+		step := &types.Step{
+			ID:       "test",
+			Executor: types.ExecutorAgent,
+			Agent: &types.AgentConfig{
+				Agent:  "{{agent_name}}",
+				Prompt: "Implement {{task.name}} with priority {{task.priority}}",
+			},
+		}
+		ctx := buildVarContext(map[string]any{
+			"agent_name":    "worker-1",
+			"task.name":     "authentication",
+			"task.priority": 1,
+		})
+		if err := substituteStepVariablesTyped(step, ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if step.Agent.Agent != "worker-1" {
+			t.Errorf("agent.agent = %q, expected 'worker-1'", step.Agent.Agent)
+		}
+		expectedPrompt := "Implement authentication with priority 1"
+		if step.Agent.Prompt != expectedPrompt {
+			t.Errorf("agent.prompt = %q, expected %q", step.Agent.Prompt, expectedPrompt)
+		}
+	})
+
+	t.Run("branch step with variables preserves types", func(t *testing.T) {
+		step := &types.Step{
+			ID:       "test",
+			Executor: types.ExecutorBranch,
+			Branch: &types.BranchConfig{
+				Condition: "test {{flag}}",
+				OnTrue: &types.BranchTarget{
+					Template: ".success",
+					Variables: map[string]any{
+						"data": "{{result}}",
+					},
+				},
+			},
+		}
+		ctx := buildVarContext(map[string]any{
+			"flag":   true,
+			"result": []any{"a", "b", "c"},
+		})
+		if err := substituteStepVariablesTyped(step, ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Condition should be stringified
+		if step.Branch.Condition != "test true" {
+			t.Errorf("branch.condition = %q, expected 'test true'", step.Branch.Condition)
+		}
+		// Variables should preserve slice type
+		result, ok := step.Branch.OnTrue.Variables["data"].([]any)
+		if !ok {
+			t.Fatalf("expected data to be []any, got %T", step.Branch.OnTrue.Variables["data"])
+		}
+		if len(result) != 3 {
+			t.Errorf("len(data) = %d, expected 3", len(result))
+		}
+	})
 }

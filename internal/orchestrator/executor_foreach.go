@@ -212,8 +212,13 @@ func ExecuteForeach(
 			newStep.Status = types.StepStatusPending
 			newStep.ExpandedFrom = step.ID
 
-			// Substitute variables in config (including item_var and index_var)
-			substituteStepVariables(newStep, iterVars)
+			// Substitute variables in config (including item_var and index_var) using VarContext
+			varCtx := buildVarContext(iterVars)
+			if err := substituteStepVariablesTyped(newStep, varCtx); err != nil {
+				return nil, &types.StepError{
+					Message: fmt.Sprintf("variable substitution failed for foreach iteration step %s: %v", newID, err),
+				}
+			}
 
 			// Update dependencies to use prefixed IDs
 			newStep.Needs = prefixForeachNeeds(
@@ -270,8 +275,12 @@ func readItemsFromFile(path string) ([]any, error) {
 // - A variable reference: {{planner.outputs.tasks}}
 // - A variable reference that resolves to JSON
 func evaluateItemsExpression(expr string, variables map[string]any) ([]any, error) {
-	// First, substitute any variables in the expression
-	resolved := substituteVars(expr, variables)
+	// First, substitute any variables in the expression using VarContext
+	varCtx := buildVarContext(variables)
+	resolved, err := varCtx.Render(expr)
+	if err != nil {
+		return nil, fmt.Errorf("variable substitution failed: %w", err)
+	}
 
 	// Try to parse as JSON array
 	var items []any

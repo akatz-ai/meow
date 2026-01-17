@@ -204,8 +204,13 @@ func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[stri
 			}
 		}
 
-		// Apply variable substitution to all fields
-		substituteStepVariables(newStep, vars)
+		// Apply variable substitution to all fields using VarContext
+		varCtx := buildVarContext(vars)
+		if err := substituteStepVariablesTyped(newStep, varCtx); err != nil {
+			return nil, &types.StepError{
+				Message: fmt.Sprintf("variable substitution failed for inline step %s: %v", newID, err),
+			}
+		}
 
 		// Update dependencies
 		newStep.Needs = prefixNeeds(is.Needs, parentID, inlineStepIDs)

@@ -3,9 +3,9 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 )
 
 // TemplateLoader loads template workflows for expansion.
@@ -126,8 +126,13 @@ func ExecuteExpand(
 		newStep.Status = types.StepStatusPending
 		newStep.ExpandedFrom = step.ID
 
-		// Substitute variables in config
-		substituteStepVariables(newStep, mergedVars)
+		// Substitute variables in config using VarContext
+		varCtx := buildVarContext(mergedVars)
+		if err := substituteStepVariablesTyped(newStep, varCtx); err != nil {
+			return nil, &types.StepError{
+				Message: fmt.Sprintf("variable substitution failed for step %s: %v", newID, err),
+			}
+		}
 
 		// Update dependencies to use prefixed IDs
 		newStep.Needs = prefixNeeds(tmplStep.Needs, step.ID, templateStepIDs)
@@ -322,106 +327,193 @@ func prefixNeeds(needs []string, parentID string, templateStepIDs map[string]boo
 	return result
 }
 
-// substituteStepVariables replaces {{variable}} placeholders in step configs.
-func substituteStepVariables(step *types.Step, vars map[string]any) {
+// substituteStepVariablesTyped replaces {{variable}} placeholders in step configs using VarContext.
+// String fields use ctx.Render() (always returns string, stringifies embedded values).
+// Variables maps use ctx.EvalMap() (preserves typed values for downstream templates).
+func substituteStepVariablesTyped(step *types.Step, ctx *workflow.VarContext) error {
+	var err error
+
 	switch step.Executor {
 	case types.ExecutorShell:
 		if step.Shell != nil {
-			step.Shell.Command = substituteVars(step.Shell.Command, vars)
-			step.Shell.Workdir = substituteVars(step.Shell.Workdir, vars)
+			if step.Shell.Command, err = ctx.Render(step.Shell.Command); err != nil {
+				return fmt.Errorf("shell.command: %w", err)
+			}
+			if step.Shell.Workdir, err = ctx.Render(step.Shell.Workdir); err != nil {
+				return fmt.Errorf("shell.workdir: %w", err)
+			}
 			for k, v := range step.Shell.Env {
-				step.Shell.Env[k] = substituteVars(v, vars)
+				if step.Shell.Env[k], err = ctx.Render(v); err != nil {
+					return fmt.Errorf("shell.env.%s: %w", k, err)
+				}
 			}
 		}
 	case types.ExecutorSpawn:
 		if step.Spawn != nil {
-			step.Spawn.Agent = substituteVars(step.Spawn.Agent, vars)
-			step.Spawn.Adapter = substituteVars(step.Spawn.Adapter, vars)
-			step.Spawn.Workdir = substituteVars(step.Spawn.Workdir, vars)
-			step.Spawn.ResumeSession = substituteVars(step.Spawn.ResumeSession, vars)
-			step.Spawn.SpawnArgs = substituteVars(step.Spawn.SpawnArgs, vars)
+			if step.Spawn.Agent, err = ctx.Render(step.Spawn.Agent); err != nil {
+				return fmt.Errorf("spawn.agent: %w", err)
+			}
+			if step.Spawn.Adapter, err = ctx.Render(step.Spawn.Adapter); err != nil {
+				return fmt.Errorf("spawn.adapter: %w", err)
+			}
+			if step.Spawn.Workdir, err = ctx.Render(step.Spawn.Workdir); err != nil {
+				return fmt.Errorf("spawn.workdir: %w", err)
+			}
+			if step.Spawn.ResumeSession, err = ctx.Render(step.Spawn.ResumeSession); err != nil {
+				return fmt.Errorf("spawn.resume_session: %w", err)
+			}
+			if step.Spawn.SpawnArgs, err = ctx.Render(step.Spawn.SpawnArgs); err != nil {
+				return fmt.Errorf("spawn.spawn_args: %w", err)
+			}
 			for k, v := range step.Spawn.Env {
-				step.Spawn.Env[k] = substituteVars(v, vars)
+				if step.Spawn.Env[k], err = ctx.Render(v); err != nil {
+					return fmt.Errorf("spawn.env.%s: %w", k, err)
+				}
 			}
 		}
 	case types.ExecutorKill:
 		if step.Kill != nil {
-			step.Kill.Agent = substituteVars(step.Kill.Agent, vars)
+			if step.Kill.Agent, err = ctx.Render(step.Kill.Agent); err != nil {
+				return fmt.Errorf("kill.agent: %w", err)
+			}
 		}
 	case types.ExecutorExpand:
 		if step.Expand != nil {
-			step.Expand.Template = substituteVars(step.Expand.Template, vars)
-			for k, v := range step.Expand.Variables {
-				if s, ok := v.(string); ok {
-					step.Expand.Variables[k] = substituteVars(s, vars)
-				}
-				// Non-string values are preserved as-is
+			if step.Expand.Template, err = ctx.Render(step.Expand.Template); err != nil {
+				return fmt.Errorf("expand.template: %w", err)
+			}
+			// Use EvalMap for Variables to preserve types
+			if step.Expand.Variables, err = ctx.EvalMap(step.Expand.Variables); err != nil {
+				return fmt.Errorf("expand.variables: %w", err)
 			}
 		}
 	case types.ExecutorBranch:
 		if step.Branch != nil {
-			step.Branch.Condition = substituteVars(step.Branch.Condition, vars)
+			if step.Branch.Condition, err = ctx.Render(step.Branch.Condition); err != nil {
+				return fmt.Errorf("branch.condition: %w", err)
+			}
 			if step.Branch.OnTrue != nil {
-				step.Branch.OnTrue.Template = substituteVars(step.Branch.OnTrue.Template, vars)
-				for k, v := range step.Branch.OnTrue.Variables {
-					if s, ok := v.(string); ok {
-						step.Branch.OnTrue.Variables[k] = substituteVars(s, vars)
-					}
+				if step.Branch.OnTrue.Template, err = ctx.Render(step.Branch.OnTrue.Template); err != nil {
+					return fmt.Errorf("branch.on_true.template: %w", err)
+				}
+				if step.Branch.OnTrue.Variables, err = ctx.EvalMap(step.Branch.OnTrue.Variables); err != nil {
+					return fmt.Errorf("branch.on_true.variables: %w", err)
 				}
 			}
 			if step.Branch.OnFalse != nil {
-				step.Branch.OnFalse.Template = substituteVars(step.Branch.OnFalse.Template, vars)
-				for k, v := range step.Branch.OnFalse.Variables {
-					if s, ok := v.(string); ok {
-						step.Branch.OnFalse.Variables[k] = substituteVars(s, vars)
-					}
+				if step.Branch.OnFalse.Template, err = ctx.Render(step.Branch.OnFalse.Template); err != nil {
+					return fmt.Errorf("branch.on_false.template: %w", err)
+				}
+				if step.Branch.OnFalse.Variables, err = ctx.EvalMap(step.Branch.OnFalse.Variables); err != nil {
+					return fmt.Errorf("branch.on_false.variables: %w", err)
 				}
 			}
 			if step.Branch.OnTimeout != nil {
-				step.Branch.OnTimeout.Template = substituteVars(step.Branch.OnTimeout.Template, vars)
-				for k, v := range step.Branch.OnTimeout.Variables {
-					if s, ok := v.(string); ok {
-						step.Branch.OnTimeout.Variables[k] = substituteVars(s, vars)
-					}
+				if step.Branch.OnTimeout.Template, err = ctx.Render(step.Branch.OnTimeout.Template); err != nil {
+					return fmt.Errorf("branch.on_timeout.template: %w", err)
+				}
+				if step.Branch.OnTimeout.Variables, err = ctx.EvalMap(step.Branch.OnTimeout.Variables); err != nil {
+					return fmt.Errorf("branch.on_timeout.variables: %w", err)
 				}
 			}
 		}
 	case types.ExecutorForeach:
 		if step.Foreach != nil {
-			step.Foreach.Items = substituteVars(step.Foreach.Items, vars)
-			step.Foreach.Template = substituteVars(step.Foreach.Template, vars)
-			step.Foreach.MaxConcurrent = substituteVars(step.Foreach.MaxConcurrent, vars)
-			for k, v := range step.Foreach.Variables {
-				if s, ok := v.(string); ok {
-					step.Foreach.Variables[k] = substituteVars(s, vars)
-				}
+			if step.Foreach.Items, err = ctx.Render(step.Foreach.Items); err != nil {
+				return fmt.Errorf("foreach.items: %w", err)
+			}
+			if step.Foreach.Template, err = ctx.Render(step.Foreach.Template); err != nil {
+				return fmt.Errorf("foreach.template: %w", err)
+			}
+			if step.Foreach.MaxConcurrent, err = ctx.Render(step.Foreach.MaxConcurrent); err != nil {
+				return fmt.Errorf("foreach.max_concurrent: %w", err)
+			}
+			// Use EvalMap for Variables to preserve types
+			if step.Foreach.Variables, err = ctx.EvalMap(step.Foreach.Variables); err != nil {
+				return fmt.Errorf("foreach.variables: %w", err)
 			}
 		}
 	case types.ExecutorAgent:
 		if step.Agent != nil {
-			step.Agent.Agent = substituteVars(step.Agent.Agent, vars)
-			step.Agent.Prompt = substituteVars(step.Agent.Prompt, vars)
+			if step.Agent.Agent, err = ctx.Render(step.Agent.Agent); err != nil {
+				return fmt.Errorf("agent.agent: %w", err)
+			}
+			if step.Agent.Prompt, err = ctx.Render(step.Agent.Prompt); err != nil {
+				return fmt.Errorf("agent.prompt: %w", err)
+			}
 		}
 	}
+	return nil
 }
 
-// substituteVars replaces {{variable}} placeholders with values from vars map.
-// Non-string values are converted using fmt.Sprintf("%v", val).
-func substituteVars(s string, vars map[string]any) string {
-	if !strings.Contains(s, "{{") {
-		return s
+// buildVarContext creates a VarContext from a variables map.
+// This is a helper for callers transitioning from the old map-based API.
+// It restructures flat dotted keys (e.g., "task.name") into nested maps
+// so VarContext can resolve paths like {{task.name}} correctly.
+func buildVarContext(vars map[string]any) *workflow.VarContext {
+	ctx := workflow.NewVarContext()
+	// Enable deferring undefined variables so unresolved refs remain as {{...}}
+	// for later substitution (matches old substituteVars behavior)
+	ctx.DeferUndefinedVariables = true
+	ctx.DeferStepOutputs = true
+
+	// Build nested structures from flattened vars
+	// This handles the case where foreach sets both "task" (JSON string) and "task.name"
+	nested := make(map[string]any)
+	for k, v := range vars {
+		setNestedVar(nested, k, v)
 	}
 
-	result := s
-	for k, v := range vars {
-		placeholder := "{{" + k + "}}"
-		var strVal string
-		if str, ok := v.(string); ok {
-			strVal = str
-		} else {
-			strVal = fmt.Sprintf("%v", v)
-		}
-		result = strings.ReplaceAll(result, placeholder, strVal)
+	for k, v := range nested {
+		ctx.SetVariable(k, v)
 	}
-	return result
+	return ctx
+}
+
+// setNestedVar sets a value in a map, creating nested maps as needed.
+// For "task.name" = "foo", it creates {"task": {"name": "foo"}}.
+// If a non-dotted key conflicts (e.g., "task" exists as a string),
+// the nested version takes precedence since it provides more structure.
+func setNestedVar(m map[string]any, key string, value any) {
+	parts := splitKeyParts(key)
+
+	// Navigate/create nested maps
+	current := m
+	for _, part := range parts[:len(parts)-1] {
+		if existing, ok := current[part]; ok {
+			if existingMap, ok := existing.(map[string]any); ok {
+				current = existingMap
+			} else {
+				// Existing value is not a map - create new nested map
+				// This overwrites non-map values like JSON strings with nested maps
+				newMap := make(map[string]any)
+				current[part] = newMap
+				current = newMap
+			}
+		} else {
+			newMap := make(map[string]any)
+			current[part] = newMap
+			current = newMap
+		}
+	}
+	current[parts[len(parts)-1]] = value
+}
+
+// splitKeyParts splits a key by dots, but returns the whole key as a single part
+// if there are no dots.
+func splitKeyParts(key string) []string {
+	if key == "" {
+		return []string{key}
+	}
+	// Use strings package for splitting
+	parts := make([]string, 0)
+	start := 0
+	for i := 0; i < len(key); i++ {
+		if key[i] == '.' {
+			parts = append(parts, key[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, key[start:])
+	return parts
 }
