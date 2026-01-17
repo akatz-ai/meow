@@ -263,3 +263,57 @@ func containsError(result *ValidationResult, substr string) bool {
 	}
 	return false
 }
+
+func TestExampleCollectionWithSkills(t *testing.T) {
+	// This test validates the example collection fixture in testdata/example-collection
+	// It serves as both a test of collection+skill parsing and validation of the example
+	manifestPath := filepath.Join("..", "..", "testdata", "example-collection", "meow-collection.toml")
+
+	// Check if testdata exists (skip test if it doesn't - fixtures may not be committed yet)
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		t.Skip("testdata/example-collection not found")
+	}
+
+	collection, err := ParseFile(manifestPath)
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v", err)
+	}
+
+	// Validate collection metadata
+	if collection.Collection.Name != "example-collection" {
+		t.Errorf("Name = %q, want %q", collection.Collection.Name, "example-collection")
+	}
+	if collection.Collection.Version != "1.0.0" {
+		t.Errorf("Version = %q, want %q", collection.Collection.Version, "1.0.0")
+	}
+	if collection.Collection.Owner.Name != "MEOW Team" {
+		t.Errorf("Owner.Name = %q, want %q", collection.Collection.Owner.Name, "MEOW Team")
+	}
+
+	// Validate packs
+	if len(collection.Packs) != 1 {
+		t.Fatalf("Packs len = %d, want 1", len(collection.Packs))
+	}
+	if collection.Packs[0].Name != "examples" {
+		t.Errorf("Packs[0].Name = %q, want %q", collection.Packs[0].Name, "examples")
+	}
+
+	// Validate skills section
+	if len(collection.Skills) == 0 {
+		t.Fatalf("Skills should not be empty")
+	}
+	skillPath, ok := collection.Skills["example-helper"]
+	if !ok {
+		t.Fatalf("Skills should contain 'example-helper'")
+	}
+	if skillPath != "skills/example-helper/skill.toml" {
+		t.Errorf("Skill path = %q, want %q", skillPath, "skills/example-helper/skill.toml")
+	}
+
+	// Validate the collection directory structure
+	collectionDir := filepath.Join("..", "..", "testdata", "example-collection")
+	result := collection.Validate(collectionDir)
+	if result.HasErrors() {
+		t.Errorf("Validation failed with errors: %v", result.Errors)
+	}
+}
