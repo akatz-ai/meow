@@ -1190,7 +1190,7 @@ func (o *Orchestrator) runCleanupScript(ctx context.Context, wf *types.Run, scri
 	// Set environment variables from workflow
 	cmd.Env = os.Environ()
 	for k, v := range wf.Variables {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, stringifyValue(v)))
 	}
 	// Add workflow ID as an environment variable
 	cmd.Env = append(cmd.Env, fmt.Sprintf("MEOW_WORKFLOW=%s", wf.ID))

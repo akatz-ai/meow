@@ -1178,24 +1178,24 @@ func TestVarContext_SubstituteForShell_NoRecursiveSubstitution(t *testing.T) {
 	}
 }
 
-// Tests for stringifyValue (meow-r8wp)
+// Tests for StringifyValue (meow-r8wp)
 
 func TestStringifyValue_String(t *testing.T) {
-	result := stringifyValue("hello")
+	result := StringifyValue("hello")
 	if result != "hello" {
 		t.Errorf("expected 'hello', got %q", result)
 	}
 }
 
 func TestStringifyValue_Integer(t *testing.T) {
-	result := stringifyValue(42)
+	result := StringifyValue(42)
 	if result != "42" {
 		t.Errorf("expected '42', got %q", result)
 	}
 }
 
 func TestStringifyValue_Boolean(t *testing.T) {
-	result := stringifyValue(true)
+	result := StringifyValue(true)
 	if result != "true" {
 		t.Errorf("expected 'true', got %q", result)
 	}
@@ -1206,7 +1206,7 @@ func TestStringifyValue_MapStringAny(t *testing.T) {
 		"foo": "bar",
 		"baz": 123,
 	}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Result should be valid JSON
 	if !strings.Contains(result, `"foo"`) || !strings.Contains(result, `"bar"`) {
@@ -1216,7 +1216,7 @@ func TestStringifyValue_MapStringAny(t *testing.T) {
 
 func TestStringifyValue_Slice(t *testing.T) {
 	input := []any{"a", "b", "c"}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Should be valid JSON array
 	expected := `["a","b","c"]`
@@ -1227,7 +1227,7 @@ func TestStringifyValue_Slice(t *testing.T) {
 
 func TestStringifyValue_StringSlice(t *testing.T) {
 	input := []string{"x", "y", "z"}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Should be valid JSON array
 	expected := `["x","y","z"]`
@@ -1238,7 +1238,7 @@ func TestStringifyValue_StringSlice(t *testing.T) {
 
 func TestStringifyValue_IntSlice(t *testing.T) {
 	input := []int{1, 2, 3}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Should be valid JSON array
 	expected := `[1,2,3]`
@@ -1248,7 +1248,7 @@ func TestStringifyValue_IntSlice(t *testing.T) {
 }
 
 func TestStringifyValue_Nil(t *testing.T) {
-	result := stringifyValue(nil)
+	result := StringifyValue(nil)
 
 	// nil should become empty string
 	if result != "" {
@@ -1261,7 +1261,7 @@ func TestStringifyValue_MapStringString(t *testing.T) {
 		"key1": "value1",
 		"key2": "value2",
 	}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Result should be valid JSON
 	if !strings.Contains(result, `"key1"`) || !strings.Contains(result, `"value1"`) {
@@ -1275,7 +1275,7 @@ func TestStringifyValue_NestedStructure(t *testing.T) {
 			"inner": []any{1, 2, 3},
 		},
 	}
-	result := stringifyValue(input)
+	result := StringifyValue(input)
 
 	// Should be valid JSON with nested structure
 	if !strings.Contains(result, `"outer"`) || !strings.Contains(result, `"inner"`) {
