@@ -711,20 +711,11 @@ func TestExecuteForeach_ItemsFromTypedArrayVariable(t *testing.T) {
 }
 
 // TestExecuteForeach_IndexVarTyped tests that index_var is stored as an int, not string.
+// This verifies that the index renders correctly in substituted commands.
 func TestExecuteForeach_IndexVarTyped(t *testing.T) {
-	// Create a loader that captures the variables passed to it
-	var capturedVars []map[string]any
-	loader := &capturingMockLoader{
+	loader := &foreachMockLoader{
 		steps: []*types.Step{
 			{ID: "work", Executor: types.ExecutorShell, Shell: &types.ShellConfig{Command: "echo {{i}}"}},
-		},
-		captureFunc: func(vars map[string]any) {
-			// Deep copy to avoid mutation issues
-			captured := make(map[string]any)
-			for k, v := range vars {
-				captured[k] = v
-			}
-			capturedVars = append(capturedVars, captured)
 		},
 	}
 
@@ -751,23 +742,6 @@ func TestExecuteForeach_IndexVarTyped(t *testing.T) {
 			t.Errorf("step %d: expected command %q, got %q", i, expectedCmds[i], s.Shell.Command)
 		}
 	}
-}
-
-// capturingMockLoader captures variables passed to Load for testing.
-type capturingMockLoader struct {
-	steps       []*types.Step
-	captureFunc func(vars map[string]any)
-}
-
-func (m *capturingMockLoader) Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error) {
-	if m.captureFunc != nil {
-		m.captureFunc(variables)
-	}
-	result := make([]*types.Step, len(m.steps))
-	for i, s := range m.steps {
-		result[i] = cloneStep(s)
-	}
-	return result, nil
 }
 
 // TestExecuteForeach_ItemStoredTyped tests that item_var is stored as the actual
