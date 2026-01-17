@@ -1059,3 +1059,49 @@ time=2026-01-16T20:58:22.403-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-
 time=2026-01-16T20:58:22.406-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
 time=2026-01-16T20:58:23.048-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
 time=2026-01-16T20:58:23.048-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T20:58:23.079-05:00 level=INFO msg="Git ref change detected: %s" !BADKEY=/data/projects/meow/.git/refs/heads/main.lock
+time=2026-01-16T20:58:24.080-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T20:58:24.080-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T20:58:24.082-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
+time=2026-01-16T21:01:51.757-05:00 level=INFO msg="Mutation detected: %s %s" status=meow-rjr7
+time=2026-01-16T21:01:52.258-05:00 level=INFO msg="Export triggered by mutation events"
+time=2026-01-16T21:01:52.258-05:00 level=INFO msg="Starting %s..." !BADKEY=export
+time=2026-01-16T21:01:52.331-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:01:52.331-05:00 level=INFO msg="Exported to JSONL"
+time=2026-01-16T21:01:52.331-05:00 level=INFO msg="Export complete"
+time=2026-01-16T21:01:53.333-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T21:01:53.333-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T21:01:53.334-05:00 level=INFO msg="JSONL content changed, proceeding with %s..." !BADKEY=auto-import
+time=2026-01-16T21:01:53.336-05:00 level=INFO msg="⚠️  WARNING: Uncommitted local changes detected in %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:01:53.336-05:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-01-16T21:01:53.336-05:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-01-16T21:01:53.744-05:00 level=INFO msg="Pulled sync branch %s" !BADKEY=main
+time=2026-01-16T21:01:53.745-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:01:53.746-05:00 level=INFO msg="Synced JSONL from sync branch to main repo"
+time=2026-01-16T21:01:53.881-05:00 level=INFO msg="Imported from JSONL"
+time=2026-01-16T21:01:53.892-05:00 level=INFO msg="Auto-import complete"
+time=2026-01-16T21:01:54.747-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T21:01:54.747-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T21:01:54.749-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
+time=2026-01-16T21:07:54.716-05:00 level=INFO msg="Mutation detected: %s %s" status=meow-rjr7
+time=2026-01-16T21:07:55.216-05:00 level=INFO msg="Export triggered by mutation events"
+time=2026-01-16T21:07:55.216-05:00 level=INFO msg="Starting %s..." !BADKEY=export
+time=2026-01-16T21:07:55.296-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:07:55.296-05:00 level=INFO msg="Exported to JSONL"
+time=2026-01-16T21:07:55.296-05:00 level=INFO msg="Export complete"
+time=2026-01-16T21:07:56.298-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T21:07:56.298-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T21:07:56.299-05:00 level=INFO msg="JSONL content changed, proceeding with %s..." !BADKEY=auto-import
+time=2026-01-16T21:07:56.301-05:00 level=INFO msg="⚠️  WARNING: Uncommitted local changes detected in %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:07:56.301-05:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-01-16T21:07:56.301-05:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-01-16T21:07:56.680-05:00 level=INFO msg="Pulled sync branch %s" !BADKEY=main
+time=2026-01-16T21:07:56.681-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:07:56.682-05:00 level=INFO msg="Synced JSONL from sync branch to main repo"
+time=2026-01-16T21:07:56.829-05:00 level=INFO msg="Imported from JSONL"
+time=2026-01-16T21:07:56.839-05:00 level=INFO msg="Auto-import complete"
+time=2026-01-16T21:07:57.682-05:00 level=INFO msg="Import triggered by file change"
+time=2026-01-16T21:07:57.682-05:00 level=INFO msg="Starting %s..." !BADKEY=auto-import
+time=2026-01-16T21:07:57.684-05:00 level=INFO msg="Skipping %s: JSONL content unchanged" !BADKEY=auto-import
+time=2026-01-16T21:08:09.306-05:00 level=INFO msg="JSONL file created: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
+time=2026-01-16T21:08:09.306-05:00 level=INFO msg="File change detected: %s" !BADKEY=/data/projects/meow/.beads/issues.jsonl
