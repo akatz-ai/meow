@@ -1,0 +1,15 @@
+[collection]
+name = "example-collection"
+description = "Example collection demonstrating skill bundling"
+version = "1.0.0"
+
+[collection.owner]
+name = "MEOW Team"
+
+[[packs]]
+name = "examples"
+description = "Example workflows"
+workflows = ["workflows/example.meow.toml"]
+
+[skills]
+example-helper = "skills/example-helper/skill.toml"

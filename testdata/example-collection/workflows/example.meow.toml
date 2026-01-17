@@ -1,0 +1,22 @@
+# Example workflow demonstrating MEOW's basic features
+# This workflow showcases a simple agent task with shell executor
+
+[meta]
+name = "example"
+description = "Example workflow demonstrating MEOW basics"
+version = "1.0.0"
+
+# Simple shell step that outputs a greeting
+[[steps]]
+id = "hello"
+executor = "shell"
+command = "echo 'Hello from MEOW example workflow!'"
+
+# Agent step that demonstrates agent executor
+# Requires the example-helper skill to be installed
+[[steps]]
+id = "agent-task"
+executor = "agent"
+needs = ["hello"]
+prompt = "You are helping demonstrate the MEOW example workflow. Please respond with a brief greeting."
+timeout = "30s"
