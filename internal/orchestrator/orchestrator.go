@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -492,12 +493,77 @@ func (o *Orchestrator) dispatch(ctx context.Context, wf *types.Run, step *types.
 // stepOutputRefPattern matches {{step-id.outputs.field}} references
 // Step IDs can contain dots (e.g., "parent.child" from expansion prefixes), so we match
 // everything before ".outputs." as the step ID.
-var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_.-]+)\.outputs\.([a-zA-Z0-9_]+)\}\}`)
+// Field names can also contain dots for nested access (e.g., "config.nested").
+var stepOutputRefPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_.-]+)\.outputs\.([a-zA-Z0-9_.]+)\}\}`)
+
+// findStepWithScopeWalk looks up a step by ID, using scope-walk resolution if exact match fails.
+// When templates are expanded inside foreach loops, step IDs get prefixed (e.g., "agents.0.shell-step").
+// A reference to "shell-step" inside "agents.0.expand-step" should find "agents.0.shell-step".
+//
+// The algorithm walks up the prefix chain of currentStepID until a match is found:
+//   1. Try exact: stepID
+//   2. Try with prefix: prefix + "." + stepID (for each level of prefix)
+//
+// Example: currentStepID="agents.0.track", refStepID="resolve-protocol"
+//   - Try: "resolve-protocol" (not found)
+//   - Try: "agents.0.resolve-protocol" (found!)
+func findStepWithScopeWalk(wf *types.Run, refStepID, currentStepID string) (*types.Step, string, bool) {
+	// Try exact match first
+	if step, ok := wf.Steps[refStepID]; ok {
+		return step, refStepID, true
+	}
+
+	// Walk up the prefix chain
+	prefix := currentStepID
+	for {
+		idx := strings.LastIndex(prefix, ".")
+		if idx < 0 {
+			break // No more prefixes to try
+		}
+		prefix = prefix[:idx]
+		prefixedID := prefix + "." + refStepID
+		if step, ok := wf.Steps[prefixedID]; ok {
+			return step, prefixedID, true
+		}
+	}
+
+	return nil, refStepID, false
+}
+
+// getNestedOutputValue retrieves a potentially nested value from step outputs.
+// Field can be simple ("result") or nested ("config.database.host").
+func getNestedOutputValue(outputs map[string]any, field string) (any, bool) {
+	// Simple case: no dots in field name
+	if !strings.Contains(field, ".") {
+		val, ok := outputs[field]
+		return val, ok
+	}
+
+	// Nested case: walk down the path
+	parts := strings.Split(field, ".")
+	var val any = outputs
+
+	for _, part := range parts {
+		switch v := val.(type) {
+		case map[string]any:
+			var ok bool
+			val, ok = v[part]
+			if !ok {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+	}
+
+	return val, true
+}
 
 // resolveStepOutputRefs substitutes {{step.outputs.field}} references with actual values
-// from completed steps in the workflow.
+// from completed steps in the workflow. Uses scope-walk resolution to find steps within
+// foreach-expanded contexts.
 func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
-	// Build a resolver function
+	// Build a resolver function that captures the current step for scope-walk
 	resolve := func(s string) string {
 		return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
 			// Extract step ID and field name
@@ -505,25 +571,25 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 			if len(parts) != 3 {
 				return match // Keep original if parse fails
 			}
-			stepID := parts[1]
+			refStepID := parts[1]
 			fieldName := parts[2]
 
-			// Look up the step
-			depStep, ok := wf.Steps[stepID]
+			// Look up the step with scope-walk
+			depStep, resolvedID, ok := findStepWithScopeWalk(wf, refStepID, step.ID)
 			if !ok {
-				o.logger.Warn("step output ref: step not found", "ref", match, "stepID", stepID)
+				o.logger.Warn("step output ref: step not found", "ref", match, "stepID", refStepID, "currentStep", step.ID)
 				return match
 			}
 
 			// Get the output value
 			if depStep.Outputs == nil {
-				o.logger.Warn("step output ref: step has no outputs", "ref", match, "stepID", stepID)
+				o.logger.Warn("step output ref: step has no outputs", "ref", match, "stepID", resolvedID)
 				return match
 			}
 
-			val, ok := depStep.Outputs[fieldName]
+			val, ok := getNestedOutputValue(depStep.Outputs, fieldName)
 			if !ok {
-				o.logger.Warn("step output ref: field not found", "ref", match, "stepID", stepID, "field", fieldName)
+				o.logger.Warn("step output ref: field not found", "ref", match, "stepID", resolvedID, "field", fieldName)
 				return match
 			}
 
@@ -566,6 +632,33 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 		if step.Foreach != nil {
 			step.Foreach.Items = resolve(step.Foreach.Items)
 			step.Foreach.ItemsFile = resolve(step.Foreach.ItemsFile)
+		}
+	case types.ExecutorExpand:
+		if step.Expand != nil {
+			step.Expand.Template = resolve(step.Expand.Template)
+			for k, v := range step.Expand.Variables {
+				step.Expand.Variables[k] = resolve(v)
+			}
+		}
+	case types.ExecutorBranch:
+		if step.Branch != nil {
+			// Note: condition is resolved separately in handleBranch via resolveOutputRefs
+			// Here we resolve branch target variables
+			if step.Branch.OnTrue != nil {
+				for k, v := range step.Branch.OnTrue.Variables {
+					step.Branch.OnTrue.Variables[k] = resolve(v)
+				}
+			}
+			if step.Branch.OnFalse != nil {
+				for k, v := range step.Branch.OnFalse.Variables {
+					step.Branch.OnFalse.Variables[k] = resolve(v)
+				}
+			}
+			if step.Branch.OnTimeout != nil {
+				for k, v := range step.Branch.OnTimeout.Variables {
+					step.Branch.OnTimeout.Variables[k] = resolve(v)
+				}
+			}
 		}
 	}
 }
@@ -1648,7 +1741,7 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Run, step *ty
 	}
 
 	cfg := step.Branch
-	condition := o.resolveOutputRefs(wf, cfg.Condition)
+	condition := o.resolveOutputRefs(wf, cfg.Condition, step.ID)
 
 	// Capture IDs by value for goroutine (NOT pointers!)
 	workflowID := wf.ID
@@ -1873,23 +1966,25 @@ func (o *Orchestrator) expandBranchTarget(ctx context.Context, wf *types.Run, st
 }
 
 // resolveOutputRefs resolves {{step.outputs.field}} references in a string.
-func (o *Orchestrator) resolveOutputRefs(wf *types.Run, s string) string {
+// Uses scope-walk resolution to find steps within foreach-expanded contexts.
+func (o *Orchestrator) resolveOutputRefs(wf *types.Run, s string, currentStepID string) string {
 	return stepOutputRefPattern.ReplaceAllStringFunc(s, func(match string) string {
 		parts := stepOutputRefPattern.FindStringSubmatch(match)
 		if len(parts) != 3 {
 			return match
 		}
-		stepID := parts[1]
+		refStepID := parts[1]
 		fieldName := parts[2]
 
-		depStep, ok := wf.Steps[stepID]
+		// Look up the step with scope-walk
+		depStep, _, ok := findStepWithScopeWalk(wf, refStepID, currentStepID)
 		if !ok {
 			return match
 		}
 		if depStep.Outputs == nil {
 			return match
 		}
-		val, ok := depStep.Outputs[fieldName]
+		val, ok := getNestedOutputValue(depStep.Outputs, fieldName)
 		if !ok {
 			return match
 		}

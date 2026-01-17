@@ -2870,3 +2870,391 @@ func TestParallelShellSteps(t *testing.T) {
 
 	t.Logf("Parallel execution completed in %v", elapsed)
 }
+
+// --- Step Output Resolution Tests ---
+
+func TestFindStepWithScopeWalk_ExactMatch(t *testing.T) {
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+	wf.Steps["shell-step"] = &types.Step{
+		ID:      "shell-step",
+		Status:  types.StepStatusDone,
+		Outputs: map[string]any{"result": "exact-value"},
+	}
+
+	step, resolvedID, ok := findStepWithScopeWalk(wf, "shell-step", "some-other-step")
+	if !ok {
+		t.Fatal("expected to find step")
+	}
+	if resolvedID != "shell-step" {
+		t.Errorf("resolvedID = %q, want %q", resolvedID, "shell-step")
+	}
+	if step.Outputs["result"] != "exact-value" {
+		t.Errorf("outputs = %v, want exact-value", step.Outputs["result"])
+	}
+}
+
+func TestFindStepWithScopeWalk_SingleLevelPrefix(t *testing.T) {
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+	// Step with prefixed ID (as from foreach expansion)
+	wf.Steps["agents.0.resolve-protocol"] = &types.Step{
+		ID:      "agents.0.resolve-protocol",
+		Status:  types.StepStatusDone,
+		Outputs: map[string]any{"resolved_protocol": "tdd"},
+	}
+
+	// Current step is sibling in same foreach iteration
+	step, resolvedID, ok := findStepWithScopeWalk(wf, "resolve-protocol", "agents.0.track")
+	if !ok {
+		t.Fatal("expected to find step via scope-walk")
+	}
+	if resolvedID != "agents.0.resolve-protocol" {
+		t.Errorf("resolvedID = %q, want %q", resolvedID, "agents.0.resolve-protocol")
+	}
+	if step.Outputs["resolved_protocol"] != "tdd" {
+		t.Errorf("outputs = %v, want tdd", step.Outputs["resolved_protocol"])
+	}
+}
+
+func TestFindStepWithScopeWalk_MultiLevelPrefix(t *testing.T) {
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+	// Deep nesting: a.b.c.shell-step
+	wf.Steps["a.b.c.shell-step"] = &types.Step{
+		ID:      "a.b.c.shell-step",
+		Status:  types.StepStatusDone,
+		Outputs: map[string]any{"value": "deep-nested"},
+	}
+
+	// Current step is a.b.c.d.expand-step - should walk up to find a.b.c.shell-step
+	step, resolvedID, ok := findStepWithScopeWalk(wf, "shell-step", "a.b.c.d.expand-step")
+	if !ok {
+		t.Fatal("expected to find step via multi-level scope-walk")
+	}
+	if resolvedID != "a.b.c.shell-step" {
+		t.Errorf("resolvedID = %q, want %q", resolvedID, "a.b.c.shell-step")
+	}
+	if step.Outputs["value"] != "deep-nested" {
+		t.Errorf("outputs = %v, want deep-nested", step.Outputs["value"])
+	}
+}
+
+func TestFindStepWithScopeWalk_NotFound(t *testing.T) {
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+	wf.Steps["other-step"] = &types.Step{
+		ID:     "other-step",
+		Status: types.StepStatusDone,
+	}
+
+	_, _, ok := findStepWithScopeWalk(wf, "missing-step", "agents.0.track")
+	if ok {
+		t.Error("expected not to find non-existent step")
+	}
+}
+
+func TestGetNestedOutputValue_SimpleField(t *testing.T) {
+	outputs := map[string]any{
+		"result": "simple-value",
+		"count":  42,
+	}
+
+	val, ok := getNestedOutputValue(outputs, "result")
+	if !ok {
+		t.Fatal("expected to find field")
+	}
+	if val != "simple-value" {
+		t.Errorf("val = %v, want simple-value", val)
+	}
+}
+
+func TestGetNestedOutputValue_NestedField(t *testing.T) {
+	outputs := map[string]any{
+		"config": map[string]any{
+			"database": map[string]any{
+				"host": "localhost",
+				"port": 5432,
+			},
+		},
+	}
+
+	val, ok := getNestedOutputValue(outputs, "config.database.host")
+	if !ok {
+		t.Fatal("expected to find nested field")
+	}
+	if val != "localhost" {
+		t.Errorf("val = %v, want localhost", val)
+	}
+}
+
+func TestGetNestedOutputValue_NotFound(t *testing.T) {
+	outputs := map[string]any{
+		"config": map[string]any{
+			"existing": "value",
+		},
+	}
+
+	_, ok := getNestedOutputValue(outputs, "config.missing")
+	if ok {
+		t.Error("expected not to find missing field")
+	}
+
+	_, ok = getNestedOutputValue(outputs, "missing")
+	if ok {
+		t.Error("expected not to find top-level missing field")
+	}
+}
+
+func TestResolveStepOutputRefs_ExecutorExpand(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+
+	// Completed shell step with output
+	wf.Steps["resolve-protocol"] = &types.Step{
+		ID:       "resolve-protocol",
+		Status:   types.StepStatusDone,
+		Executor: types.ExecutorShell,
+		Outputs:  map[string]any{"resolved_protocol": "tdd"},
+	}
+
+	// Expand step referencing the shell step's output
+	expandStep := &types.Step{
+		ID:       "track",
+		Status:   types.StepStatusPending,
+		Executor: types.ExecutorExpand,
+		Expand: &types.ExpandConfig{
+			Template: "lib/protocols/{{resolve-protocol.outputs.resolved_protocol}}",
+			Variables: map[string]string{
+				"protocol": "{{resolve-protocol.outputs.resolved_protocol}}",
+			},
+		},
+	}
+	wf.Steps["track"] = expandStep
+
+	store.workflows[wf.ID] = wf
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Resolve references
+	orch.resolveStepOutputRefs(wf, expandStep)
+
+	// Check template was resolved
+	if expandStep.Expand.Template != "lib/protocols/tdd" {
+		t.Errorf("Template = %q, want %q", expandStep.Expand.Template, "lib/protocols/tdd")
+	}
+
+	// Check variables were resolved
+	if expandStep.Expand.Variables["protocol"] != "tdd" {
+		t.Errorf("Variables[protocol] = %q, want %q", expandStep.Expand.Variables["protocol"], "tdd")
+	}
+}
+
+func TestResolveStepOutputRefs_WithScopeWalk(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+
+	// Foreach-expanded shell step with output
+	wf.Steps["agents.0.resolve-protocol"] = &types.Step{
+		ID:       "agents.0.resolve-protocol",
+		Status:   types.StepStatusDone,
+		Executor: types.ExecutorShell,
+		Outputs:  map[string]any{"resolved_protocol": "code-review"},
+	}
+
+	// Expand step in same foreach iteration, referencing sibling with unprefixed ID
+	expandStep := &types.Step{
+		ID:       "agents.0.track",
+		Status:   types.StepStatusPending,
+		Executor: types.ExecutorExpand,
+		Expand: &types.ExpandConfig{
+			Template: "lib/protocols/{{resolve-protocol.outputs.resolved_protocol}}",
+			Variables: map[string]string{
+				"protocol": "{{resolve-protocol.outputs.resolved_protocol}}",
+			},
+		},
+	}
+	wf.Steps["agents.0.track"] = expandStep
+
+	store.workflows[wf.ID] = wf
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Resolve references - should use scope-walk to find agents.0.resolve-protocol
+	orch.resolveStepOutputRefs(wf, expandStep)
+
+	// Check template was resolved via scope-walk
+	if expandStep.Expand.Template != "lib/protocols/code-review" {
+		t.Errorf("Template = %q, want %q", expandStep.Expand.Template, "lib/protocols/code-review")
+	}
+
+	// Check variables were resolved via scope-walk
+	if expandStep.Expand.Variables["protocol"] != "code-review" {
+		t.Errorf("Variables[protocol] = %q, want %q", expandStep.Expand.Variables["protocol"], "code-review")
+	}
+}
+
+func TestResolveStepOutputRefs_ExecutorBranch(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+
+	// Completed shell step with output
+	wf.Steps["check-env"] = &types.Step{
+		ID:       "check-env",
+		Status:   types.StepStatusDone,
+		Executor: types.ExecutorShell,
+		Outputs:  map[string]any{"env_type": "production"},
+	}
+
+	// Branch step with variables referencing the shell step's output
+	branchStep := &types.Step{
+		ID:       "branch-step",
+		Status:   types.StepStatusPending,
+		Executor: types.ExecutorBranch,
+		Branch: &types.BranchConfig{
+			Condition: "true",
+			OnTrue: &types.BranchTarget{
+				Template: "deploy-template",
+				Variables: map[string]string{
+					"environment": "{{check-env.outputs.env_type}}",
+				},
+			},
+			OnFalse: &types.BranchTarget{
+				Template: "skip-template",
+				Variables: map[string]string{
+					"reason": "{{check-env.outputs.env_type}}-not-ready",
+				},
+			},
+		},
+	}
+	wf.Steps["branch-step"] = branchStep
+
+	store.workflows[wf.ID] = wf
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Resolve references
+	orch.resolveStepOutputRefs(wf, branchStep)
+
+	// Check OnTrue variables were resolved
+	if branchStep.Branch.OnTrue.Variables["environment"] != "production" {
+		t.Errorf("OnTrue.Variables[environment] = %q, want %q",
+			branchStep.Branch.OnTrue.Variables["environment"], "production")
+	}
+
+	// Check OnFalse variables were resolved
+	if branchStep.Branch.OnFalse.Variables["reason"] != "production-not-ready" {
+		t.Errorf("OnFalse.Variables[reason] = %q, want %q",
+			branchStep.Branch.OnFalse.Variables["reason"], "production-not-ready")
+	}
+}
+
+func TestResolveStepOutputRefs_NestedOutputField(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+
+	// Shell step with nested output structure
+	wf.Steps["config-step"] = &types.Step{
+		ID:       "config-step",
+		Status:   types.StepStatusDone,
+		Executor: types.ExecutorShell,
+		Outputs: map[string]any{
+			"config": map[string]any{
+				"database": map[string]any{
+					"host": "db.example.com",
+				},
+			},
+		},
+	}
+
+	// Shell step referencing nested output
+	shellStep := &types.Step{
+		ID:       "use-config",
+		Status:   types.StepStatusPending,
+		Executor: types.ExecutorShell,
+		Shell: &types.ShellConfig{
+			Command: "echo {{config-step.outputs.config.database.host}}",
+		},
+	}
+	wf.Steps["use-config"] = shellStep
+
+	store.workflows[wf.ID] = wf
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Resolve references
+	orch.resolveStepOutputRefs(wf, shellStep)
+
+	// Check nested output was resolved
+	if shellStep.Shell.Command != "echo db.example.com" {
+		t.Errorf("Command = %q, want %q", shellStep.Shell.Command, "echo db.example.com")
+	}
+}
+
+func TestResolveOutputRefs_WithScopeWalk(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wf := &types.Run{
+		ID:    "test-wf",
+		Steps: make(map[string]*types.Step),
+	}
+
+	// Foreach-expanded shell step with output
+	wf.Steps["agents.0.check-status"] = &types.Step{
+		ID:       "agents.0.check-status",
+		Status:   types.StepStatusDone,
+		Executor: types.ExecutorShell,
+		Outputs:  map[string]any{"ready": "true"},
+	}
+
+	store.workflows[wf.ID] = wf
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Resolve a condition string with scope-walk
+	condition := "test {{check-status.outputs.ready}} == true"
+	resolved := orch.resolveOutputRefs(wf, condition, "agents.0.branch-step")
+
+	if resolved != "test true == true" {
+		t.Errorf("resolved = %q, want %q", resolved, "test true == true")
+	}
+}
