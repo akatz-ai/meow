@@ -477,7 +477,21 @@ func buildVarContext(vars map[string]any) *workflow.VarContext {
 func setNestedVar(m map[string]any, key string, value any) {
 	parts := splitKeyParts(key)
 
-	// Navigate/create nested maps
+	// For non-dotted keys, don't overwrite existing nested maps
+	// This handles the case where foreach sets both "task" (JSON string) and "task.name"
+	// and map iteration order is non-deterministic
+	if len(parts) == 1 {
+		if existing, ok := m[key]; ok {
+			if _, isMap := existing.(map[string]any); isMap {
+				// Don't overwrite an existing nested map with a scalar value
+				return
+			}
+		}
+		m[key] = value
+		return
+	}
+
+	// Navigate/create nested maps for dotted keys
 	current := m
 	for _, part := range parts[:len(parts)-1] {
 		if existing, ok := current[part]; ok {
