@@ -230,7 +230,7 @@ func TestForeachConfig(t *testing.T) {
 				ItemVar:       "task",
 				IndexVar:      "i",
 				Template:      ".worker-task",
-				Variables:     map[string]string{"agent_id": "worker-{{i}}"},
+				Variables:     map[string]any{"agent_id": "worker-{{i}}"},
 				Parallel:      boolPtr(true),
 				MaxConcurrent: "5",
 				Join:          boolPtr(true),

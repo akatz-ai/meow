@@ -121,15 +121,15 @@ type KillConfig struct {
 
 // ExpandConfig for executor: expand
 type ExpandConfig struct {
-	Template  string            `yaml:"template" toml:"template"`
-	Variables map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`
+	Template  string         `yaml:"template" toml:"template"`
+	Variables map[string]any `yaml:"variables,omitempty" toml:"variables,omitempty"`
 }
 
 // BranchTarget defines what to expand for a branch outcome.
 type BranchTarget struct {
-	Template  string            `yaml:"template,omitempty" toml:"template,omitempty"`
-	Variables map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`
-	Inline    []InlineStep      `yaml:"inline,omitempty" toml:"inline,omitempty"`
+	Template  string         `yaml:"template,omitempty" toml:"template,omitempty"`
+	Variables map[string]any `yaml:"variables,omitempty" toml:"variables,omitempty"`
+	Inline    []InlineStep   `yaml:"inline,omitempty" toml:"inline,omitempty"`
 }
 
 // InlineStep is used for inline step definitions in branch targets.
@@ -160,15 +160,15 @@ type BranchConfig struct {
 // ForeachConfig for executor: foreach
 // Dynamically expands a template for each item in a list.
 type ForeachConfig struct {
-	Items         string            `yaml:"items,omitempty" toml:"items,omitempty"`                   // JSON array expression to iterate over (mutually exclusive with ItemsFile)
-	ItemsFile     string            `yaml:"items_file,omitempty" toml:"items_file,omitempty"`         // Path to JSON file containing array (mutually exclusive with Items)
-	ItemVar       string            `yaml:"item_var" toml:"item_var"`                                 // Variable name for current item
-	IndexVar      string            `yaml:"index_var,omitempty" toml:"index_var,omitempty"`           // Optional variable name for index
-	Template      string            `yaml:"template" toml:"template"`                                 // Template reference to expand
-	Variables     map[string]string `yaml:"variables,omitempty" toml:"variables,omitempty"`           // Variables to pass to template
-	Parallel      *bool             `yaml:"parallel,omitempty" toml:"parallel,omitempty"`             // Run in parallel (default: true)
-	MaxConcurrent string            `yaml:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"` // Limit concurrent iterations (supports variables like "{{max_agents}}")
-	Join          *bool             `yaml:"join,omitempty" toml:"join,omitempty"`                     // Wait for all iterations (default: true)
+	Items         string         `yaml:"items,omitempty" toml:"items,omitempty"`                   // JSON array expression to iterate over (mutually exclusive with ItemsFile)
+	ItemsFile     string         `yaml:"items_file,omitempty" toml:"items_file,omitempty"`         // Path to JSON file containing array (mutually exclusive with Items)
+	ItemVar       string         `yaml:"item_var" toml:"item_var"`                                 // Variable name for current item
+	IndexVar      string         `yaml:"index_var,omitempty" toml:"index_var,omitempty"`           // Optional variable name for index
+	Template      string         `yaml:"template" toml:"template"`                                 // Template reference to expand
+	Variables     map[string]any `yaml:"variables,omitempty" toml:"variables,omitempty"`           // Variables to pass to template
+	Parallel      *bool          `yaml:"parallel,omitempty" toml:"parallel,omitempty"`             // Run in parallel (default: true)
+	MaxConcurrent string         `yaml:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"` // Limit concurrent iterations (supports variables like "{{max_agents}}")
+	Join          *bool          `yaml:"join,omitempty" toml:"join,omitempty"`                     // Wait for all iterations (default: true)
 }
 
 // IsParallel returns whether iterations should run in parallel (default: true).

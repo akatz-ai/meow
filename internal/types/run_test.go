@@ -33,7 +33,7 @@ func TestRunStatus(t *testing.T) {
 }
 
 func TestNewRun(t *testing.T) {
-	vars := map[string]string{"agent": "claude-1"}
+	vars := map[string]any{"agent": "claude-1"}
 	run := NewRun("run-123", "test.meow.toml", vars)
 
 	if run.ID != "run-123" {

@@ -57,7 +57,7 @@ type Run struct {
 	OrchestratorPID int `yaml:"orchestrator_pid,omitempty"` // Process ID of running orchestrator (0 if not running)
 
 	// Configuration
-	Variables      map[string]string `yaml:"variables,omitempty"`
+	Variables      map[string]any `yaml:"variables,omitempty"`
 	DefaultAdapter string            `yaml:"default_adapter,omitempty"` // Run-level default adapter
 
 	// Conditional cleanup scripts (from template) - all are opt-in, no cleanup by default
@@ -77,7 +77,7 @@ type Run struct {
 }
 
 // NewRun creates a new run instance.
-func NewRun(id, template string, vars map[string]string) *Run {
+func NewRun(id, template string, vars map[string]any) *Run {
 	return &Run{
 		ID:        id,
 		Template:  template,
