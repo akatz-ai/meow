@@ -47,6 +47,7 @@ type Run struct {
 	// Identity
 	ID       string `yaml:"id"`       // Unique identifier (e.g., "run-abc123")
 	Template string `yaml:"template"` // Source template path
+	Scope    string `yaml:"scope,omitempty"` // Resolution scope: "project", "user", or "embedded"
 
 	// Lifecycle
 	Status    RunStatus  `yaml:"status"`

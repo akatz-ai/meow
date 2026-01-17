@@ -24,6 +24,7 @@ type workflowEntry struct {
 	Description string
 	Source      string
 	Path        string
+	Conflict    bool // True if same name exists in another scope
 }
 
 var lsCmd = &cobra.Command{
@@ -210,27 +211,41 @@ func workflowDescription(module *workflow.Module) string {
 }
 
 func mergeWorkflowEntries(projectEntries, userEntries []workflowEntry) []workflowEntry {
-	seen := make(map[string]bool)
+	// Build sets of names for conflict detection
+	projectNames := make(map[string]bool)
+	for _, e := range projectEntries {
+		projectNames[e.Name] = true
+	}
+	userNames := make(map[string]bool)
+	for _, e := range userEntries {
+		userNames[e.Name] = true
+	}
+
 	entries := make([]workflowEntry, 0, len(projectEntries)+len(userEntries))
 
+	// Add project entries, marking conflicts
 	for _, entry := range projectEntries {
-		if seen[entry.Name] {
-			continue
+		if userNames[entry.Name] {
+			entry.Conflict = true
 		}
-		seen[entry.Name] = true
 		entries = append(entries, entry)
 	}
 
+	// Add user entries, marking conflicts
 	for _, entry := range userEntries {
-		if seen[entry.Name] {
-			continue
+		if projectNames[entry.Name] {
+			entry.Conflict = true
 		}
-		seen[entry.Name] = true
 		entries = append(entries, entry)
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name < entries[j].Name
+		// Sort by name first, then by source (project before user)
+		if entries[i].Name != entries[j].Name {
+			return entries[i].Name < entries[j].Name
+		}
+		// project < user for consistent ordering
+		return entries[i].Source < entries[j].Source
 	})
 
 	return entries
@@ -241,10 +256,29 @@ func printWorkflowsTable(entries []workflowEntry) error {
 	fmt.Fprintln(w, "WORKFLOW\tDESCRIPTION\tSOURCE")
 
 	for _, entry := range entries {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, entry.Description, entry.Source)
+		source := entry.Source
+		if entry.Conflict {
+			source += " *" // Mark conflicts with asterisk
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, entry.Description, source)
 	}
 
-	return w.Flush()
+	// Print legend if there are conflicts
+	hasConflict := false
+	for _, entry := range entries {
+		if entry.Conflict {
+			hasConflict = true
+			break
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if hasConflict {
+		fmt.Println("\n* Conflict: workflow exists in multiple scopes. Use @scope to specify (e.g., meow run workflow@user)")
+	}
+
+	return nil
 }
 
 func printWorkflowsJSON(entries []workflowEntry) error {
@@ -253,6 +287,7 @@ func printWorkflowsJSON(entries []workflowEntry) error {
 		Description string `json:"description,omitempty"`
 		Source      string `json:"source"`
 		Path        string `json:"path"`
+		Conflict    bool   `json:"conflict,omitempty"`
 	}
 
 	out := make([]workflowJSON, len(entries))
@@ -262,6 +297,7 @@ func printWorkflowsJSON(entries []workflowEntry) error {
 			Description: entry.Description,
 			Source:      entry.Source,
 			Path:        entry.Path,
+			Conflict:    entry.Conflict,
 		}
 	}
 

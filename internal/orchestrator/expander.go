@@ -53,12 +53,24 @@ type ExpandOptions struct {
 type FileTemplateExpander struct {
 	// BaseDir is the project root directory
 	BaseDir string
+
+	// Scope restricts template resolution to a specific search hierarchy.
+	// See workflow.Scope for documentation.
+	Scope workflow.Scope
 }
 
 // NewFileTemplateExpander creates a new FileTemplateExpander.
 func NewFileTemplateExpander(baseDir string) *FileTemplateExpander {
 	return &FileTemplateExpander{
 		BaseDir: baseDir,
+	}
+}
+
+// NewFileTemplateExpanderWithScope creates a new FileTemplateExpander with scope restriction.
+func NewFileTemplateExpanderWithScope(baseDir string, scope workflow.Scope) *FileTemplateExpander {
+	return &FileTemplateExpander{
+		BaseDir: baseDir,
+		Scope:   scope,
 	}
 }
 
@@ -146,7 +158,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 			}
 			resolvedModulePath = modulePath
 		} else {
-			loader := workflow.NewLoader(e.BaseDir)
+			loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
 			loaded, err := loader.LoadWorkflow(templateRef)
 			if err != nil {
 				return nil, err
@@ -175,7 +187,7 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 		resolvedModulePath = modulePath
 	} else {
-		loader := workflow.NewLoader(e.BaseDir)
+		loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
 		loaded, err := loader.LoadWorkflow(templateRef)
 		if err != nil {
 			return nil, err
@@ -276,6 +288,14 @@ type TemplateExpanderAdapter struct {
 func NewTemplateExpanderAdapter(baseDir string) *TemplateExpanderAdapter {
 	return &TemplateExpanderAdapter{
 		Expander: NewFileTemplateExpander(baseDir),
+	}
+}
+
+// NewTemplateExpanderAdapterWithScope creates a new adapter with scope restriction.
+// All template expansions will be restricted to the specified scope hierarchy.
+func NewTemplateExpanderAdapterWithScope(baseDir string, scope workflow.Scope) *TemplateExpanderAdapter {
+	return &TemplateExpanderAdapter{
+		Expander: NewFileTemplateExpanderWithScope(baseDir, scope),
 	}
 }
 

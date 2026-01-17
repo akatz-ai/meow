@@ -194,6 +194,153 @@ func TestWorkflowNotFoundError_Error(t *testing.T) {
 	}
 }
 
+func TestWorkflowNotFoundError_WithScope(t *testing.T) {
+	err := &WorkflowNotFoundError{
+		Ref:      "missing",
+		Searched: []string{"/a/b/c.meow.toml"},
+		Scope:    ScopeUser,
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "scope: user") {
+		t.Errorf("Error message should contain scope info: %s", msg)
+	}
+}
+
+// Scope-aware loader tests
+
+func TestNewLoaderWithScope(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	loader := NewLoaderWithScope(projectDir, ScopeUser)
+	if loader.Scope != ScopeUser {
+		t.Fatalf("Scope = %s, want user", loader.Scope)
+	}
+}
+
+func TestLoader_ScopeUser_SkipsProject(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	// Create workflow in both locations
+	projectPath := filepath.Join(projectDir, ".meow", "workflows", "shared.meow.toml")
+	userPath := filepath.Join(userHome, ".meow", "workflows", "shared.meow.toml")
+
+	writeModuleFile(t, projectPath, "project version", false)
+	writeModuleFile(t, userPath, "user version", false)
+
+	// User scope should skip project and find user version
+	loader := NewLoaderWithScope(projectDir, ScopeUser)
+	result, err := loader.LoadWorkflow("shared")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Source != "user" {
+		t.Fatalf("Source = %s, want user (should skip project)", result.Source)
+	}
+	if result.Workflow.Description != "user version" {
+		t.Fatalf("Description = %s, want 'user version'", result.Workflow.Description)
+	}
+}
+
+func TestLoader_ScopeUser_NotFoundWhenOnlyInProject(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	// Create workflow only in project
+	projectPath := filepath.Join(projectDir, ".meow", "workflows", "project-only.meow.toml")
+	writeModuleFile(t, projectPath, "project only", false)
+
+	// User scope should not find it
+	loader := NewLoaderWithScope(projectDir, ScopeUser)
+	_, err := loader.LoadWorkflow("project-only")
+	if err == nil {
+		t.Fatal("Expected error: workflow exists only in project scope")
+	}
+
+	notFoundErr, ok := err.(*WorkflowNotFoundError)
+	if !ok {
+		t.Fatalf("Expected WorkflowNotFoundError, got %T", err)
+	}
+	if notFoundErr.Scope != ScopeUser {
+		t.Fatalf("Scope in error = %s, want user", notFoundErr.Scope)
+	}
+}
+
+func TestLoader_ScopeProject_FindsBoth(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	// Create workflow only in user
+	userPath := filepath.Join(userHome, ".meow", "workflows", "user-only.meow.toml")
+	writeModuleFile(t, userPath, "user only", false)
+
+	// Project scope should still find user workflows as fallback
+	loader := NewLoaderWithScope(projectDir, ScopeProject)
+	result, err := loader.LoadWorkflow("user-only")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Source != "user" {
+		t.Fatalf("Source = %s, want user (project scope falls back to user)", result.Source)
+	}
+}
+
+func TestScope_SearchMethods(t *testing.T) {
+	tests := []struct {
+		scope           Scope
+		searchesProject bool
+		searchesUser    bool
+		searchesEmbed   bool
+	}{
+		{"", true, true, true},
+		{ScopeProject, true, true, true},
+		{ScopeUser, false, true, true},
+		{ScopeEmbedded, false, false, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.scope), func(t *testing.T) {
+			if tc.scope.SearchesProject() != tc.searchesProject {
+				t.Errorf("SearchesProject() = %v, want %v", tc.scope.SearchesProject(), tc.searchesProject)
+			}
+			if tc.scope.SearchesUser() != tc.searchesUser {
+				t.Errorf("SearchesUser() = %v, want %v", tc.scope.SearchesUser(), tc.searchesUser)
+			}
+			if tc.scope.SearchesEmbedded() != tc.searchesEmbed {
+				t.Errorf("SearchesEmbedded() = %v, want %v", tc.scope.SearchesEmbedded(), tc.searchesEmbed)
+			}
+		})
+	}
+}
+
+func TestScope_Valid(t *testing.T) {
+	validScopes := []Scope{"", ScopeProject, ScopeUser, ScopeEmbedded}
+	for _, s := range validScopes {
+		if !s.Valid() {
+			t.Errorf("Scope %q should be valid", s)
+		}
+	}
+
+	invalidScopes := []Scope{"invalid", "local", "global"}
+	for _, s := range invalidScopes {
+		if s.Valid() {
+			t.Errorf("Scope %q should be invalid", s)
+		}
+	}
+}
+
 // LoadContext tests
 
 func TestNewLoadContext(t *testing.T) {

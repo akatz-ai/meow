@@ -30,6 +30,13 @@ type Loader struct {
 	// EmbeddedDir is the subdirectory in EmbeddedFS
 	// Default: "workflows"
 	EmbeddedDir string
+
+	// Scope restricts resolution to a specific search hierarchy.
+	// Empty means no restriction (search all: project -> user -> embedded).
+	// ScopeProject searches: project -> user -> embedded
+	// ScopeUser searches: user -> embedded (never project)
+	// ScopeEmbedded searches: embedded only
+	Scope Scope
 }
 
 // WorkflowLocation describes where a workflow reference resolved.
@@ -60,6 +67,14 @@ func NewLoader(projectDir string) *Loader {
 		UserDir:     userDir,
 		EmbeddedDir: "workflows",
 	}
+}
+
+// NewLoaderWithScope creates a loader restricted to a specific scope hierarchy.
+// See Scope type for search behavior documentation.
+func NewLoaderWithScope(projectDir string, scope Scope) *Loader {
+	loader := NewLoader(projectDir)
+	loader.Scope = scope
+	return loader
 }
 
 // LoadWorkflow loads a workflow by reference, returning its module and metadata.
@@ -93,10 +108,10 @@ func (l *Loader) LoadWorkflow(ref string) (*LoadedWorkflow, error) {
 }
 
 // ResolveWorkflow returns the path and workflow name for a reference.
-// Search order:
-// 1. Project: {projectDir}/.meow/workflows/{path}.meow.toml
-// 2. User: {userDir}/workflows/{path}.meow.toml
-// 3. Embedded: workflows/{path}.meow.toml (from EmbeddedFS)
+// Search order depends on the Scope setting:
+//   - ScopeProject or empty: project -> user -> embedded
+//   - ScopeUser: user -> embedded (never project)
+//   - ScopeEmbedded: embedded only
 func (l *Loader) ResolveWorkflow(ref string) (*WorkflowLocation, error) {
 	fileRef, workflowName, err := parseWorkflowRef(ref)
 	if err != nil {
@@ -105,28 +120,31 @@ func (l *Loader) ResolveWorkflow(ref string) (*WorkflowLocation, error) {
 
 	filename := fileRef + ".meow.toml"
 
-	if l.ProjectDir != "" {
+	// Project: only if scope allows it
+	if l.Scope.SearchesProject() && l.ProjectDir != "" {
 		path := filepath.Join(l.ProjectDir, ".meow", "workflows", filename)
 		if fileExists(path) {
 			return &WorkflowLocation{Path: path, Source: "project", Name: workflowName}, nil
 		}
 	}
 
-	if l.UserDir != "" {
+	// User: only if scope allows it
+	if l.Scope.SearchesUser() && l.UserDir != "" {
 		path := filepath.Join(l.UserDir, "workflows", filename)
 		if fileExists(path) {
 			return &WorkflowLocation{Path: path, Source: "user", Name: workflowName}, nil
 		}
 	}
 
-	if EmbeddedFS != (embed.FS{}) {
+	// Embedded: always searched as fallback
+	if l.Scope.SearchesEmbedded() && EmbeddedFS != (embed.FS{}) {
 		embeddedPath := path.Join(l.EmbeddedDir, filepath.ToSlash(filename))
 		if _, err := fs.Stat(EmbeddedFS, embeddedPath); err == nil {
 			return &WorkflowLocation{Path: embeddedPath, Source: "embedded", Name: workflowName}, nil
 		}
 	}
 
-	return nil, &WorkflowNotFoundError{Ref: ref, Searched: l.searchPaths(fileRef)}
+	return nil, &WorkflowNotFoundError{Ref: ref, Searched: l.searchPaths(fileRef), Scope: l.Scope}
 }
 
 func (l *Loader) loadModule(location *WorkflowLocation) (*Module, error) {
@@ -180,13 +198,15 @@ func (l *Loader) searchPaths(fileRef string) []string {
 	filename := fileRef + ".meow.toml"
 	var paths []string
 
-	if l.ProjectDir != "" {
+	if l.Scope.SearchesProject() && l.ProjectDir != "" {
 		paths = append(paths, filepath.Join(l.ProjectDir, ".meow", "workflows", filename))
 	}
-	if l.UserDir != "" {
+	if l.Scope.SearchesUser() && l.UserDir != "" {
 		paths = append(paths, filepath.Join(l.UserDir, "workflows", filename))
 	}
-	paths = append(paths, "<embedded>/"+path.Join(l.EmbeddedDir, filepath.ToSlash(filename)))
+	if l.Scope.SearchesEmbedded() {
+		paths = append(paths, "<embedded>/"+path.Join(l.EmbeddedDir, filepath.ToSlash(filename)))
+	}
 
 	return paths
 }
@@ -195,10 +215,15 @@ func (l *Loader) searchPaths(fileRef string) []string {
 type WorkflowNotFoundError struct {
 	Ref      string
 	Searched []string
+	Scope    Scope // Scope restriction that was applied (empty if none)
 }
 
 func (e *WorkflowNotFoundError) Error() string {
-	return fmt.Sprintf("workflow %q not found in: %v", e.Ref, e.Searched)
+	msg := fmt.Sprintf("workflow %q not found in: %v", e.Ref, e.Searched)
+	if e.Scope != "" {
+		msg += fmt.Sprintf(" (scope: %s)", e.Scope)
+	}
+	return msg
 }
 
 // LoadContext tracks state during template/module loading for cycle detection

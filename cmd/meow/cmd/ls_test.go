@@ -176,7 +176,7 @@ func TestLsPathArgument(t *testing.T) {
 	}
 }
 
-func TestLsProjectOverridesUser(t *testing.T) {
+func TestLsShowsConflicts(t *testing.T) {
 	tmpDir := t.TempDir()
 	userHome := t.TempDir()
 
@@ -198,14 +198,26 @@ func TestLsProjectOverridesUser(t *testing.T) {
 		t.Fatalf("runLs failed: %v", err)
 	}
 
+	// Both versions should be shown
 	if !strings.Contains(output, "shared") {
 		t.Fatalf("Expected shared workflow in output: %s", output)
 	}
 	if !strings.Contains(output, "project") {
 		t.Fatalf("Expected project source for shared workflow: %s", output)
 	}
-	if strings.Contains(output, "user") {
-		t.Fatalf("Did not expect user source for shadowed workflow: %s", output)
+	if !strings.Contains(output, "user") {
+		t.Fatalf("Expected user source for shared workflow: %s", output)
+	}
+	// Both should be marked with conflict indicator
+	if !strings.Contains(output, "project *") {
+		t.Fatalf("Expected conflict marker on project workflow: %s", output)
+	}
+	if !strings.Contains(output, "user *") {
+		t.Fatalf("Expected conflict marker on user workflow: %s", output)
+	}
+	// Should show the hint about @scope
+	if !strings.Contains(output, "@scope") {
+		t.Fatalf("Expected @scope hint in output: %s", output)
 	}
 }
 

@@ -69,7 +69,6 @@ func init() {
 
 func runRun(cmd *cobra.Command, args []string) error {
 	templateRef := args[0]
-	workflowRef := templateRef
 	workflowName := runWorkflow
 	ctx := context.Background()
 
@@ -110,9 +109,15 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating runs dir: %w", err)
 	}
 
-	fileRef := templateRef
-	if strings.Contains(templateRef, "#") {
-		parts := strings.SplitN(templateRef, "#", 2)
+	// Parse @scope suffix (e.g., "sprint@user" or "lib/tdd@project#runner")
+	workflowRefParsed, explicitScope, err := parseWorkflowRefWithScope(templateRef)
+	if err != nil {
+		return err
+	}
+
+	fileRef := workflowRefParsed
+	if strings.Contains(workflowRefParsed, "#") {
+		parts := strings.SplitN(workflowRefParsed, "#", 2)
 		fileRef = strings.TrimSpace(parts[0])
 		workflowName = strings.TrimSpace(parts[1])
 		if fileRef == "" || workflowName == "" {
@@ -125,9 +130,14 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	var module *workflow.Module
 	var templatePath string
+	var resolvedScope workflow.Scope
 	isExplicitPath := filepath.IsAbs(fileRef) || strings.HasPrefix(fileRef, ".") || strings.HasSuffix(fileRef, ".toml")
 
 	if isExplicitPath {
+		// Explicit paths don't support @scope (scope is determined by path location)
+		if explicitScope != "" {
+			return fmt.Errorf("@scope syntax cannot be used with explicit file paths: %s", templateRef)
+		}
 		templatePath = fileRef
 		if !filepath.IsAbs(templatePath) {
 			templatePath = filepath.Join(dir, templatePath)
@@ -145,16 +155,30 @@ func runRun(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("parsing template: %w", err)
 		}
+		// Determine scope from path location
+		resolvedScope = scopeFromPath(dir, templatePath)
 	} else {
-		loader := workflow.NewLoader(dir)
-		loaded, err := loader.LoadWorkflow(workflowRef)
+		// Use scoped loader if explicit scope provided
+		var loader *workflow.Loader
+		if explicitScope != "" {
+			loader = workflow.NewLoaderWithScope(dir, explicitScope)
+		} else {
+			loader = workflow.NewLoader(dir)
+		}
+		loaded, err := loader.LoadWorkflow(workflowRefParsed)
 		if err != nil {
-			return fmt.Errorf("resolving workflow %q: %w", workflowRef, err)
+			return fmt.Errorf("resolving workflow %q: %w", workflowRefParsed, err)
 		}
 		templatePath = loaded.Path
 		module = loaded.Module
 		if !cmd.Flags().Changed("workflow") {
 			workflowName = loaded.Name
+		}
+		// Use explicit scope if provided, otherwise use where it was found
+		if explicitScope != "" {
+			resolvedScope = explicitScope
+		} else {
+			resolvedScope = workflow.Scope(loaded.Source)
 		}
 	}
 
@@ -227,6 +251,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Create a Workflow object
 	wf := types.NewRun(workflowID, templatePath, vars)
+	wf.Scope = string(resolvedScope)
 	if wf.DefaultAdapter == "" && cfg.Agent.DefaultAdapter != "" {
 		wf.DefaultAdapter = cfg.Agent.DefaultAdapter
 	}
@@ -306,8 +331,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Passing nil registry uses the default (project + global adapters)
 	agentManager := orchestrator.NewTmuxAgentManager(dir, nil, logger)
 
-	// Create template expander
-	expander := orchestrator.NewTemplateExpanderAdapter(dir)
+	// Create template expander with scope awareness
+	expander := orchestrator.NewTemplateExpanderAdapterWithScope(dir, resolvedScope)
 
 	// Create orchestrator with agent support
 	orch := orchestrator.New(cfg, store, agentManager, shellRunner, expander, logger)
@@ -449,4 +474,69 @@ func initMinimalFromRun(dir string) error {
 	}
 	fmt.Println("Created .meow/runs/ and .meow/logs/")
 	return nil
+}
+
+// scopeFromPath determines the scope based on where a template file is located.
+func scopeFromPath(projectDir, templatePath string) workflow.Scope {
+	// Check if it's in the project's .meow/workflows/
+	projectWorkflows := filepath.Join(projectDir, ".meow", "workflows")
+	if strings.HasPrefix(templatePath, projectWorkflows) {
+		return workflow.ScopeProject
+	}
+
+	// Check if it's in user's ~/.meow/workflows/
+	if home, err := os.UserHomeDir(); err == nil {
+		userWorkflows := filepath.Join(home, ".meow", "workflows")
+		if strings.HasPrefix(templatePath, userWorkflows) {
+			return workflow.ScopeUser
+		}
+	}
+
+	// Default to project scope for explicit paths outside known locations
+	return workflow.ScopeProject
+}
+
+// parseWorkflowRefWithScope extracts an optional @scope suffix from a workflow reference.
+// Supports formats like:
+//   - "sprint" -> ref="sprint", scope=""
+//   - "sprint@user" -> ref="sprint", scope="user"
+//   - "lib/tdd@project#runner" -> ref="lib/tdd#runner", scope="project"
+func parseWorkflowRefWithScope(ref string) (workflowRef string, scope workflow.Scope, err error) {
+	// Handle @scope before #workflow
+	// Pattern: fileRef@scope#workflow or fileRef@scope or fileRef#workflow or fileRef
+	atIdx := strings.LastIndex(ref, "@")
+	if atIdx == -1 {
+		// No scope specified
+		return ref, "", nil
+	}
+
+	// Extract everything after @
+	afterAt := ref[atIdx+1:]
+	beforeAt := ref[:atIdx]
+
+	// Check if there's a #workflow part after the @scope
+	hashIdx := strings.Index(afterAt, "#")
+	var scopeStr string
+	if hashIdx != -1 {
+		scopeStr = afterAt[:hashIdx]
+		// Reconstruct ref with #workflow but without @scope
+		workflowRef = beforeAt + afterAt[hashIdx:]
+	} else {
+		scopeStr = afterAt
+		workflowRef = beforeAt
+	}
+
+	// Validate scope
+	switch scopeStr {
+	case "project":
+		scope = workflow.ScopeProject
+	case "user":
+		scope = workflow.ScopeUser
+	case "embedded":
+		scope = workflow.ScopeEmbedded
+	default:
+		return "", "", fmt.Errorf("invalid scope %q in %q (valid: project, user, embedded)", scopeStr, ref)
+	}
+
+	return workflowRef, scope, nil
 }
