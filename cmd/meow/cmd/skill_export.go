@@ -50,6 +50,11 @@ func init() {
 func runSkillExport(cmd *cobra.Command, args []string) error {
 	skillName := args[0]
 
+	// Currently only marketplace export is supported
+	if !skillExportForMarketplace {
+		return fmt.Errorf("--for-marketplace flag is required (only marketplace export is currently supported)")
+	}
+
 	// Resolve repo path
 	repoPath := skillExportRepo
 	if repoPath == "" {
@@ -182,8 +187,8 @@ func doExport(cmd *cobra.Command, s *skill.Skill, skillName, skillDir, repoPath,
 		srcPath := filepath.Join(repoPath, wfPath)
 		// Preserve directory structure relative to "workflows/"
 		relPath := wfPath
-		if strings.HasPrefix(relPath, "workflows/") {
-			relPath = strings.TrimPrefix(relPath, "workflows/")
+		if trimmed, ok := strings.CutPrefix(relPath, "workflows/"); ok {
+			relPath = trimmed
 		}
 		dstPath := filepath.Join(workflowOutDir, relPath)
 
