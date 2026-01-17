@@ -85,11 +85,9 @@ type VarContext struct {
 
 	// CurrentStepID is set during substitution to enable scope-walk resolution.
 	// When set, step output references can be resolved relative to this step's prefix.
-	// TODO(meow-h2v7): Implement scope-walk resolution using this field.
 	CurrentStepID string
 
 	// ScopeWalkEnabled enables scope-walk for step output references.
-	// TODO(meow-h2v7): Implement scope-walk resolution using this field.
 	ScopeWalkEnabled bool
 }
 
@@ -156,7 +154,6 @@ func (c *VarContext) SetStepLookup(fn StepLookupFunc) {
 // When called, step output references will be resolved relative to this step's prefix.
 // For example, if currentStepID is "agents.0.work" and the reference is "setup",
 // scope-walk will try: "agents.0.setup", then "agents.setup", then "setup".
-// TODO(meow-h2v7): Implement scope-walk in resolveOutput to use these fields.
 func (c *VarContext) SetCurrentStep(stepID string) {
 	c.CurrentStepID = stepID
 	c.ScopeWalkEnabled = true
