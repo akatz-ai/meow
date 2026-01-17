@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// stringifyValue converts any value to a string representation.
+// StringifyValue converts any value to a string representation.
 // For maps and slices, it JSON-marshals them instead of using Go's %v format.
 // This prevents outputs like "map[foo:bar]" and produces valid JSON like {"foo":"bar"}.
-func stringifyValue(val any) string {
+func StringifyValue(val any) string {
 	if val == nil {
 		return ""
 	}
@@ -105,7 +105,7 @@ func (c *VarContext) Set(name string, value any) {
 // Get returns the value of a user-defined variable, or empty string if not set.
 func (c *VarContext) Get(name string) string {
 	if val, ok := c.Variables[name]; ok {
-		return stringifyValue(val)
+		return StringifyValue(val)
 	}
 	return ""
 }
@@ -170,7 +170,7 @@ func (c *VarContext) Substitute(input string) (string, error) {
 				return match // Keep original on error
 			}
 
-			return stringifyValue(value)
+			return StringifyValue(value)
 		})
 
 		if newResult == result {
@@ -499,7 +499,7 @@ func (c *VarContext) SubstituteForShell(input string) (string, error) {
 		}
 
 		// Shell-escape the value to prevent injection
-		return ShellEscape(stringifyValue(value))
+		return ShellEscape(StringifyValue(value))
 	})
 
 	return result, lastErr

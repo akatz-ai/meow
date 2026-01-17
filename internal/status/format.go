@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 )
 
 // FormatOptions controls output formatting.
@@ -100,7 +101,7 @@ func formatHeader(summary *WorkflowSummary, opts FormatOptions) string {
 	if len(summary.Variables) > 0 && !opts.Quiet {
 		b.WriteString("\n\nVariables:")
 		for k, v := range summary.Variables {
-			b.WriteString(fmt.Sprintf("\n  %s = %s", k, v))
+			b.WriteString(fmt.Sprintf("\n  %s = %s", k, workflow.StringifyValue(v)))
 		}
 	}
 

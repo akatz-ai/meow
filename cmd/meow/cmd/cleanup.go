@@ -16,6 +16,7 @@ import (
 	"github.com/meow-stack/meow-machine/internal/cli"
 	"github.com/meow-stack/meow-machine/internal/orchestrator"
 	"github.com/meow-stack/meow-machine/internal/types"
+	"github.com/meow-stack/meow-machine/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -439,7 +440,7 @@ func runCleanupScript(ctx context.Context, wf *types.Run, script string, workdir
 	// Set environment variables from workflow
 	cmd.Env = os.Environ()
 	for k, v := range wf.Variables {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, workflow.StringifyValue(v)))
 	}
 	// Add workflow ID as an environment variable
 	cmd.Env = append(cmd.Env, fmt.Sprintf("MEOW_WORKFLOW=%s", wf.ID))
