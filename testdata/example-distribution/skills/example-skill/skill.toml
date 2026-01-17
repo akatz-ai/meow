@@ -7,9 +7,9 @@ description = "Example skill demonstrating MEOW distribution patterns"
 version = "1.0.0"
 
 # Target harnesses for skill installation
-[targets]
-claude = true
-opencode = true
+[targets.claude]
+
+[targets.opencode]
 
 # Export configuration for marketplace distribution
 [export]

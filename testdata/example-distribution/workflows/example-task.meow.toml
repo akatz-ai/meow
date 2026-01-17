@@ -1,57 +1,47 @@
 # Example Task Workflow
-# Demonstrates a simple task execution pattern with helper workflows
+# Demonstrates a simple task execution pattern
 #
 # Usage:
-#   meow run example-task --var task="Build a TODO app"
-#   meow run example-task --var task="Fix bug in auth" --var priority="high"
+#   meow run testdata/example-distribution/workflows/example-task --var task="Build a TODO app"
+#   meow run testdata/example-distribution/workflows/example-task --var task="Fix bug in auth" --var priority="high"
 
-[main]
+[meta]
 name = "example-task"
 description = "Execute a task with validation and logging"
 
-[main.variables]
+[variables]
 task = { description = "Task description to execute" }
 priority = { default = "medium", description = "Task priority (low/medium/high)" }
 
-# Step 1: Validate inputs using helper
-[[main.steps]]
+# Step 1: Validate task input
+[[steps]]
 id = "validate"
-executor = "expand"
-description = "Validate task inputs"
-template = "lib/example-helpers.meow.toml"
-expand_from = "validate-inputs"
-outputs = ["valid"]
-
-[main.steps.variables]
-input = "{{task}}"
-type = "task"
+executor = "shell"
+command = """if [ -z "{{task}}" ]; then
+  echo "Error: task input cannot be empty" >&2
+  exit 1
+fi
+echo "Validation passed""""
 
 # Step 2: Log task start
-[[main.steps]]
+[[steps]]
 id = "log-start"
 executor = "shell"
-description = "Log task start"
 needs = ["validate"]
 command = "echo '[{{priority}}] Starting task: {{task}}'"
 
 # Step 3: Execute task (placeholder - would call actual work)
-[[main.steps]]
+[[steps]]
 id = "execute"
 executor = "shell"
-description = "Execute the task"
 needs = ["log-start"]
 command = """echo 'Executing: {{task}}'
 sleep 1
 echo 'Task execution completed'"""
 
-# Step 4: Log completion using helper
-[[main.steps]]
+# Step 4: Log completion
+[[steps]]
 id = "log-complete"
-executor = "expand"
-description = "Log task completion"
+executor = "shell"
 needs = ["execute"]
-template = "lib/example-helpers.meow.toml"
-expand_from = "log-completion"
-
-[main.steps.variables]
-message = "Task completed: {{task}}"
+command = "echo '[COMPLETE] Task completed: {{task}}'"
