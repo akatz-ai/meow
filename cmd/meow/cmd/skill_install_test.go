@@ -527,7 +527,7 @@ func TestSkillInstallOutputMessage(t *testing.T) {
 	if !strings.Contains(output, "output-skill") {
 		t.Errorf("output should mention skill name, got: %q", output)
 	}
-	if !strings.Contains(output, "Install") || !strings.Contains(output, "install") {
+	if !strings.Contains(strings.ToLower(output), "install") {
 		t.Errorf("output should indicate installation, got: %q", output)
 	}
 }
