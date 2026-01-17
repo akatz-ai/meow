@@ -116,7 +116,7 @@ needs = ["implement"]
 		baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 		// Bake with variables
-		result, err := baker.BakeWorkflow(impl, map[string]string{
+		result, err := baker.BakeWorkflow(impl, map[string]any{
 			"work_bead": "bd-task-456",
 			"agent":     "claude-1",
 		})
@@ -169,7 +169,7 @@ needs = ["implement"]
 		baker := NewBaker("meow-main-123")
 		baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-		result, err := baker.BakeWorkflow(main, map[string]string{
+		result, err := baker.BakeWorkflow(main, map[string]any{
 			"agent": "claude-1",
 		})
 		if err != nil {
@@ -243,7 +243,7 @@ agent = "test-agent"
 		baker := NewBaker("meow-workflow-123")
 		baker.Now = func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-		result, err := baker.BakeWorkflow(impl, map[string]string{
+		result, err := baker.BakeWorkflow(impl, map[string]any{
 			"work_bead": "bd-123",
 			"agent":     "test",
 		})

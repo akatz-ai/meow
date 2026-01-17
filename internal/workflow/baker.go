@@ -43,7 +43,7 @@ type BakeResult struct {
 }
 
 // BakeWorkflow transforms a workflow into types.Step objects.
-func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeResult, error) {
+func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]any) (*BakeResult, error) {
 	if workflow == nil {
 		return nil, fmt.Errorf("workflow is nil")
 	}
@@ -73,8 +73,13 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]string) (*BakeR
 	// For file-type variables, read the file contents
 	for k, v := range vars {
 		if varDef, ok := workflow.Variables[k]; ok && varDef.Type == VarTypeFile {
+			// File-type variables must be strings (file paths)
+			filePath, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("file-type variable %q must be a string, got %T", k, v)
+			}
 			// Read file contents
-			content, err := os.ReadFile(v)
+			content, err := os.ReadFile(filePath)
 			if err != nil {
 				return nil, fmt.Errorf("reading file for variable %q: %w", k, err)
 			}
@@ -314,14 +319,19 @@ func (b *Baker) setExpandConfig(step *types.Step, ts *Step) error {
 		return fmt.Errorf("substitute template: %w", err)
 	}
 
-	// Substitute variable values
-	variables := make(map[string]string)
+	// Substitute variable values (preserving types for non-strings)
+	variables := make(map[string]any)
 	for k, v := range ts.Variables {
-		subV, err := b.VarContext.Substitute(v)
-		if err != nil {
-			return fmt.Errorf("substitute variable %s: %w", k, err)
+		if s, ok := v.(string); ok {
+			subV, err := b.VarContext.Substitute(s)
+			if err != nil {
+				return fmt.Errorf("substitute variable %s: %w", k, err)
+			}
+			variables[k] = subV
+		} else {
+			// Non-string values are passed through (preserving types)
+			variables[k] = v
 		}
-		variables[k] = subV
 	}
 
 	step.Expand = &types.ExpandConfig{
@@ -355,14 +365,19 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		return fmt.Errorf("substitute template: %w", err)
 	}
 
-	// Substitute variable values
-	variables := make(map[string]string)
+	// Substitute variable values (preserving types for non-strings)
+	variables := make(map[string]any)
 	for k, v := range ts.Variables {
-		subV, err := b.VarContext.Substitute(v)
-		if err != nil {
-			return fmt.Errorf("substitute variable %s: %w", k, err)
+		if s, ok := v.(string); ok {
+			subV, err := b.VarContext.Substitute(s)
+			if err != nil {
+				return fmt.Errorf("substitute variable %s: %w", k, err)
+			}
+			variables[k] = subV
+		} else {
+			// Non-string values are passed through (preserving types)
+			variables[k] = v
 		}
-		variables[k] = subV
 	}
 
 	// Convert and substitute parallel (supports bool or string like "{{parallel}}")
@@ -516,14 +531,19 @@ func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.Branch
 		}
 	}
 
-	// Substitute variable values
-	variables := make(map[string]string)
+	// Substitute variable values (preserving types for non-strings)
+	variables := make(map[string]any)
 	for k, v := range et.Variables {
-		subV, err := b.VarContext.Substitute(v)
-		if err != nil {
-			return nil, fmt.Errorf("substitute variable %s: %w", k, err)
+		if s, ok := v.(string); ok {
+			subV, err := b.VarContext.Substitute(s)
+			if err != nil {
+				return nil, fmt.Errorf("substitute variable %s: %w", k, err)
+			}
+			variables[k] = subV
+		} else {
+			// Non-string values are passed through (preserving types)
+			variables[k] = v
 		}
-		variables[k] = subV
 	}
 
 	target := &types.BranchTarget{

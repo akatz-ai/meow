@@ -196,7 +196,7 @@ func TestBakeWorkflow_ExpandExecutor(t *testing.T) {
 				ID:        "do-expand",
 				Executor:  ExecutorExpand,
 				Template:  "sub-workflow",
-				Variables: map[string]string{"task": "build"},
+				Variables: map[string]any{"task": "build"},
 			},
 		},
 	}
@@ -412,7 +412,7 @@ func TestBakeWorkflow_VariableSubstitution(t *testing.T) {
 	baker := NewBaker("run-var-001")
 	baker.Now = fixedTime
 
-	result, err := baker.BakeWorkflow(workflow, map[string]string{
+	result, err := baker.BakeWorkflow(workflow, map[string]any{
 		"target": "feature-x",
 	})
 	if err != nil {
@@ -578,7 +578,7 @@ func TestBakeWorkflow_VariableOverride(t *testing.T) {
 	baker := NewBaker("run-override-001")
 	baker.Now = fixedTime
 
-	result, err := baker.BakeWorkflow(workflow, map[string]string{
+	result, err := baker.BakeWorkflow(workflow, map[string]any{
 		"framework": "jest",
 	})
 	if err != nil {
@@ -700,7 +700,7 @@ func TestBakeWorkflow_ExpandStep(t *testing.T) {
 				ID:       "expand-impl",
 				Executor: ExecutorExpand,
 				Template: "implement",
-				Variables: map[string]string{
+				Variables: map[string]any{
 					"task": "bd-42",
 				},
 			},
@@ -805,7 +805,7 @@ func TestBakeWorkflow_ConditionWithVariable(t *testing.T) {
 	baker := NewBaker("run-cond-var-001")
 	baker.Now = fixedTime
 
-	result, err := baker.BakeWorkflow(workflow, map[string]string{
+	result, err := baker.BakeWorkflow(workflow, map[string]any{
 		"file_path": "/tmp/ready.flag",
 	})
 	if err != nil {
@@ -844,7 +844,7 @@ func TestBakeWorkflow_CodeWithVariable(t *testing.T) {
 	baker := NewBaker("run-code-var-001")
 	baker.Now = fixedTime
 
-	result, err := baker.BakeWorkflow(workflow, map[string]string{
+	result, err := baker.BakeWorkflow(workflow, map[string]any{
 		"test_name": "auth-unit-tests",
 	})
 	if err != nil {
@@ -892,7 +892,7 @@ func TestBakeWorkflow_StartStopWithVariableAssignee(t *testing.T) {
 	baker := NewBaker("run-agent-var-001")
 	baker.Now = fixedTime
 
-	result, err := baker.BakeWorkflow(workflow, map[string]string{
+	result, err := baker.BakeWorkflow(workflow, map[string]any{
 		"agent": "claude-worker-42",
 	})
 	if err != nil {
@@ -1027,7 +1027,7 @@ func TestBakeWorkflow_EmptyStringNotOverriddenByDefault(t *testing.T) {
 	baker := NewBaker("run-001")
 
 	// Explicitly set the variable to empty string
-	vars := map[string]string{
+	vars := map[string]any{
 		"with_default": "",
 	}
 
@@ -1070,7 +1070,7 @@ func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
 	baker := NewBaker("run-001")
 
 	// Test 1: Required variable set to empty string should be valid
-	vars := map[string]string{
+	vars := map[string]any{
 		"required_var": "",
 	}
 
@@ -1081,7 +1081,7 @@ func TestBakeWorkflow_RequiredValidationWithEmptyString(t *testing.T) {
 
 	// Test 2: Required variable not provided should fail
 	baker2 := NewBaker("run-002")
-	_, err = baker2.BakeWorkflow(workflow, map[string]string{})
+	_, err = baker2.BakeWorkflow(workflow, map[string]any{})
 	if err == nil {
 		t.Error("BakeWorkflow should fail when required var is not provided")
 	}
@@ -1105,7 +1105,7 @@ func TestBakeWorkflow_UnknownVariable(t *testing.T) {
 	baker := NewBaker("run-unknown-001")
 
 	// Test 1: Unknown variable with typo should fail with suggestion
-	_, err := baker.BakeWorkflow(workflow, map[string]string{
+	_, err := baker.BakeWorkflow(workflow, map[string]any{
 		"adapater": "claude-sonnet", // typo: adapater vs adapter
 	})
 	if err == nil {
@@ -1124,7 +1124,7 @@ func TestBakeWorkflow_UnknownVariable(t *testing.T) {
 
 	// Test 2: Completely unknown variable (no similar match)
 	baker2 := NewBaker("run-unknown-002")
-	_, err = baker2.BakeWorkflow(workflow, map[string]string{
+	_, err = baker2.BakeWorkflow(workflow, map[string]any{
 		"xyz_totally_unknown": "value",
 	})
 	if err == nil {
@@ -1140,7 +1140,7 @@ func TestBakeWorkflow_UnknownVariable(t *testing.T) {
 
 	// Test 3: Known variable should work
 	baker3 := NewBaker("run-known-001")
-	_, err = baker3.BakeWorkflow(workflow, map[string]string{
+	_, err = baker3.BakeWorkflow(workflow, map[string]any{
 		"adapter": "claude-sonnet",
 	})
 	if err != nil {

@@ -3041,7 +3041,7 @@ func TestResolveStepOutputRefs_ExecutorExpand(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: "lib/protocols/{{resolve-protocol.outputs.resolved_protocol}}",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"protocol": "{{resolve-protocol.outputs.resolved_protocol}}",
 			},
 		},
@@ -3092,7 +3092,7 @@ func TestResolveStepOutputRefs_WithScopeWalk(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: "lib/protocols/{{resolve-protocol.outputs.resolved_protocol}}",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"protocol": "{{resolve-protocol.outputs.resolved_protocol}}",
 			},
 		},
@@ -3145,13 +3145,13 @@ func TestResolveStepOutputRefs_ExecutorBranch(t *testing.T) {
 			Condition: "true",
 			OnTrue: &types.BranchTarget{
 				Template: "deploy-template",
-				Variables: map[string]string{
+				Variables: map[string]any{
 					"environment": "{{check-env.outputs.env_type}}",
 				},
 			},
 			OnFalse: &types.BranchTarget{
 				Template: "skip-template",
-				Variables: map[string]string{
+				Variables: map[string]any{
 					"reason": "{{check-env.outputs.env_type}}-not-ready",
 				},
 			},

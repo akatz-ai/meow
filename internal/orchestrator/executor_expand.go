@@ -17,7 +17,7 @@ type TemplateLoader interface {
 	// - "file#workflow" - external file, specific workflow
 	// - "file" - external file, workflow named "main"
 	// The variables parameter allows passing values to satisfy required template variables.
-	Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error)
+	Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error)
 }
 
 // ExpansionLimits defines resource limits for expansion.
@@ -54,7 +54,7 @@ func ExecuteExpand(
 	ctx context.Context,
 	step *types.Step,
 	loader TemplateLoader,
-	variables map[string]string,
+	variables map[string]any,
 	depth int,
 	limits *ExpansionLimits,
 ) (*ExecuteExpandResult, *types.StepError) {
@@ -98,7 +98,7 @@ func ExecuteExpand(
 	}
 
 	// Merge variables: workflow variables + expand step variables
-	mergedVars := make(map[string]string)
+	mergedVars := make(map[string]any)
 	for k, v := range variables {
 		mergedVars[k] = v
 	}
@@ -229,7 +229,7 @@ func cloneExpandConfig(src *types.ExpandConfig) *types.ExpandConfig {
 		Template: src.Template,
 	}
 	if src.Variables != nil {
-		dst.Variables = make(map[string]string)
+		dst.Variables = make(map[string]any)
 		for k, v := range src.Variables {
 			dst.Variables[k] = v
 		}
@@ -259,7 +259,7 @@ func cloneBranchTarget(src *types.BranchTarget) *types.BranchTarget {
 		Template: src.Template,
 	}
 	if src.Variables != nil {
-		dst.Variables = make(map[string]string)
+		dst.Variables = make(map[string]any)
 		for k, v := range src.Variables {
 			dst.Variables[k] = v
 		}
@@ -323,7 +323,7 @@ func prefixNeeds(needs []string, parentID string, templateStepIDs map[string]boo
 }
 
 // substituteStepVariables replaces {{variable}} placeholders in step configs.
-func substituteStepVariables(step *types.Step, vars map[string]string) {
+func substituteStepVariables(step *types.Step, vars map[string]any) {
 	switch step.Executor {
 	case types.ExecutorShell:
 		if step.Shell != nil {
@@ -352,7 +352,10 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 		if step.Expand != nil {
 			step.Expand.Template = substituteVars(step.Expand.Template, vars)
 			for k, v := range step.Expand.Variables {
-				step.Expand.Variables[k] = substituteVars(v, vars)
+				if s, ok := v.(string); ok {
+					step.Expand.Variables[k] = substituteVars(s, vars)
+				}
+				// Non-string values are preserved as-is
 			}
 		}
 	case types.ExecutorBranch:
@@ -361,19 +364,25 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 			if step.Branch.OnTrue != nil {
 				step.Branch.OnTrue.Template = substituteVars(step.Branch.OnTrue.Template, vars)
 				for k, v := range step.Branch.OnTrue.Variables {
-					step.Branch.OnTrue.Variables[k] = substituteVars(v, vars)
+					if s, ok := v.(string); ok {
+						step.Branch.OnTrue.Variables[k] = substituteVars(s, vars)
+					}
 				}
 			}
 			if step.Branch.OnFalse != nil {
 				step.Branch.OnFalse.Template = substituteVars(step.Branch.OnFalse.Template, vars)
 				for k, v := range step.Branch.OnFalse.Variables {
-					step.Branch.OnFalse.Variables[k] = substituteVars(v, vars)
+					if s, ok := v.(string); ok {
+						step.Branch.OnFalse.Variables[k] = substituteVars(s, vars)
+					}
 				}
 			}
 			if step.Branch.OnTimeout != nil {
 				step.Branch.OnTimeout.Template = substituteVars(step.Branch.OnTimeout.Template, vars)
 				for k, v := range step.Branch.OnTimeout.Variables {
-					step.Branch.OnTimeout.Variables[k] = substituteVars(v, vars)
+					if s, ok := v.(string); ok {
+						step.Branch.OnTimeout.Variables[k] = substituteVars(s, vars)
+					}
 				}
 			}
 		}
@@ -383,7 +392,9 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 			step.Foreach.Template = substituteVars(step.Foreach.Template, vars)
 			step.Foreach.MaxConcurrent = substituteVars(step.Foreach.MaxConcurrent, vars)
 			for k, v := range step.Foreach.Variables {
-				step.Foreach.Variables[k] = substituteVars(v, vars)
+				if s, ok := v.(string); ok {
+					step.Foreach.Variables[k] = substituteVars(s, vars)
+				}
 			}
 		}
 	case types.ExecutorAgent:
@@ -395,7 +406,8 @@ func substituteStepVariables(step *types.Step, vars map[string]string) {
 }
 
 // substituteVars replaces {{variable}} placeholders with values from vars map.
-func substituteVars(s string, vars map[string]string) string {
+// Non-string values are converted using fmt.Sprintf("%v", val).
+func substituteVars(s string, vars map[string]any) string {
 	if !strings.Contains(s, "{{") {
 		return s
 	}
@@ -403,7 +415,13 @@ func substituteVars(s string, vars map[string]string) string {
 	result := s
 	for k, v := range vars {
 		placeholder := "{{" + k + "}}"
-		result = strings.ReplaceAll(result, placeholder, v)
+		var strVal string
+		if str, ok := v.(string); ok {
+			strVal = str
+		} else {
+			strVal = fmt.Sprintf("%v", v)
+		}
+		result = strings.ReplaceAll(result, placeholder, strVal)
 	}
 	return result
 }

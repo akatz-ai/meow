@@ -637,7 +637,10 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 		if step.Expand != nil {
 			step.Expand.Template = resolve(step.Expand.Template)
 			for k, v := range step.Expand.Variables {
-				step.Expand.Variables[k] = resolve(v)
+				if s, ok := v.(string); ok {
+					step.Expand.Variables[k] = resolve(s)
+				}
+				// Non-string values are preserved as-is
 			}
 		}
 	case types.ExecutorBranch:
@@ -646,17 +649,23 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 			// Here we resolve branch target variables
 			if step.Branch.OnTrue != nil {
 				for k, v := range step.Branch.OnTrue.Variables {
-					step.Branch.OnTrue.Variables[k] = resolve(v)
+					if s, ok := v.(string); ok {
+						step.Branch.OnTrue.Variables[k] = resolve(s)
+					}
 				}
 			}
 			if step.Branch.OnFalse != nil {
 				for k, v := range step.Branch.OnFalse.Variables {
-					step.Branch.OnFalse.Variables[k] = resolve(v)
+					if s, ok := v.(string); ok {
+						step.Branch.OnFalse.Variables[k] = resolve(s)
+					}
 				}
 			}
 			if step.Branch.OnTimeout != nil {
 				for k, v := range step.Branch.OnTimeout.Variables {
-					step.Branch.OnTimeout.Variables[k] = resolve(v)
+					if s, ok := v.(string); ok {
+						step.Branch.OnTimeout.Variables[k] = resolve(s)
+					}
 				}
 			}
 		}

@@ -15,7 +15,7 @@ func TestFormatDetailedWorkflow(t *testing.T) {
 		Template:  "test.meow.toml",
 		Status:    types.RunStatusRunning,
 		StartedAt: now,
-		Variables: map[string]string{"env": "production"},
+		Variables: map[string]any{"env": "production"},
 		StepStats: StepStats{
 			Total:   10,
 			Done:    5,

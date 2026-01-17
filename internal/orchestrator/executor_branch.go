@@ -51,7 +51,7 @@ func ExecuteBranch(
 	step *types.Step,
 	condExec ConditionExecutor,
 	loader TemplateLoader,
-	variables map[string]string,
+	variables map[string]any,
 	depth int,
 	limits *ExpansionLimits,
 ) (*BranchResult, *types.StepError) {
@@ -134,12 +134,12 @@ func expandBranchTarget(
 	parentID string,
 	target *types.BranchTarget,
 	loader TemplateLoader,
-	variables map[string]string,
+	variables map[string]any,
 	depth int,
 	limits *ExpansionLimits,
 ) (*ExecuteExpandResult, *types.StepError) {
 	// Merge target variables with workflow variables
-	mergedVars := make(map[string]string)
+	mergedVars := make(map[string]any)
 	for k, v := range variables {
 		mergedVars[k] = v
 	}
@@ -170,7 +170,7 @@ func expandBranchTarget(
 }
 
 // expandInlineSteps converts inline step definitions to Step objects.
-func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[string]string) (*ExecuteExpandResult, *types.StepError) {
+func expandInlineSteps(parentID string, inline []types.InlineStep, vars map[string]any) (*ExecuteExpandResult, *types.StepError) {
 	result := &ExecuteExpandResult{
 		ExpandedSteps: make([]*types.Step, 0, len(inline)),
 		StepIDs:       make([]string, 0, len(inline)),

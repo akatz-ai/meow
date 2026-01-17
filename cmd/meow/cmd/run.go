@@ -156,7 +156,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse variables from flags
-	vars := make(map[string]string)
+	vars := make(map[string]any)
 	for _, v := range runVars {
 		parts := strings.SplitN(v, "=", 2)
 		if len(parts) != 2 {

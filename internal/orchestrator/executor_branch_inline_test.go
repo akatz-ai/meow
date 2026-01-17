@@ -16,7 +16,7 @@ func TestExpandInlineSteps_ShellWithVariables(t *testing.T) {
 		},
 	}
 
-	vars := map[string]string{
+	vars := map[string]any{
 		"filename": "/tmp/test.txt",
 	}
 
@@ -50,7 +50,7 @@ func TestExpandInlineSteps_AgentWithVariables(t *testing.T) {
 		},
 	}
 
-	vars := map[string]string{
+	vars := map[string]any{
 		"agent_name": "claude",
 		"item":       "file.txt",
 	}

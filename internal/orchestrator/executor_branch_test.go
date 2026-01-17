@@ -277,7 +277,7 @@ func TestExecuteBranch_VariableSubstitution(t *testing.T) {
 		Branch: &types.BranchConfig{
 			Condition: "true",
 			OnTrue: &types.BranchTarget{
-				Variables: map[string]string{
+				Variables: map[string]any{
 					"target_agent": "worker-2",
 				},
 				Inline: []types.InlineStep{
@@ -292,7 +292,7 @@ func TestExecuteBranch_VariableSubstitution(t *testing.T) {
 		},
 	}
 
-	workflowVars := map[string]string{
+	workflowVars := map[string]any{
 		"task": "important-work",
 	}
 

@@ -412,9 +412,9 @@ func (c *VarContext) SubstituteStep(step *Step) (*Step, error) {
 		}
 	}
 
-	// Substitute variables map
+	// Substitute variables map (using EvalMap to preserve types)
 	if len(result.Variables) > 0 {
-		result.Variables, err = c.SubstituteMap(result.Variables)
+		result.Variables, err = c.EvalMap(result.Variables)
 		if err != nil {
 			return nil, fmt.Errorf("variables: %w", err)
 		}
@@ -462,7 +462,7 @@ func (c *VarContext) substituteExpansionTarget(target *ExpansionTarget, fieldNam
 	}
 
 	if len(result.Variables) > 0 {
-		result.Variables, err = c.SubstituteMap(result.Variables)
+		result.Variables, err = c.EvalMap(result.Variables)
 		if err != nil {
 			return nil, fmt.Errorf("%s.variables: %w", fieldName, err)
 		}

@@ -13,7 +13,7 @@ type foreachMockLoader struct {
 	loadErr error
 }
 
-func (m *foreachMockLoader) Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error) {
+func (m *foreachMockLoader) Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error) {
 	if m.loadErr != nil {
 		return nil, m.loadErr
 	}
@@ -386,7 +386,7 @@ func TestExecuteForeach_ItemsFromVariable(t *testing.T) {
 		},
 	}
 
-	variables := map[string]string{
+	variables := map[string]any{
 		"tasks": `["task-a", "task-b"]`,
 	}
 

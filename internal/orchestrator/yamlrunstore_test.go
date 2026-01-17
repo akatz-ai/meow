@@ -21,7 +21,7 @@ func TestYAMLRunStore(t *testing.T) {
 	defer store.Close()
 
 	t.Run("Create and Get", func(t *testing.T) {
-		wf := types.NewRun("run-test-1", "test.meow.toml", map[string]string{"key": "value"})
+		wf := types.NewRun("run-test-1", "test.meow.toml", map[string]any{"key": "value"})
 		wf.AddStep(&types.Step{
 			ID:       "step1",
 			Executor: types.ExecutorShell,

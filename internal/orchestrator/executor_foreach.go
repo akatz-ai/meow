@@ -21,7 +21,7 @@ type fileTemplateLoader struct {
 // Load implements TemplateLoader by using the FileTemplateExpander.
 // Templates are loaded with DeferUndefinedVariables=true so that foreach
 // can substitute item_var/index_var after cloning for each iteration.
-func (l *fileTemplateLoader) Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error) {
+func (l *fileTemplateLoader) Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error) {
 	// Create expand config with variables to satisfy required template variables
 	cfg := &types.ExpandConfig{
 		Template:  ref,
@@ -74,7 +74,7 @@ func ExecuteForeach(
 	ctx context.Context,
 	step *types.Step,
 	loader TemplateLoader,
-	variables map[string]string,
+	variables map[string]any,
 	depth int,
 	limits *ExpansionLimits,
 ) (*ExecuteForeachResult, *types.StepError) {
@@ -178,7 +178,7 @@ func ExecuteForeach(
 		result.IterationIDs = append(result.IterationIDs, iterationPrefix)
 
 		// Build iteration-specific variables
-		iterVars := make(map[string]string)
+		iterVars := make(map[string]any)
 		// Copy workflow variables
 		for k, v := range variables {
 			iterVars[k] = v
@@ -269,7 +269,7 @@ func readItemsFromFile(path string) ([]any, error) {
 // - A JSON array literal: ["a", "b", "c"]
 // - A variable reference: {{planner.outputs.tasks}}
 // - A variable reference that resolves to JSON
-func evaluateItemsExpression(expr string, variables map[string]string) ([]any, error) {
+func evaluateItemsExpression(expr string, variables map[string]any) ([]any, error) {
 	// First, substitute any variables in the expression
 	resolved := substituteVars(expr, variables)
 
@@ -295,34 +295,28 @@ func evaluateItemsExpression(expr string, variables map[string]string) ([]any, e
 // For item_var="task" and item={name: "foo", priority: 1}:
 // - task.name = "foo"
 // - task.priority = "1"
-func addFlattenedFields(vars map[string]string, prefix string, obj map[string]any) {
+func addFlattenedFields(vars map[string]any, prefix string, obj map[string]any) {
 	for key, val := range obj {
 		fullKey := prefix + "." + key
 		switch v := val.(type) {
 		case string:
 			vars[fullKey] = v
 		case float64:
-			// JSON numbers are float64
-			if v == float64(int(v)) {
-				vars[fullKey] = strconv.Itoa(int(v))
-			} else {
-				vars[fullKey] = strconv.FormatFloat(v, 'f', -1, 64)
-			}
+			// JSON numbers are float64 - preserve as number type
+			vars[fullKey] = v
 		case bool:
-			vars[fullKey] = strconv.FormatBool(v)
+			vars[fullKey] = v
 		case nil:
 			vars[fullKey] = ""
 		case map[string]any:
 			// Nested object - recurse
 			addFlattenedFields(vars, fullKey, v)
 		case []any:
-			// Arrays - serialize as JSON
-			jsonBytes, _ := json.Marshal(v)
-			vars[fullKey] = string(jsonBytes)
+			// Arrays - preserve as-is
+			vars[fullKey] = v
 		default:
-			// Fallback to JSON serialization
-			jsonBytes, _ := json.Marshal(v)
-			vars[fullKey] = string(jsonBytes)
+			// Fallback to preserving the original value
+			vars[fullKey] = v
 		}
 	}
 }
@@ -405,7 +399,7 @@ func cloneForeachConfig(src *types.ForeachConfig) *types.ForeachConfig {
 		dst.Join = &j
 	}
 	if src.Variables != nil {
-		dst.Variables = make(map[string]string)
+		dst.Variables = make(map[string]any)
 		for k, v := range src.Variables {
 			dst.Variables[k] = v
 		}

@@ -13,7 +13,7 @@ type WorkflowSummary struct {
 	Status      types.RunStatus   `json:"status"`
 	StartedAt   time.Time              `json:"started_at"`
 	DoneAt      *time.Time             `json:"done_at,omitempty"`
-	Variables   map[string]string      `json:"variables,omitempty"`
+	Variables   map[string]any         `json:"variables,omitempty"`
 	StepStats   StepStats              `json:"step_stats"`
 	RunningSteps []RunningStep         `json:"running_steps,omitempty"`
 	Agents      []AgentSummary         `json:"agents,omitempty"`

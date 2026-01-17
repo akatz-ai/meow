@@ -15,7 +15,7 @@ func TestNewWorkflowSummary(t *testing.T) {
 		Template:  "test.meow.toml",
 		Status:    types.RunStatusRunning,
 		StartedAt: now,
-		Variables: map[string]string{"env": "test"},
+		Variables: map[string]any{"env": "test"},
 		Steps: map[string]*types.Step{
 			"step1": {
 				ID:       "step1",

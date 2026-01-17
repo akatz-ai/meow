@@ -261,7 +261,7 @@ func TestVarContext_SubstituteStep(t *testing.T) {
 		Condition: "{{analyze.outputs.selected}} != ''",
 		Prompt:    "Testing {{task_id}} with {{framework}}",
 		Template:  "impl-{{task_id}}",
-		Variables: map[string]string{
+		Variables: map[string]any{
 			"target": "{{task_id}}",
 		},
 	}
@@ -334,7 +334,7 @@ func TestVarContext_SubstituteStep_ExpansionTargets(t *testing.T) {
 		ID: "test-step",
 		OnTrue: &ExpansionTarget{
 			Template: "{{tmpl}}",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"x": "{{val}}",
 			},
 		},
@@ -524,7 +524,7 @@ func TestVarContext_SubstituteStep_OnTimeout(t *testing.T) {
 		ID: "test-step",
 		OnTimeout: &ExpansionTarget{
 			Template: "{{handler}}",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"msg": "{{reason}}",
 			},
 		},
@@ -610,7 +610,7 @@ func TestVarContext_SubstituteStep_ErrorInVariables(t *testing.T) {
 
 	step := &Step{
 		ID: "test-step",
-		Variables: map[string]string{
+		Variables: map[string]any{
 			"key": "{{undefined}}",
 		},
 	}

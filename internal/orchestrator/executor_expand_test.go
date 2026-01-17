@@ -14,7 +14,7 @@ type mockTemplateLoader struct {
 	loadErr error
 }
 
-func (m *mockTemplateLoader) Load(ctx context.Context, ref string, variables map[string]string) ([]*types.Step, error) {
+func (m *mockTemplateLoader) Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error) {
 	if m.loadErr != nil {
 		return nil, m.loadErr
 	}
@@ -164,14 +164,14 @@ func TestExecuteExpand_VariableSubstitution(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: ".template",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"task_id": "task-123",
 			},
 		},
 	}
 
 	// Workflow-level variables
-	workflowVars := map[string]string{
+	workflowVars := map[string]any{
 		"agent": "worker-1",
 	}
 
@@ -208,14 +208,14 @@ func TestExecuteExpand_StepVariablesOverrideWorkflow(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: ".template",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"value": "from-step",
 			},
 		},
 	}
 
 	// Workflow has same variable with different value
-	workflowVars := map[string]string{
+	workflowVars := map[string]any{
 		"value": "from-workflow",
 	}
 
@@ -386,7 +386,7 @@ func TestExecuteExpand_AgentConfigSubstitution(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: ".template",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"agent": "worker-2",
 				"task":  "feature-abc",
 			},
@@ -429,7 +429,7 @@ func TestExecuteExpand_SpawnConfigSubstitution(t *testing.T) {
 		Executor: types.ExecutorExpand,
 		Expand: &types.ExpandConfig{
 			Template: ".template",
-			Variables: map[string]string{
+			Variables: map[string]any{
 				"agent":   "agent-x",
 				"project": "myproject",
 			},
@@ -521,15 +521,15 @@ func TestExecuteExpand_SourceModulePropagation(t *testing.T) {
 func TestSubstituteVars(t *testing.T) {
 	tests := []struct {
 		input    string
-		vars     map[string]string
+		vars     map[string]any
 		expected string
 	}{
 		{"no vars", nil, "no vars"},
-		{"{{name}}", map[string]string{"name": "value"}, "value"},
-		{"pre {{x}} post", map[string]string{"x": "middle"}, "pre middle post"},
-		{"{{a}} and {{b}}", map[string]string{"a": "1", "b": "2"}, "1 and 2"},
-		{"{{missing}}", map[string]string{}, "{{missing}}"}, // Unmatched vars left as-is
-		{"", map[string]string{"x": "y"}, ""},
+		{"{{name}}", map[string]any{"name": "value"}, "value"},
+		{"pre {{x}} post", map[string]any{"x": "middle"}, "pre middle post"},
+		{"{{a}} and {{b}}", map[string]any{"a": "1", "b": "2"}, "1 and 2"},
+		{"{{missing}}", map[string]any{}, "{{missing}}"}, // Unmatched vars left as-is
+		{"", map[string]any{"x": "y"}, ""},
 	}
 
 	for _, tc := range tests {
