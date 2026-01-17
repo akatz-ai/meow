@@ -567,6 +567,54 @@ meow run work-loop.meow.toml#tdd       # Runs [tdd] explicitly
 
 ---
 
+## Variable System
+
+MEOW supports typed variables that preserve structure across template expansion boundaries.
+
+### Variable Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `string` | Default, any text | `"hello"` |
+| `int` | Integer number | `42` |
+| `bool` | Boolean | `true` |
+| `file` | Read file contents | Path to file |
+| `json` | Parse JSON string into structure | `'{"key": "value"}'` |
+| `object` | Structured value (no strings allowed) | Nested maps/arrays |
+
+### Typed Variable Preservation
+
+Variables maintain their types through expansion chains:
+
+```toml
+# foreach sets task to a map: {name: "impl", beads: ["meow-123"]}
+[[steps]]
+id = "agents"
+executor = "foreach"
+items_file = "tasks.json"
+item_var = "task"
+template = "lib/agent-track"
+
+[steps.variables]
+task = "{{task}}"  # Preserves the map structure, not JSON string
+```
+
+In the expanded template, `{{task.beads}}` returns the array, not a string.
+
+### Pure Reference vs Mixed Content
+
+- **Pure reference** (`{{task}}`): Returns typed value (map, array, etc.)
+- **Mixed content** (`prefix-{{task}}`): Returns string (JSON-stringified if needed)
+
+This enables patterns like:
+```toml
+agent_name = "worker-{{i}}"     # String: "worker-0"
+task_data = "{{task}}"          # Map: {name: "...", beads: [...]}
+task_id = "{{task.beads.0}}"    # String: "meow-123" (future: array indexing)
+```
+
+---
+
 ## Design Decisions
 
 ### Why Orchestrator-Centric?
