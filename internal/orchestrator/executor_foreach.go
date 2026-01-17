@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/meow-stack/meow-machine/internal/types"
@@ -187,18 +186,12 @@ func ExecuteForeach(
 		for k, v := range cfg.Variables {
 			iterVars[k] = v
 		}
-		// Set item_var (serialize item to JSON for object access)
-		itemJSON, _ := json.Marshal(item)
-		iterVars[cfg.ItemVar] = string(itemJSON)
-		// Set index_var if specified
+		// Set item_var as typed value (map, array, string, etc.)
+		// VarContext.resolve handles nested field access like {{task.name}}
+		iterVars[cfg.ItemVar] = item
+		// Set index_var as int (not string) if specified
 		if cfg.IndexVar != "" {
-			iterVars[cfg.IndexVar] = strconv.Itoa(i)
-		}
-
-		// Also add flattened item fields for simple object access
-		// e.g., item_var = "task" -> {{task.name}} becomes available
-		if itemMap, ok := item.(map[string]any); ok {
-			addFlattenedFields(iterVars, cfg.ItemVar, itemMap)
+			iterVars[cfg.IndexVar] = i
 		}
 
 		var iterFirstStepID string
@@ -272,62 +265,31 @@ func readItemsFromFile(path string) ([]any, error) {
 // evaluateItemsExpression parses the items expression and returns the array.
 // The expression can be:
 // - A JSON array literal: ["a", "b", "c"]
-// - A variable reference: {{planner.outputs.tasks}}
-// - A variable reference that resolves to JSON
+// - A variable reference: {{planner.outputs.tasks}} -> typed array
+// - A variable reference that resolves to JSON string
 func evaluateItemsExpression(expr string, variables map[string]any) ([]any, error) {
-	// First, substitute any variables in the expression using VarContext
+	// Use VarContext.Eval for typed evaluation
 	varCtx := buildVarContext(variables)
-	resolved, err := varCtx.Render(expr)
+	evaled, err := varCtx.Eval(expr)
 	if err != nil {
-		return nil, fmt.Errorf("variable substitution failed: %w", err)
+		return nil, fmt.Errorf("variable evaluation failed: %w", err)
 	}
 
-	// Try to parse as JSON array
-	var items []any
-	if err := json.Unmarshal([]byte(resolved), &items); err != nil {
-		// Try to parse as JSON object in case it's a single item
-		var singleItem any
-		if jsonErr := json.Unmarshal([]byte(resolved), &singleItem); jsonErr == nil {
-			// If it's an array at the top level, we already failed
-			// If it's something else, wrap it
-			if _, isArray := singleItem.([]any); !isArray {
-				return nil, fmt.Errorf("items must be a JSON array, got: %s", resolved)
-			}
+	// If already an array, use directly (typed path)
+	if arr, ok := evaled.([]any); ok {
+		return arr, nil
+	}
+
+	// If string, try JSON parse (for literal JSON in template or string variable)
+	if s, ok := evaled.(string); ok {
+		var items []any
+		if err := json.Unmarshal([]byte(s), &items); err != nil {
+			return nil, fmt.Errorf("items expression must evaluate to JSON array: %w (got: %s)", err, s)
 		}
-		return nil, fmt.Errorf("invalid JSON array: %w (expression: %s)", err, resolved)
+		return items, nil
 	}
 
-	return items, nil
-}
-
-// addFlattenedFields adds flattened object fields to the variables map.
-// For item_var="task" and item={name: "foo", priority: 1}:
-// - task.name = "foo"
-// - task.priority = "1"
-func addFlattenedFields(vars map[string]any, prefix string, obj map[string]any) {
-	for key, val := range obj {
-		fullKey := prefix + "." + key
-		switch v := val.(type) {
-		case string:
-			vars[fullKey] = v
-		case float64:
-			// JSON numbers are float64 - preserve as number type
-			vars[fullKey] = v
-		case bool:
-			vars[fullKey] = v
-		case nil:
-			vars[fullKey] = ""
-		case map[string]any:
-			// Nested object - recurse
-			addFlattenedFields(vars, fullKey, v)
-		case []any:
-			// Arrays - preserve as-is
-			vars[fullKey] = v
-		default:
-			// Fallback to preserving the original value
-			vars[fullKey] = v
-		}
-	}
+	return nil, fmt.Errorf("items expression must be array or JSON string, got %T", evaled)
 }
 
 // prefixForeachNeeds updates dependency references for foreach-expanded steps.

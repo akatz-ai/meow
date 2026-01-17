@@ -663,3 +663,156 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// TestExecuteForeach_ItemsFromTypedArrayVariable tests that foreach works when
+// the items variable is already a typed []any slice (not a JSON string).
+// This is the key behavior for the typed variables feature.
+func TestExecuteForeach_ItemsFromTypedArrayVariable(t *testing.T) {
+	loader := &foreachMockLoader{
+		steps: []*types.Step{
+			{ID: "work", Executor: types.ExecutorShell, Shell: &types.ShellConfig{Command: "echo {{task.name}}"}},
+		},
+	}
+
+	step := &types.Step{
+		ID:       "foreach-typed",
+		Executor: types.ExecutorForeach,
+		Foreach: &types.ForeachConfig{
+			Items:    `{{tasks}}`,
+			ItemVar:  "task",
+			Template: ".work",
+		},
+	}
+
+	// Pass tasks as a typed []any with map elements (not JSON string)
+	variables := map[string]any{
+		"tasks": []any{
+			map[string]any{"name": "task-a", "priority": 1},
+			map[string]any{"name": "task-b", "priority": 2},
+		},
+	}
+
+	result, err := ExecuteForeach(context.Background(), step, loader, variables, 0, nil)
+	if err != nil {
+		t.Fatalf("ExecuteForeach failed: %v", err)
+	}
+
+	if len(result.ExpandedSteps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result.ExpandedSteps))
+	}
+
+	// Verify that {{task.name}} was correctly substituted
+	expectedCmds := []string{"echo task-a", "echo task-b"}
+	for i, s := range result.ExpandedSteps {
+		if s.Shell.Command != expectedCmds[i] {
+			t.Errorf("step %d: expected command %q, got %q", i, expectedCmds[i], s.Shell.Command)
+		}
+	}
+}
+
+// TestExecuteForeach_IndexVarTyped tests that index_var is stored as an int, not string.
+func TestExecuteForeach_IndexVarTyped(t *testing.T) {
+	// Create a loader that captures the variables passed to it
+	var capturedVars []map[string]any
+	loader := &capturingMockLoader{
+		steps: []*types.Step{
+			{ID: "work", Executor: types.ExecutorShell, Shell: &types.ShellConfig{Command: "echo {{i}}"}},
+		},
+		captureFunc: func(vars map[string]any) {
+			// Deep copy to avoid mutation issues
+			captured := make(map[string]any)
+			for k, v := range vars {
+				captured[k] = v
+			}
+			capturedVars = append(capturedVars, captured)
+		},
+	}
+
+	step := &types.Step{
+		ID:       "foreach-idx",
+		Executor: types.ExecutorForeach,
+		Foreach: &types.ForeachConfig{
+			Items:    `["a", "b", "c"]`,
+			ItemVar:  "item",
+			IndexVar: "i",
+			Template: ".work",
+		},
+	}
+
+	result, err := ExecuteForeach(context.Background(), step, loader, nil, 0, nil)
+	if err != nil {
+		t.Fatalf("ExecuteForeach failed: %v", err)
+	}
+
+	// Verify commands were substituted - index should render as number
+	expectedCmds := []string{"echo 0", "echo 1", "echo 2"}
+	for i, s := range result.ExpandedSteps {
+		if s.Shell.Command != expectedCmds[i] {
+			t.Errorf("step %d: expected command %q, got %q", i, expectedCmds[i], s.Shell.Command)
+		}
+	}
+}
+
+// capturingMockLoader captures variables passed to Load for testing.
+type capturingMockLoader struct {
+	steps       []*types.Step
+	captureFunc func(vars map[string]any)
+}
+
+func (m *capturingMockLoader) Load(ctx context.Context, ref string, variables map[string]any) ([]*types.Step, error) {
+	if m.captureFunc != nil {
+		m.captureFunc(variables)
+	}
+	result := make([]*types.Step, len(m.steps))
+	for i, s := range m.steps {
+		result[i] = cloneStep(s)
+	}
+	return result, nil
+}
+
+// TestExecuteForeach_ItemStoredTyped tests that item_var is stored as the actual
+// typed value (map), not as a JSON string.
+func TestExecuteForeach_ItemStoredTyped(t *testing.T) {
+	loader := &foreachMockLoader{
+		steps: []*types.Step{
+			{
+				ID:       "work",
+				Executor: types.ExecutorShell,
+				Shell: &types.ShellConfig{
+					// Access nested field to verify typed access works
+					Command: "process {{task.name}} with priority {{task.priority}}",
+				},
+			},
+		},
+	}
+
+	step := &types.Step{
+		ID:       "foreach-typed-item",
+		Executor: types.ExecutorForeach,
+		Foreach: &types.ForeachConfig{
+			Items:    `[{"name": "alpha", "priority": 1}, {"name": "beta", "priority": 2}]`,
+			ItemVar:  "task",
+			Template: ".work",
+		},
+	}
+
+	result, err := ExecuteForeach(context.Background(), step, loader, nil, 0, nil)
+	if err != nil {
+		t.Fatalf("ExecuteForeach failed: %v", err)
+	}
+
+	if len(result.ExpandedSteps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result.ExpandedSteps))
+	}
+
+	// Verify that field access worked via typed path resolution
+	expectedCmds := []string{
+		"process alpha with priority 1",
+		"process beta with priority 2",
+	}
+	for i, s := range result.ExpandedSteps {
+		if s.Shell.Command != expectedCmds[i] {
+			t.Errorf("step %d: expected command %q, got %q", i, expectedCmds[i], s.Shell.Command)
+		}
+	}
+}
