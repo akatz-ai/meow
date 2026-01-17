@@ -139,8 +139,13 @@ func ExecuteForeach(
 		}, nil
 	}
 
-	// Load the template once, passing the foreach config's variables
-	templateSteps, err := loader.Load(ctx, cfg.Template, cfg.Variables)
+	// Resolve foreach variables against workflow variables before template loading.
+	// Variables like protocol = "{{protocol}}" need to be evaluated to their actual
+	// values before the template baker validates them.
+	resolvedVars := resolveForeachVariables(cfg.Variables, variables)
+
+	// Load the template once, passing the resolved variables
+	templateSteps, err := loader.Load(ctx, cfg.Template, resolvedVars)
 	if err != nil {
 		return nil, &types.StepError{
 			Message: fmt.Sprintf("failed to load template %s: %v", cfg.Template, err),
@@ -463,4 +468,35 @@ func GetIterationStepIDs(foreachStep *types.Step, iterationIndex int) []string {
 	}
 
 	return stepIDs
+}
+
+// resolveForeachVariables evaluates foreach step variables against workflow variables.
+// This handles cases like protocol = "{{protocol}}" where the foreach passes through
+// a workflow-level variable to the expanded template.
+func resolveForeachVariables(foreachVars, workflowVars map[string]any) map[string]any {
+	if foreachVars == nil {
+		return nil
+	}
+
+	resolved := make(map[string]any, len(foreachVars))
+	varCtx := buildVarContext(workflowVars)
+
+	for k, v := range foreachVars {
+		// Only try to resolve string values that look like template expressions
+		if str, ok := v.(string); ok && strings.Contains(str, "{{") {
+			// Try to evaluate using VarContext
+			evaled, err := varCtx.Eval(str)
+			if err == nil {
+				resolved[k] = evaled
+			} else {
+				// Keep original if evaluation fails (may be resolved later)
+				resolved[k] = v
+			}
+		} else {
+			// Non-string or non-template values pass through unchanged
+			resolved[k] = v
+		}
+	}
+
+	return resolved
 }
