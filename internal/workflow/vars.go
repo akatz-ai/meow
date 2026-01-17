@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -259,42 +260,12 @@ func (c *VarContext) resolve(path string) (any, error) {
 // resolveOutput looks up a step output.
 // If the step's outputs are not cached and a StepLookup function is set,
 // it will be used to fetch the step and its outputs.
+// When ScopeWalkEnabled is true, it will try scope-walk resolution if exact match fails.
 func (c *VarContext) resolveOutput(stepID, field string) (any, error) {
-	outputs, ok := c.Outputs[stepID]
-	if !ok {
-		// Try to fetch from StepLookup if available
-		if c.StepLookup != nil {
-			info, err := c.StepLookup(stepID)
-			if err != nil {
-				return nil, fmt.Errorf("looking up step %q: %w", stepID, err)
-			}
-			if info == nil {
-				// Step not found - defer if enabled
-				if c.DeferStepOutputs {
-					return nil, errDeferred
-				}
-				return nil, fmt.Errorf("step %q not found", stepID)
-			}
-			// Check if step is done (outputs only available after completion)
-			if info.Status != "done" {
-				if c.DeferStepOutputs {
-					return nil, errDeferred
-				}
-				return nil, fmt.Errorf("step %q is not done (status: %s), outputs not available", stepID, info.Status)
-			}
-			if info.Outputs == nil {
-				return nil, fmt.Errorf("step %q has no outputs", stepID)
-			}
-			// Cache the outputs for future lookups
-			c.Outputs[stepID] = info.Outputs
-			outputs = info.Outputs
-		} else {
-			// No lookup function - defer if enabled, otherwise error
-			if c.DeferStepOutputs {
-				return nil, errDeferred
-			}
-			return nil, fmt.Errorf("no outputs for step %q", stepID)
-		}
+	// Try to find outputs, using scope-walk if enabled
+	outputs, resolvedStepID, err := c.findStepOutputs(stepID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Handle nested field access
@@ -312,14 +283,135 @@ func (c *VarContext) resolveOutput(stepID, field string) (any, error) {
 				for k := range v {
 					available = append(available, k)
 				}
-				return nil, fmt.Errorf("output %q not found in step %q (available: %v)", field, stepID, available)
+				return nil, fmt.Errorf("output %q not found in step %q (available: %v)", field, resolvedStepID, available)
 			}
 		default:
-			return nil, fmt.Errorf("cannot access field %q on non-map value in step %q", part, stepID)
+			return nil, fmt.Errorf("cannot access field %q on non-map value in step %q", part, resolvedStepID)
 		}
 	}
 
 	return val, nil
+}
+
+// findStepOutputs finds step outputs, using scope-walk if enabled.
+// Returns the outputs map and the resolved step ID (which may differ from input if scope-walk found it).
+func (c *VarContext) findStepOutputs(stepID string) (map[string]any, string, error) {
+	// Try exact match first (from cache)
+	if outputs, ok := c.Outputs[stepID]; ok {
+		return outputs, stepID, nil
+	}
+
+	// Try to fetch from StepLookup if available
+	if c.StepLookup != nil {
+		// Try exact match via lookup
+		info, err := c.StepLookup(stepID)
+		if err != nil {
+			return nil, "", fmt.Errorf("looking up step %q: %w", stepID, err)
+		}
+		if info != nil {
+			outputs, err := c.extractStepOutputs(info, stepID)
+			if err != nil {
+				return nil, "", err
+			}
+			return outputs, stepID, nil
+		}
+
+		// Exact match not found - try scope-walk if enabled
+		if c.ScopeWalkEnabled && c.CurrentStepID != "" {
+			resolvedID, outputs, found := c.scopeWalkLookup(stepID)
+			if found {
+				return outputs, resolvedID, nil
+			}
+		}
+
+		// Not found anywhere
+		if c.DeferStepOutputs {
+			return nil, "", errDeferred
+		}
+		return nil, "", fmt.Errorf("step %q not found", stepID)
+	}
+
+	// No lookup function - try scope-walk on cache if enabled
+	if c.ScopeWalkEnabled && c.CurrentStepID != "" {
+		resolvedID, outputs, found := c.scopeWalkCache(stepID)
+		if found {
+			return outputs, resolvedID, nil
+		}
+	}
+
+	// No lookup function and not in cache - defer if enabled, otherwise error
+	if c.DeferStepOutputs {
+		return nil, "", errDeferred
+	}
+	return nil, "", fmt.Errorf("no outputs for step %q", stepID)
+}
+
+// extractStepOutputs validates step status and extracts outputs.
+func (c *VarContext) extractStepOutputs(info *StepInfo, stepID string) (map[string]any, error) {
+	// Check if step is done (outputs only available after completion)
+	if info.Status != "done" {
+		if c.DeferStepOutputs {
+			return nil, errDeferred
+		}
+		return nil, fmt.Errorf("step %q is not done (status: %s), outputs not available", stepID, info.Status)
+	}
+	if info.Outputs == nil {
+		return nil, fmt.Errorf("step %q has no outputs", stepID)
+	}
+	// Cache the outputs for future lookups
+	c.Outputs[stepID] = info.Outputs
+	return info.Outputs, nil
+}
+
+// scopeWalkLookup tries to find a step by walking up the prefix chain using StepLookup.
+// For example, if currentStepID is "agents.0.work" and stepID is "setup",
+// it tries: "agents.0.setup", then "agents.setup".
+func (c *VarContext) scopeWalkLookup(stepID string) (string, map[string]any, bool) {
+	prefixes := c.getPrefixChain()
+
+	for _, prefix := range prefixes {
+		candidateID := prefix + "." + stepID
+		info, err := c.StepLookup(candidateID)
+		if err != nil {
+			continue
+		}
+		if info != nil && info.Status == "done" && info.Outputs != nil {
+			// Cache and return
+			c.Outputs[candidateID] = info.Outputs
+			return candidateID, info.Outputs, true
+		}
+	}
+	return "", nil, false
+}
+
+// scopeWalkCache tries to find a step by walking up the prefix chain in the cache.
+func (c *VarContext) scopeWalkCache(stepID string) (string, map[string]any, bool) {
+	prefixes := c.getPrefixChain()
+
+	for _, prefix := range prefixes {
+		candidateID := prefix + "." + stepID
+		if outputs, ok := c.Outputs[candidateID]; ok {
+			return candidateID, outputs, true
+		}
+	}
+	return "", nil, false
+}
+
+// getPrefixChain returns the prefix chain from CurrentStepID.
+// For "agents.0.work", returns ["agents.0", "agents"].
+func (c *VarContext) getPrefixChain() []string {
+	parts := strings.Split(c.CurrentStepID, ".")
+	if len(parts) <= 1 {
+		return nil
+	}
+
+	// Build prefix chain from longest to shortest
+	var prefixes []string
+	for i := len(parts) - 1; i > 0; i-- {
+		prefix := strings.Join(parts[:i], ".")
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
 }
 
 // resolvePath navigates nested structures.
@@ -338,8 +430,34 @@ func (c *VarContext) resolvePath(val any, parts []string) (any, error) {
 			if !ok {
 				return nil, fmt.Errorf("field %q not found", part)
 			}
+		case map[any]any:
+			// Handle YAML decode edge cases where keys may not be strings
+			var ok bool
+			val, ok = v[part]
+			if !ok {
+				return nil, fmt.Errorf("field %q not found", part)
+			}
+		case []any:
+			// Array indexing: part must be numeric
+			idx, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("cannot index array with non-numeric %q", part)
+			}
+			if idx < 0 || idx >= len(v) {
+				return nil, fmt.Errorf("array index %d out of bounds (len=%d)", idx, len(v))
+			}
+			val = v[idx]
+		case []string:
+			idx, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("cannot index array with non-numeric %q", part)
+			}
+			if idx < 0 || idx >= len(v) {
+				return nil, fmt.Errorf("array index %d out of bounds (len=%d)", idx, len(v))
+			}
+			val = v[idx]
 		default:
-			return nil, fmt.Errorf("cannot access field %q on non-map value", part)
+			return nil, fmt.Errorf("cannot access field %q on non-map value (type: %T)", part, val)
 		}
 	}
 	return val, nil
