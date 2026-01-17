@@ -1,0 +1,24 @@
+# Example Skill Manifest
+# Demonstrates self-installing skill pattern with bundled workflows
+
+[skill]
+name = "example-skill"
+description = "Example skill demonstrating MEOW distribution patterns"
+version = "1.0.0"
+
+# Target harnesses for skill installation
+[targets]
+claude = true
+opencode = true
+
+# Export configuration for marketplace distribution
+[export]
+workflows = [
+    "workflows/example-task.meow.toml",
+    "workflows/lib/example-helpers.meow.toml",
+]
+requires = ["meow"]
+
+[export.marketplace]
+plugin_name = "example-skill"
+version = "1.0.0"

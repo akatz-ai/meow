@@ -1,0 +1,45 @@
+# Example Helper Workflows
+# Reusable workflow snippets for common operations
+#
+# This file contains mini-workflows that can be expanded into other workflows.
+# Not meant to be run directly - use via 'expand' executor.
+
+# Snippet: Validate inputs
+[validate-inputs]
+name = "validate-inputs"
+description = "Validate input parameters"
+
+[validate-inputs.variables]
+input = { description = "Input value to validate" }
+type = { description = "Type of validation to perform" }
+
+[[validate-inputs.steps]]
+id = "check-empty"
+executor = "shell"
+description = "Check if input is empty"
+command = """if [ -z "{{input}}" ]; then
+  echo "Error: {{type}} input cannot be empty" >&2
+  exit 1
+fi
+echo "valid=true" """
+
+# Snippet: Log completion
+[log-completion]
+name = "log-completion"
+description = "Log a completion message with timestamp"
+
+[log-completion.variables]
+message = { description = "Message to log" }
+
+[[log-completion.steps]]
+id = "timestamp"
+executor = "shell"
+description = "Get current timestamp"
+command = "date '+%Y-%m-%d %H:%M:%S'"
+
+[[log-completion.steps]]
+id = "log"
+executor = "shell"
+description = "Log message with timestamp"
+needs = ["timestamp"]
+command = "echo '[COMPLETE] {{message}}'"
