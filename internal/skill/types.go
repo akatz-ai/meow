@@ -11,6 +11,30 @@ type Skill struct {
 	// Keys are harness identifiers (e.g., "claude", "opencode").
 	// An empty target (e.g., [targets.claude]) means use default paths.
 	Targets map[string]Target `toml:"targets"`
+
+	// Export specifies what to include when exporting for marketplace
+	Export *ExportConfig `toml:"export,omitempty"`
+}
+
+// ExportConfig specifies what to include when exporting for marketplace.
+type ExportConfig struct {
+	// Workflows to copy into exported skill (relative to repo root)
+	Workflows []string `toml:"workflows,omitempty"`
+
+	// Requires lists dependencies to document in SKILL.md (e.g., ["meow"])
+	Requires []string `toml:"requires,omitempty"`
+
+	// Marketplace contains marketplace-specific metadata
+	Marketplace *MarketplaceConfig `toml:"marketplace,omitempty"`
+}
+
+// MarketplaceConfig contains Claude plugin marketplace metadata.
+type MarketplaceConfig struct {
+	// PluginName is the plugin name (defaults to skill name)
+	PluginName string `toml:"plugin_name,omitempty"`
+
+	// Version is the plugin version (defaults to skill version)
+	Version string `toml:"version,omitempty"`
 }
 
 // SkillMeta contains metadata for the skill.
