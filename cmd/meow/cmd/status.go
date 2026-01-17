@@ -224,8 +224,15 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 		}
 	}
 
+	// Build a set of orphaned IDs for exclusion from main list
+	orphanedIDs := make(map[string]bool)
+	for _, wf := range orphaned {
+		orphanedIDs[wf.ID] = true
+	}
+
 	// Apply active filter by default (unless --all or --filter specified)
 	// Active = status=running AND lock held
+	// Also exclude orphaned runs from the main list to avoid double-counting
 	if !statusAll && statusFilter == "" {
 		active := make([]*types.Run, 0, len(workflows))
 		for _, wf := range workflows {
@@ -234,6 +241,15 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 			}
 		}
 		workflows = active
+	} else if statusFilter == "running" {
+		// When filtering by running, exclude orphaned from main list
+		filtered := make([]*types.Run, 0, len(workflows))
+		for _, wf := range workflows {
+			if !orphanedIDs[wf.ID] {
+				filtered = append(filtered, wf)
+			}
+		}
+		workflows = filtered
 	}
 
 	// Show orphaned runs first (they need attention)
@@ -282,8 +298,25 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 		return nil
 	}
 
-	// If no active workflows but we showed orphaned ones, we're done
-	if len(workflows) == 0 {
+	// If no active workflows but we have orphaned ones
+	if len(workflows) == 0 && len(orphaned) > 0 {
+		if statusJSON {
+			// Output orphaned runs as JSON
+			type jsonOutput struct {
+				Orphaned []*status.WorkflowSummary `json:"orphaned"`
+				Active   []*status.WorkflowSummary `json:"active"`
+			}
+			orphanedSummaries := make([]*status.WorkflowSummary, len(orphaned))
+			for i, wf := range orphaned {
+				orphanedSummaries[i] = status.NewWorkflowSummary(wf)
+			}
+			output := jsonOutput{Orphaned: orphanedSummaries, Active: []*status.WorkflowSummary{}}
+			data, err := json.MarshalIndent(output, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
+		}
 		return nil
 	}
 
