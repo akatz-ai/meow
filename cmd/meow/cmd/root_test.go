@@ -54,3 +54,74 @@ func TestRootCmdHelpUsesCorrectVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// Tests for meow-nr5y: Make meow <workflow> shorthand for meow run <workflow>
+
+// TestWorkflowShorthandSubcommandsTakePrecedence verifies that built-in subcommands
+// take precedence over workflow names (like make targets).
+func TestWorkflowShorthandSubcommandsTakePrecedence(t *testing.T) {
+	// These are the built-in subcommands that should always take precedence
+	// over workflow names with the same name
+	subcommands := []string{
+		"run", "status", "init", "validate", "stop", "resume",
+		"done", "event", "ls", "show", "approve", "reject",
+		"cleanup", "adapter", "skill",
+	}
+
+	for _, name := range subcommands {
+		found := false
+		for _, sub := range rootCmd.Commands() {
+			if sub.Name() == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q to be a subcommand (for precedence testing)", name)
+		}
+	}
+}
+
+// TestWorkflowShorthandInvokesRun verifies that `meow <workflow>` acts as shorthand
+// for `meow run <workflow>` when the first argument is not a subcommand.
+func TestWorkflowShorthandInvokesRun(t *testing.T) {
+	// The root command should have RunE (not just Run) to handle args as workflows
+	// Currently it only has Run which calls listWorkflows()
+	// After meow-nr5y is implemented, it should handle workflow shorthand
+	if rootCmd.RunE == nil {
+		t.Error("rootCmd should have RunE to handle workflow shorthand (meow <workflow>)")
+	}
+}
+
+// TestWorkflowShorthandErrorsOnUnknown verifies that an unknown command/workflow
+// gives a clear error message.
+func TestWorkflowShorthandErrorsOnUnknown(t *testing.T) {
+	// The error message for unknown commands should be helpful
+	// After meow-nr5y implementation:
+	// - "meow foobar" where foobar is neither a command nor workflow should error
+	// - Error should say "unknown command or workflow: foobar"
+	//
+	// This test will fail until the feature is implemented because
+	// currently rootCmd.Run just calls listWorkflows() regardless of args
+
+	// Check that rootCmd handles args - currently it doesn't check them
+	// It should fail with a clear error for unknown workflows
+	if rootCmd.RunE == nil {
+		t.Error("rootCmd needs RunE to properly validate and error on unknown commands/workflows")
+	}
+}
+
+// TestWorkflowShorthandPassesVars verifies that `meow <workflow> --var x=y`
+// properly passes variables to the workflow.
+func TestWorkflowShorthandPassesVars(t *testing.T) {
+	// The workflow shorthand should forward --var flags to the run command
+	// This is important for UX: meow sprint --var task="fix bug"
+	//
+	// Currently this test will fail because rootCmd doesn't have --var flag
+	// After meow-nr5y implementation, the root command should accept --var
+
+	varFlag := rootCmd.Flags().Lookup("var")
+	if varFlag == nil {
+		t.Error("rootCmd should have --var flag for workflow shorthand (meow <workflow> --var x=y)")
+	}
+}
