@@ -266,7 +266,7 @@ func TestValidateFull_MultipleErrors(t *testing.T) {
 		Meta: Meta{Version: "bad"}, // Missing name, bad version
 		Steps: []Step{
 			{ID: "step-1", Executor: ExecutorShell, Command: "echo 1", Needs: []string{"unknown"}}, // Unknown dep
-			{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"},                              // Duplicate
+			{ID: "step-1", Executor: ExecutorShell, Command: "echo 2"},                             // Duplicate
 		},
 	}
 

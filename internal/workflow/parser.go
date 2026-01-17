@@ -12,9 +12,9 @@ import (
 
 // Template represents a parsed MEOW template.
 type Template struct {
-	Meta      Meta            `toml:"meta"`
-	Variables map[string]Var  `toml:"variables"`
-	Steps     []Step          `toml:"steps"`
+	Meta      Meta           `toml:"meta"`
+	Variables map[string]Var `toml:"variables"`
+	Steps     []Step         `toml:"steps"`
 }
 
 // Meta contains template metadata.
@@ -23,12 +23,12 @@ type Meta struct {
 	Version           string `toml:"version"`
 	Description       string `toml:"description"`
 	Author            string `toml:"author"`
-	Type              string `toml:"type,omitempty"`              // e.g., "loop"
+	Type              string `toml:"type,omitempty"` // e.g., "loop"
 	FitsInContext     bool   `toml:"fits_in_context,omitempty"`
 	RequiresHuman     bool   `toml:"requires_human,omitempty"`
 	EstimatedMinutes  int    `toml:"estimated_minutes,omitempty"`
 	MaxIterations     int    `toml:"max_iterations,omitempty"`
-	OnError           string `toml:"on_error,omitempty"`          // inject-gate, abort, continue, retry
+	OnError           string `toml:"on_error,omitempty"` // inject-gate, abort, continue, retry
 	ErrorGateTemplate string `toml:"error_gate_template,omitempty"`
 	MaxRetries        int    `toml:"max_retries,omitempty"`
 }
@@ -47,9 +47,9 @@ const (
 type Var struct {
 	Required    bool     `toml:"required"`
 	Default     any      `toml:"default,omitempty"`
-	Type        VarType  `toml:"type,omitempty"`        // string (default), int, bool, file
+	Type        VarType  `toml:"type,omitempty"` // string (default), int, bool, file
 	Description string   `toml:"description,omitempty"`
-	Enum        []string `toml:"enum,omitempty"`        // Allowed values
+	Enum        []string `toml:"enum,omitempty"` // Allowed values
 }
 
 // ExecutorType represents the type of executor for a step.
@@ -106,19 +106,19 @@ type Step struct {
 	Executor ExecutorType `toml:"executor,omitempty"` // shell | spawn | kill | expand | branch | foreach | agent
 
 	// Shared fields
-	Needs   []string          `toml:"needs,omitempty"` // Step IDs that must complete first
-	Timeout string            `toml:"timeout,omitempty"`
+	Needs   []string `toml:"needs,omitempty"` // Step IDs that must complete first
+	Timeout string   `toml:"timeout,omitempty"`
 
 	// Agent executor fields
-	Agent  string                    `toml:"agent,omitempty"`  // Agent identifier (also used by spawn, kill)
-	Prompt string                    `toml:"prompt,omitempty"` // Instructions for agent (also used by gate)
-	Mode   string                    `toml:"mode,omitempty"`   // autonomous | interactive
+	Agent  string `toml:"agent,omitempty"`  // Agent identifier (also used by spawn, kill)
+	Prompt string `toml:"prompt,omitempty"` // Instructions for agent (also used by gate)
+	Mode   string `toml:"mode,omitempty"`   // autonomous | interactive
 
 	// Shell executor fields
-	Command string                   `toml:"command,omitempty"` // Shell command to execute
-	Workdir string                   `toml:"workdir,omitempty"` // Working directory (also used by spawn)
-	Env     map[string]string        `toml:"env,omitempty"`     // Environment variables (also used by spawn)
-	OnError string                   `toml:"on_error,omitempty"` // continue | fail (default: fail)
+	Command string            `toml:"command,omitempty"`  // Shell command to execute
+	Workdir string            `toml:"workdir,omitempty"`  // Working directory (also used by spawn)
+	Env     map[string]string `toml:"env,omitempty"`      // Environment variables (also used by spawn)
+	OnError string            `toml:"on_error,omitempty"` // continue | fail (default: fail)
 
 	// Shell output capture
 	ShellOutputs map[string]OutputSource `toml:"shell_outputs,omitempty"` // For shell executor stdout/stderr/file capture
@@ -137,10 +137,10 @@ type Step struct {
 	Variables map[string]any `toml:"variables,omitempty"` // Variables for template (typed values preserved)
 
 	// Branch executor fields
-	Condition string           `toml:"condition,omitempty"`   // Shell command (exit 0 = true)
-	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`     // Expand if condition true
-	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`    // Expand if condition false
-	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"`  // Expand if condition times out
+	Condition string           `toml:"condition,omitempty"`  // Shell command (exit 0 = true)
+	OnTrue    *ExpansionTarget `toml:"on_true,omitempty"`    // Expand if condition true
+	OnFalse   *ExpansionTarget `toml:"on_false,omitempty"`   // Expand if condition false
+	OnTimeout *ExpansionTarget `toml:"on_timeout,omitempty"` // Expand if condition times out
 
 	// Foreach executor fields
 	Items         string `toml:"items,omitempty"`          // JSON array expression (may contain variable refs)
@@ -287,14 +287,14 @@ type InlineStep struct {
 	Mode   string `toml:"mode,omitempty"`
 
 	// Shell executor fields
-	Command      string                      `toml:"command,omitempty"`
-	Workdir      string                      `toml:"workdir,omitempty"`
-	Env          map[string]string           `toml:"env,omitempty"`
-	OnError      string                      `toml:"on_error,omitempty"`
-	ShellOutputs map[string]OutputSource     `toml:"shell_outputs,omitempty"`
+	Command      string                  `toml:"command,omitempty"`
+	Workdir      string                  `toml:"workdir,omitempty"`
+	Env          map[string]string       `toml:"env,omitempty"`
+	OnError      string                  `toml:"on_error,omitempty"`
+	ShellOutputs map[string]OutputSource `toml:"shell_outputs,omitempty"`
 
 	// Spawn executor fields
-	Adapter       string `toml:"adapter,omitempty"`        // Which adapter to use (defaults to config hierarchy)
+	Adapter       string `toml:"adapter,omitempty"` // Which adapter to use (defaults to config hierarchy)
 	ResumeSession string `toml:"resume_session,omitempty"`
 	SpawnArgs     string `toml:"spawn_args,omitempty"` // Extra CLI args to append to spawn command
 

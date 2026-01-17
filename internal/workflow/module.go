@@ -901,6 +901,7 @@ func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *M
 		}
 	}
 }
+
 // validateModuleVariableReferences checks that all variable references in a workflow are defined.
 func validateModuleVariableReferences(m *Module, workflowName string, w *Workflow, result *ModuleValidationResult) {
 	// Collect all defined variables

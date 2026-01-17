@@ -755,9 +755,9 @@ func TestExecutorType_Valid(t *testing.T) {
 		{ExecutorExpand, true},
 		{ExecutorBranch, true},
 		{ExecutorAgent, true},
-		{"", true},           // Empty allowed during migration
+		{"", true}, // Empty allowed during migration
 		{"invalid", false},
-		{"task", false},      // Old type, not valid executor
+		{"task", false}, // Old type, not valid executor
 	}
 
 	for _, tc := range tests {
