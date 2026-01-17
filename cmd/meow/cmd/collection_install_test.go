@@ -44,9 +44,9 @@ workflows = ["workflows/test.meow.toml"]
 `
 
 const testWorkflow = `
-[workflow]
+[meta]
 name = "test-workflow"
-description = "A test workflow"
+version = "1.0.0"
 
 [[steps]]
 id = "start"
