@@ -81,6 +81,15 @@ type VarContext struct {
 	// This is useful for foreach templates where item_var/index_var are
 	// substituted at runtime rather than bake time.
 	DeferUndefinedVariables bool
+
+	// CurrentStepID is set during substitution to enable scope-walk resolution.
+	// When set, step output references can be resolved relative to this step's prefix.
+	// TODO(meow-h2v7): Implement scope-walk resolution using this field.
+	CurrentStepID string
+
+	// ScopeWalkEnabled enables scope-walk for step output references.
+	// TODO(meow-h2v7): Implement scope-walk resolution using this field.
+	ScopeWalkEnabled bool
 }
 
 // NewVarContext creates a new variable context with default builtins.
@@ -140,6 +149,16 @@ func (c *VarContext) SetOutputs(stepID string, outputs map[string]any) {
 // are not in the cache, this function will be called to fetch them.
 func (c *VarContext) SetStepLookup(fn StepLookupFunc) {
 	c.StepLookup = fn
+}
+
+// SetCurrentStep sets the context for scope-walk resolution.
+// When called, step output references will be resolved relative to this step's prefix.
+// For example, if currentStepID is "agents.0.work" and the reference is "setup",
+// scope-walk will try: "agents.0.setup", then "agents.setup", then "setup".
+// TODO(meow-h2v7): Implement scope-walk in resolveOutput to use these fields.
+func (c *VarContext) SetCurrentStep(stepID string) {
+	c.CurrentStepID = stepID
+	c.ScopeWalkEnabled = true
 }
 
 // errDeferred is a sentinel error indicating the variable should be left for runtime

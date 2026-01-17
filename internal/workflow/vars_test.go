@@ -1896,3 +1896,381 @@ func TestVarContext_Eval_EmptyBraces(t *testing.T) {
 		t.Errorf("expected '{{}}', got %q", s)
 	}
 }
+
+// =============================================================================
+// Tests for meow-7d7p: Array indexing in resolvePath
+// =============================================================================
+
+func TestVarContext_ArrayIndexing_ValidIndex(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{
+		map[string]any{"name": "first", "id": 1},
+		map[string]any{"name": "second", "id": 2},
+		map[string]any{"name": "third", "id": 3},
+	})
+
+	// Test accessing first element's name field
+	result, err := ctx.Substitute("{{items.0.name}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "first" {
+		t.Errorf("expected 'first', got %q", result)
+	}
+
+	// Test accessing second element's id field
+	result, err = ctx.Substitute("{{items.1.id}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "2" {
+		t.Errorf("expected '2', got %q", result)
+	}
+}
+
+func TestVarContext_ArrayIndexing_DirectElement(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("names", []any{"alice", "bob", "charlie"})
+
+	// Test accessing array element directly (no nested field)
+	result, err := ctx.Substitute("{{names.0}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "alice" {
+		t.Errorf("expected 'alice', got %q", result)
+	}
+
+	result, err = ctx.Substitute("{{names.2}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "charlie" {
+		t.Errorf("expected 'charlie', got %q", result)
+	}
+}
+
+func TestVarContext_ArrayIndexing_OutOfBounds(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+
+	// Index 99 is out of bounds for 3-element array
+	_, err := ctx.Substitute("{{items.99}}")
+	if err == nil {
+		t.Fatal("expected error for out of bounds index")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Errorf("expected 'out of bounds' error, got: %v", err)
+	}
+}
+
+func TestVarContext_ArrayIndexing_NegativeIndex(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+
+	// Negative indices are not supported (would fail strconv.Atoi for unsigned or be out of bounds)
+	_, err := ctx.Substitute("{{items.-1}}")
+	if err == nil {
+		t.Fatal("expected error for negative index")
+	}
+	// Should either fail as non-numeric or out of bounds
+}
+
+func TestVarContext_ArrayIndexing_NonNumericIndex(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("items", []any{"a", "b", "c"})
+
+	// "foo" is not a valid numeric index
+	_, err := ctx.Substitute("{{items.foo}}")
+	if err == nil {
+		t.Fatal("expected error for non-numeric index on array")
+	}
+	if !strings.Contains(err.Error(), "non-numeric") {
+		t.Errorf("expected 'non-numeric' error, got: %v", err)
+	}
+}
+
+func TestVarContext_ArrayIndexing_StringSlice(t *testing.T) {
+	ctx := NewVarContext()
+	// Test with []string specifically (not []any)
+	ctx.SetVariable("tags", []string{"go", "rust", "python"})
+
+	result, err := ctx.Substitute("{{tags.1}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "rust" {
+		t.Errorf("expected 'rust', got %q", result)
+	}
+}
+
+func TestVarContext_ArrayIndexing_NestedArrays(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("matrix", []any{
+		[]any{"a", "b"},
+		[]any{"c", "d"},
+	})
+
+	// Access nested array element: matrix[0][1]
+	result, err := ctx.Substitute("{{matrix.0.1}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "b" {
+		t.Errorf("expected 'b', got %q", result)
+	}
+}
+
+func TestVarContext_ArrayIndexing_Eval_ReturnsTypedValue(t *testing.T) {
+	ctx := NewVarContext()
+	ctx.SetVariable("configs", []any{
+		map[string]any{"host": "localhost", "port": 8080},
+		map[string]any{"host": "remote", "port": 9090},
+	})
+
+	// Eval should return the actual map, not a stringified version
+	result, err := ctx.Eval("{{configs.0}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if m["host"] != "localhost" {
+		t.Errorf("expected host='localhost', got %v", m["host"])
+	}
+	if m["port"] != 8080 {
+		t.Errorf("expected port=8080, got %v", m["port"])
+	}
+}
+
+func TestVarContext_MapAnyAny_Navigation(t *testing.T) {
+	ctx := NewVarContext()
+	// YAML can sometimes decode to map[any]any instead of map[string]any
+	ctx.SetVariable("data", map[any]any{
+		"key1": "value1",
+		"key2": map[any]any{
+			"nested": "deep",
+		},
+	})
+
+	result, err := ctx.Substitute("{{data.key1}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "value1" {
+		t.Errorf("expected 'value1', got %q", result)
+	}
+
+	result, err = ctx.Substitute("{{data.key2.nested}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "deep" {
+		t.Errorf("expected 'deep', got %q", result)
+	}
+}
+
+// =============================================================================
+// Tests for meow-h2v7: Scope-walk in VarContext for step output resolution
+// =============================================================================
+
+func TestVarContext_ScopeWalk_BasicResolution(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Simulate a workflow with expanded steps from foreach
+	// The current step is "agents.0.work" and it references "setup"
+	// The actual step ID is "agents.0.setup"
+	stepStore := map[string]*StepInfo{
+		"agents.0.setup": {
+			ID:     "agents.0.setup",
+			Status: "done",
+			Outputs: map[string]any{
+				"path": "/tmp/agent-0",
+			},
+		},
+	}
+
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := stepStore[stepID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	// Enable scope-walk and set current step context
+	ctx.SetCurrentStep("agents.0.work")
+
+	// Reference "setup" should resolve to "agents.0.setup" via scope-walk
+	result, err := ctx.Substitute("{{setup.outputs.path}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "/tmp/agent-0" {
+		t.Errorf("expected '/tmp/agent-0', got %q", result)
+	}
+}
+
+func TestVarContext_ScopeWalk_MultiLevelPrefix(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Deep nesting: current step is "a.b.c.work", reference is "shell-step"
+	// Should find "a.b.c.shell-step", then "a.b.shell-step", etc.
+	stepStore := map[string]*StepInfo{
+		"a.b.shell-step": {
+			ID:     "a.b.shell-step",
+			Status: "done",
+			Outputs: map[string]any{
+				"result": "found-at-ab",
+			},
+		},
+	}
+
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := stepStore[stepID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	ctx.SetCurrentStep("a.b.c.work")
+
+	result, err := ctx.Substitute("{{shell-step.outputs.result}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "found-at-ab" {
+		t.Errorf("expected 'found-at-ab', got %q", result)
+	}
+}
+
+func TestVarContext_ScopeWalk_ExactMatchTakesPrecedence(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Both exact match and scoped match exist - exact should win
+	stepStore := map[string]*StepInfo{
+		"setup": {
+			ID:     "setup",
+			Status: "done",
+			Outputs: map[string]any{
+				"source": "exact",
+			},
+		},
+		"agents.0.setup": {
+			ID:     "agents.0.setup",
+			Status: "done",
+			Outputs: map[string]any{
+				"source": "scoped",
+			},
+		},
+	}
+
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := stepStore[stepID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	ctx.SetCurrentStep("agents.0.work")
+
+	// Should find exact "setup" first, not "agents.0.setup"
+	result, err := ctx.Substitute("{{setup.outputs.source}}")
+	if err != nil {
+		t.Fatalf("Substitute failed: %v", err)
+	}
+	if result != "exact" {
+		t.Errorf("expected 'exact', got %q", result)
+	}
+}
+
+func TestVarContext_ScopeWalk_NotFoundAfterWalk(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Step doesn't exist at any level
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		return nil, nil
+	})
+
+	ctx.SetCurrentStep("agents.0.work")
+
+	_, err := ctx.Substitute("{{missing-step.outputs.value}}")
+	if err == nil {
+		t.Fatal("expected error for missing step even after scope-walk")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestVarContext_ScopeWalk_DisabledByDefault(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Without calling SetCurrentStep, scope-walk should not be enabled
+	// So a reference to "setup" won't find "agents.0.setup"
+	stepStore := map[string]*StepInfo{
+		"agents.0.setup": {
+			ID:     "agents.0.setup",
+			Status: "done",
+			Outputs: map[string]any{
+				"path": "/tmp/agent-0",
+			},
+		},
+	}
+
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := stepStore[stepID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	// Without SetCurrentStep, scope-walk is disabled
+	// Reference to "setup" should not find "agents.0.setup"
+	_, err := ctx.Substitute("{{setup.outputs.path}}")
+	if err == nil {
+		t.Fatal("expected error when scope-walk is disabled and exact match not found")
+	}
+}
+
+func TestVarContext_ScopeWalk_Eval_ReturnsTypedValue(t *testing.T) {
+	ctx := NewVarContext()
+
+	stepStore := map[string]*StepInfo{
+		"agents.0.analyze": {
+			ID:     "agents.0.analyze",
+			Status: "done",
+			Outputs: map[string]any{
+				"result": map[string]any{
+					"files":  []any{"a.go", "b.go"},
+					"status": "success",
+				},
+			},
+		},
+	}
+
+	ctx.SetStepLookup(func(stepID string) (*StepInfo, error) {
+		if info, ok := stepStore[stepID]; ok {
+			return info, nil
+		}
+		return nil, nil
+	})
+
+	ctx.SetCurrentStep("agents.0.implement")
+
+	// Eval should return the typed value, not stringified
+	result, err := ctx.Eval("{{analyze.outputs.result}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if m["status"] != "success" {
+		t.Errorf("expected status='success', got %v", m["status"])
+	}
+}
