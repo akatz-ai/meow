@@ -16,10 +16,13 @@ var (
 	// Global flags
 	verbose bool
 	workDir string
+
+	// Workflow shorthand flags (meow <workflow> --var x=y)
+	rootVars []string
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "meow",
+	Use:   "meow [workflow]",
 	Short: "MEOW Stack - Molecular Expression Of Work",
 	Long: `MEOW is a durable, composable workflow system for AI agent orchestration.
 
@@ -32,12 +35,31 @@ MEOW enables complex multi-agent workflows with crash recovery and context manag
 For more information, see: https://github.com/meow-stack/meow-machine`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		// When no subcommand is given, list available workflows (like `make` with no args)
-		if err := listWorkflows(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// When no args, list available workflows (like `make` with no args)
+		if len(args) == 0 {
+			return listWorkflows()
 		}
+
+		// First arg might be a workflow name - try to run it
+		workflowName := args[0]
+
+		// Check if it's a known subcommand (subcommands take precedence)
+		for _, sub := range cmd.Commands() {
+			if sub.Name() == workflowName {
+				// This is a subcommand, let cobra handle it
+				// (This shouldn't happen as cobra routes subcommands before RunE)
+				return cmd.Help()
+			}
+			for _, alias := range sub.Aliases {
+				if alias == workflowName {
+					return cmd.Help()
+				}
+			}
+		}
+
+		// Try to run it as a workflow
+		return runWorkflowShorthand(workflowName, args[1:])
 	},
 }
 
@@ -49,6 +71,9 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().StringVarP(&workDir, "workdir", "C", "", "working directory (default: current)")
+
+	// Workflow shorthand flags (meow <workflow> --var x=y)
+	rootCmd.Flags().StringArrayVar(&rootVars, "var", nil, "variable values for workflow (format: name=value)")
 
 	// Version flag
 	rootCmd.Version = Version
@@ -184,4 +209,39 @@ func listWorkflows() error {
 	fmt.Println("Run: meow run <workflow> [--var key=value]")
 
 	return nil
+}
+
+// runWorkflowShorthand runs a workflow using the shorthand syntax (meow <workflow>).
+// This delegates to the run command with the workflow name.
+func runWorkflowShorthand(workflowName string, extraArgs []string) error {
+	dir, err := getWorkDir()
+	if err != nil {
+		return err
+	}
+
+	// Check if the workflow exists
+	loader := workflow.NewLoader(dir)
+	_, err = loader.LoadWorkflow(workflowName)
+	if err != nil {
+		// Check if it's a WorkflowNotFoundError
+		if _, ok := err.(*workflow.WorkflowNotFoundError); ok {
+			return fmt.Errorf("unknown command or workflow: %s", workflowName)
+		}
+		return fmt.Errorf("loading workflow %q: %w", workflowName, err)
+	}
+
+	// Build args for run command: run <workflow> --var x=y ...
+	args := []string{workflowName}
+
+	// Add --var flags from root command
+	for _, v := range rootVars {
+		args = append(args, "--var", v)
+	}
+
+	// Add any extra args
+	args = append(args, extraArgs...)
+
+	// Execute the run command
+	runCmd.SetArgs(args)
+	return runCmd.Execute()
 }

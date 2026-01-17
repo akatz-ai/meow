@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestRootCmdHasRun(t *testing.T) {
-	// Verify root command has a Run function (for no-args workflow listing)
-	if rootCmd.Run == nil {
-		t.Error("rootCmd.Run should be set to list workflows when no args provided")
+func TestRootCmdHasRunE(t *testing.T) {
+	// Verify root command has a RunE function (for workflow listing and shorthand)
+	if rootCmd.RunE == nil {
+		t.Error("rootCmd.RunE should be set to handle workflow listing and shorthand")
 	}
 }
 

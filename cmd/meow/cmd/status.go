@@ -163,6 +163,9 @@ func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLRunStore
 		return &StatusExitError{Code: ExitWorkflowNotFound, Message: fmt.Sprintf("workflow not found: %s", workflowID)}
 	}
 
+	// Check if this workflow is orphaned (running but no lock)
+	isOrphaned := wf.Status == types.RunStatusRunning && !store.IsLocked(wf.ID)
+
 	summary := status.NewWorkflowSummary(wf)
 	opts := status.FormatOptions{
 		NoColor:  statusNoColor,
@@ -172,12 +175,23 @@ func displayWorkflowDetail(ctx context.Context, store *orchestrator.YAMLRunStore
 	}
 
 	if statusJSON {
-		data, err := json.MarshalIndent(summary, "", "  ")
+		// Include orphaned status in JSON
+		type jsonOutput struct {
+			*status.WorkflowSummary
+			Orphaned bool `json:"orphaned,omitempty"`
+		}
+		output := jsonOutput{WorkflowSummary: summary, Orphaned: isOrphaned}
+		data, err := json.MarshalIndent(output, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 		fmt.Println(string(data))
 	} else {
+		// Show orphaned warning before detailed output
+		if isOrphaned {
+			fmt.Println("⚠ WARNING: This workflow is orphaned (no orchestrator running)")
+			fmt.Printf("  Run 'meow resume %s' to recover, or 'meow stop %s' to clean up.\n\n", wf.ID, wf.ID)
+		}
 		output := status.FormatDetailedWorkflow(summary, opts)
 		fmt.Print(output)
 	}
@@ -200,6 +214,16 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 		return fmt.Errorf("listing workflows: %w", err)
 	}
 
+	// Detect orphaned runs (running but no lock) - show these regardless of filters
+	var orphaned []*types.Run
+	if statusFilter == "" || statusFilter == "running" {
+		for _, wf := range workflows {
+			if wf.Status == types.RunStatusRunning && !store.IsLocked(wf.ID) {
+				orphaned = append(orphaned, wf)
+			}
+		}
+	}
+
 	// Apply active filter by default (unless --all or --filter specified)
 	// Active = status=running AND lock held
 	if !statusAll && statusFilter == "" {
@@ -212,7 +236,24 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 		workflows = active
 	}
 
-	if len(workflows) == 0 {
+	// Show orphaned runs first (they need attention)
+	if len(orphaned) > 0 && !statusJSON {
+		fmt.Println("⚠ Orphaned Workflows (no orchestrator):")
+		fmt.Println()
+		for _, wf := range orphaned {
+			fmt.Printf("  %-12s %-20s RUNNING (orphaned)   Started: %s\n",
+				wf.ID, filepath.Base(wf.Template), wf.StartedAt.Format("15:04"))
+		}
+		fmt.Println()
+		if len(orphaned) == 1 {
+			fmt.Printf("  Run 'meow resume %s' to recover, or 'meow stop %s' to clean up.\n", orphaned[0].ID, orphaned[0].ID)
+		} else {
+			fmt.Println("  Run 'meow resume <id>' to recover, or 'meow stop <id>' to clean up.")
+		}
+		fmt.Println()
+	}
+
+	if len(workflows) == 0 && len(orphaned) == 0 {
 		if statusStrict {
 			// Script mode: exit non-zero when nothing matches
 			if statusFilter != "" {
@@ -241,8 +282,13 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 		return nil
 	}
 
+	// If no active workflows but we showed orphaned ones, we're done
+	if len(workflows) == 0 {
+		return nil
+	}
+
 	// If only one workflow, show detailed view automatically
-	if len(workflows) == 1 {
+	if len(workflows) == 1 && len(orphaned) == 0 {
 		return displayWorkflowDetail(ctx, store, workflows[0].ID)
 	}
 
@@ -258,7 +304,20 @@ func displayWorkflowList(ctx context.Context, store *orchestrator.YAMLRunStore) 
 	}
 
 	if statusJSON {
-		data, err := json.MarshalIndent(summaries, "", "  ")
+		// Include orphaned runs in JSON output
+		type jsonOutput struct {
+			Orphaned []*status.WorkflowSummary `json:"orphaned,omitempty"`
+			Active   []*status.WorkflowSummary `json:"active"`
+		}
+		output := jsonOutput{Active: summaries}
+		if len(orphaned) > 0 {
+			orphanedSummaries := make([]*status.WorkflowSummary, len(orphaned))
+			for i, wf := range orphaned {
+				orphanedSummaries[i] = status.NewWorkflowSummary(wf)
+			}
+			output.Orphaned = orphanedSummaries
+		}
+		data, err := json.MarshalIndent(output, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
