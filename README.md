@@ -29,10 +29,8 @@ MEOW is for developers who use Claude Code or Aider, want multi-agent workflows,
 curl -fsSL https://raw.githubusercontent.com/akatz-ai/meow/main/install.sh | sh
 ```
 
-**With Go:**
-```bash
-go install github.com/akatz-ai/meow/cmd/meow@latest
-```
+**Manual download:**
+Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow/releases).
 
 **From source:**
 ```bash
@@ -40,9 +38,6 @@ git clone https://github.com/akatz-ai/meow
 cd meow
 make install
 ```
-
-**Manual download:**
-Download pre-built binaries from [Releases](https://github.com/akatz-ai/meow/releases).
 
 ### Claude Code Skill
 
