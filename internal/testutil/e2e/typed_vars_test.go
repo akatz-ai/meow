@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ command = "echo 'Task: {{task.name}}, IDs: {{task.task_ids}}'"
 
 	// Verify both iterations were dispatched (foreach uses numeric indices)
 	for i := 0; i < 2; i++ {
-		expectedID := "process." + itoa(i)
+		expectedID := fmt.Sprintf("process.%d", i)
 		if !strings.Contains(stderr, expectedID) {
 			t.Errorf("expected iteration %d with ID prefix %s in output", i, expectedID)
 		}
@@ -328,16 +329,20 @@ command = "echo 'Name: {{config.name}}, Nested: {{config.data.nested}}'"
 		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
-	if !strings.Contains(stderr, "workflow completed") {
+	// Check for success - only log success message if test passes
+	workflowCompleted := strings.Contains(stderr, "workflow completed")
+	hasFieldAccessError := strings.Contains(stderr, "cannot access field") || strings.Contains(stderr, "non-map")
+
+	if !workflowCompleted {
 		t.Errorf("expected workflow to complete\nstderr: %s", stderr)
 	}
-
-	// Verify no field access errors
-	if strings.Contains(stderr, "cannot access field") || strings.Contains(stderr, "non-map") {
+	if hasFieldAccessError {
 		t.Errorf("expand did not preserve typed variable:\n%s", stderr)
 	}
 
-	t.Logf("Expand pass-through preserves typed variables correctly")
+	if workflowCompleted && !hasFieldAccessError {
+		t.Logf("Expand pass-through preserves typed variables correctly")
+	}
 }
 
 // TestTypedVariables_StepVariablesInRun verifies that step-level Variables
@@ -405,16 +410,6 @@ func TestTypedVariables_StepVariablesInRun(t *testing.T) {
 	t.Logf("Step-level typed variables survive YAML round-trip correctly")
 }
 
-// Helper function for integer to string conversion
-func itoa(i int) string {
-	if i < 0 {
-		return "-" + itoa(-i)
-	}
-	if i < 10 {
-		return string(rune('0' + i))
-	}
-	return itoa(i/10) + string(rune('0'+i%10))
-}
 
 // Verify the YAML marshaling/unmarshaling preserves types correctly
 // by doing a direct marshal/unmarshal test outside the harness
