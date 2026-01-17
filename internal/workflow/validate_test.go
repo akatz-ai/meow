@@ -289,7 +289,7 @@ func TestValidateFull_ExpansionTargetVariables(t *testing.T) {
 				Condition: "test -f /tmp/flag",
 				OnTrue: &ExpansionTarget{
 					Template: "{{my_var}}",
-					Variables: map[string]string{
+					Variables: map[string]any{
 						"x": "{{undefined}}",
 					},
 				},
@@ -373,7 +373,7 @@ func TestValidateFull_OnTimeoutVariables(t *testing.T) {
 				OnTrue:    &ExpansionTarget{Template: "proceed"},
 				OnTimeout: &ExpansionTarget{
 					Template: "{{handler}}",
-					Variables: map[string]string{
+					Variables: map[string]any{
 						"x": "{{undefined}}",
 					},
 				},
@@ -474,5 +474,88 @@ func TestValidateFull_EmptyStepID(t *testing.T) {
 	result := ValidateFull(tmpl)
 	if !containsError(result, "id is required") {
 		t.Errorf("expected ID required error, got: %v", result.Error())
+	}
+}
+
+// ============================================================================
+// Typed Variables Validation Tests
+// ============================================================================
+
+func TestValidateFull_TypedVariablesInStep(t *testing.T) {
+	// Validation should pass when step.Variables contains non-string values
+	// Only string values should be checked for variable references
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Variables: map[string]Var{
+			"defined_var": {},
+		},
+		Steps: []Step{
+			{
+				ID:       "expand-step",
+				Executor: ExecutorExpand,
+				Template: ".worker",
+				Variables: map[string]any{
+					"config":       map[string]any{"debug": true, "level": 3},
+					"string_value": "{{defined_var}}",
+				},
+			},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if result.HasErrors() {
+		t.Errorf("expected no errors for typed variables, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_TypedVariablesUndefinedRef(t *testing.T) {
+	// Validation should still catch undefined variable references in string values
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Steps: []Step{
+			{
+				ID:       "expand-step",
+				Executor: ExecutorExpand,
+				Template: ".worker",
+				Variables: map[string]any{
+					"config":       map[string]any{"debug": true},
+					"string_value": "{{undefined_var}}",
+				},
+			},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if !containsError(result, "undefined variable") {
+		t.Errorf("expected undefined variable error for string value, got: %v", result.Error())
+	}
+}
+
+func TestValidateFull_TypedVariablesInExpansionTarget(t *testing.T) {
+	// Validation should pass when ExpansionTarget.Variables contains non-string values
+	tmpl := &Template{
+		Meta: Meta{Name: "test"},
+		Variables: map[string]Var{
+			"my_var": {},
+		},
+		Steps: []Step{
+			{
+				ID:        "check",
+				Executor:  ExecutorBranch,
+				Condition: "test -f /tmp/flag",
+				OnTrue: &ExpansionTarget{
+					Template: "do-something",
+					Variables: map[string]any{
+						"nested": map[string]any{"key": "value"},
+						"ref":    "{{my_var}}",
+					},
+				},
+			},
+		},
+	}
+
+	result := ValidateFull(tmpl)
+	if result.HasErrors() {
+		t.Errorf("expected no errors for typed expansion target variables, got: %v", result.Error())
 	}
 }

@@ -133,8 +133,8 @@ type Step struct {
 	// Timeout already defined above
 
 	// Expand executor fields
-	Template  string            `toml:"template,omitempty"`  // Template reference
-	Variables map[string]string `toml:"variables,omitempty"` // Variables for template
+	Template  string         `toml:"template,omitempty"`  // Template reference
+	Variables map[string]any `toml:"variables,omitempty"` // Variables for template (typed values preserved)
 
 	// Branch executor fields
 	Condition string           `toml:"condition,omitempty"`   // Shell command (exit 0 = true)
@@ -266,9 +266,9 @@ func (is *InlineStep) ToStep() *Step {
 
 // ExpansionTarget specifies what to expand for condition branches.
 type ExpansionTarget struct {
-	Template  string            `toml:"template,omitempty"`
-	Inline    []InlineStep      `toml:"inline,omitempty"`
-	Variables map[string]string `toml:"variables,omitempty"`
+	Template  string         `toml:"template,omitempty"`
+	Inline    []InlineStep   `toml:"inline,omitempty"`
+	Variables map[string]any `toml:"variables,omitempty"` // Typed values preserved
 }
 
 // InlineStep represents an inline step definition within an expansion target.
@@ -302,8 +302,8 @@ type InlineStep struct {
 	Graceful *bool `toml:"graceful,omitempty"`
 
 	// Expand executor fields
-	Template  string            `toml:"template,omitempty"`
-	Variables map[string]string `toml:"variables,omitempty"`
+	Template  string         `toml:"template,omitempty"`
+	Variables map[string]any `toml:"variables,omitempty"` // Typed values preserved
 
 	// Branch executor fields
 	Condition string           `toml:"condition,omitempty"`
