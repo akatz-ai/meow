@@ -668,7 +668,7 @@ func levenshteinDistance(a, b string) int {
 
 // coerceVariable coerces a variable value to the appropriate type based on its definition.
 // Returns the coerced value and any error.
-func coerceVariable(name string, value any, def *Var) (any, error) {
+func coerceVariable(_ string, value any, def *Var) (any, error) {
 	// No definition = pass through unchanged
 	if def == nil {
 		return value, nil

@@ -49,7 +49,7 @@ const (
 type Var struct {
 	Required    bool     `toml:"required"`
 	Default     any      `toml:"default,omitempty"`
-	Type        VarType  `toml:"type,omitempty"` // string (default), int, bool, file
+	Type        VarType  `toml:"type,omitempty"` // string (default), int, bool, file, json, object
 	Description string   `toml:"description,omitempty"`
 	Enum        []string `toml:"enum,omitempty"` // Allowed values
 }
