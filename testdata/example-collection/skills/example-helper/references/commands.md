@@ -52,9 +52,11 @@ meow collection install <path> --skill claude
 
 The example workflow demonstrates:
 
-1. **Shell executor** - Runs a simple shell command
-2. **Agent executor** - Spawns an AI agent to complete a task
-3. **Dependencies** - The agent step depends on the shell step completing
+1. **Shell executor** - Runs a simple shell command (`hello` step)
+2. **Spawn executor** - Starts an agent in a tmux session (`spawn-agent` step)
+3. **Agent executor** - Agent completes a task and calls `meow done` (`agent-task` step)
+4. **Kill executor** - Gracefully stops the agent session (`cleanup` step)
+5. **Dependencies** - Each step depends on the previous step completing
 
 ## Learn More
 

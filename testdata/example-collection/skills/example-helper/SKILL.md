@@ -43,8 +43,10 @@ When working with the example collection:
 
 3. The workflow demonstrates:
    - Shell executor (`hello` step)
+   - Spawn executor (`spawn-agent` step)
    - Agent executor (`agent-task` step)
-   - Basic step dependencies
+   - Kill executor (`cleanup` step)
+   - Step dependencies and proper agent lifecycle
 
 ## Files in This Skill
 
