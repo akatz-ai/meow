@@ -3,6 +3,12 @@
 `meow-collection.toml` is the manifest file that defines a workflow collection.
 It must live at the repository root.
 
+Collections are one way to distribute MEOW workflows. See [DISTRIBUTION.md](DISTRIBUTION.md) for the complete distribution guide, including marketplace distribution with skills.
+
+**See also:**
+- [SKILLS.md](SKILLS.md) — Skill format and bundling
+- [DISTRIBUTION.md](DISTRIBUTION.md) — Two-pronged distribution strategy
+
 ## Example
 
 ```toml

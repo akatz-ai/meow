@@ -233,10 +233,22 @@ needs = ["get-branch"]
 
 This isn't a limitation—it's the point. MEOW coordinates; you build the rest.
 
+## Workflow Distribution
+
+MEOW workflows can be distributed through two channels:
+
+1. **MEOW Collections** — Direct workflow installation for MEOW users
+2. **Claude Marketplace** — Self-installing skill packages for Claude users
+
+Create once, distribute both ways. See [DISTRIBUTION.md](docs/DISTRIBUTION.md) for the complete guide.
+
 ## Documentation
 
 - **[Architecture](docs/ARCHITECTURE.md)** — Core principles, design decisions, and the 7 executors
 - **[Patterns](docs/PATTERNS.md)** — Common workflow patterns: work loops, Ralph Wiggum persistence, human gates, parallel agents
+- **[Skills](docs/SKILLS.md)** — Creating and distributing workflow bundles for AI harnesses
+- **[Distribution](docs/DISTRIBUTION.md)** — Two-channel distribution strategy for MEOW workflows
+- **[Collections](docs/COLLECTIONS.md)** — Collection manifest format reference
 
 ## Status
 
