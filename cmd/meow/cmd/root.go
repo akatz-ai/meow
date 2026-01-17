@@ -21,9 +21,12 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "meow",
 	Short: "MEOW Stack - Molecular Expression Of Work",
-	Long: `MEOW is a durable, recursive, composable workflow system for AI agent orchestration.
+	Long: `MEOW is a durable, composable workflow system for AI agent orchestration.
 
-Built on 6 primitive bead types (task, condition, stop, start, code, expand),
+The Makefile of agent orchestration. No Python. No cloud. No magic.
+Just tmux, TOML, and a binary.
+
+Built on 7 primitive executors (shell, spawn, kill, expand, branch, foreach, agent),
 MEOW enables complex multi-agent workflows with crash recovery and context management.
 
 For more information, see: https://github.com/meow-stack/meow-machine`,

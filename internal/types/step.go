@@ -213,9 +213,13 @@ type AgentOutputDef struct {
 
 // AgentConfig for executor: agent
 type AgentConfig struct {
-	Agent   string                    `yaml:"agent" toml:"agent"`
-	Prompt  string                    `yaml:"prompt" toml:"prompt"`
-	Mode    string                    `yaml:"mode,omitempty" toml:"mode,omitempty"` // autonomous (default) | interactive
+	Agent  string `yaml:"agent" toml:"agent"`
+	Prompt string `yaml:"prompt" toml:"prompt"`
+	// Mode controls how the agent step behaves:
+	//   - "autonomous" (default): Agent works until meow done; stop hook re-injects prompt
+	//   - "interactive": Agent allows human conversation during step
+	//   - "fire_forget": Inject prompt and complete immediately; no outputs allowed
+	Mode    string                    `yaml:"mode,omitempty" toml:"mode,omitempty"`
 	Outputs map[string]AgentOutputDef `yaml:"outputs,omitempty" toml:"outputs,omitempty"`
 	Timeout string                    `yaml:"timeout,omitempty" toml:"timeout,omitempty"` // Max time for step
 }

@@ -66,8 +66,8 @@ func (s *Store) loadLocked() error {
 
 // Save writes agent state to disk atomically.
 func (s *Store) Save(ctx context.Context) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	return s.saveLocked()
 }

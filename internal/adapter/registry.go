@@ -131,20 +131,13 @@ func (r *Registry) resolveRelativePaths(config *types.AdapterConfig, adapterDir 
 // Resolution order:
 // 1. Step-level adapter (stepAdapter)
 // 2. Workflow-level default (workflowDefault)
-// 3. Project config (projectDefault)
-// 4. Global config (globalDefault)
-func (r *Registry) Resolve(stepAdapter, workflowDefault, projectDefault, globalDefault string) string {
+// Returns empty string if neither is set.
+func (r *Registry) Resolve(stepAdapter, workflowDefault string) string {
 	if stepAdapter != "" {
 		return stepAdapter
 	}
 	if workflowDefault != "" {
 		return workflowDefault
-	}
-	if projectDefault != "" {
-		return projectDefault
-	}
-	if globalDefault != "" {
-		return globalDefault
 	}
 	return ""
 }

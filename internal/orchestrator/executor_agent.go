@@ -319,14 +319,17 @@ func validateFilePath(path, workdir string) string {
 }
 
 // ParseAgentMode converts a string to AgentMode.
-func ParseAgentMode(s string) AgentMode {
+// Returns an error for invalid modes, listing all valid options.
+func ParseAgentMode(s string) (AgentMode, error) {
 	switch strings.ToLower(s) {
+	case "", "autonomous":
+		return AgentModeAutonomous, nil
 	case "interactive":
-		return AgentModeInteractive
+		return AgentModeInteractive, nil
 	case "fire_forget":
-		return AgentModeFireForget
+		return AgentModeFireForget, nil
 	default:
-		return AgentModeAutonomous
+		return "", fmt.Errorf("invalid agent mode %q: must be autonomous, interactive, or fire_forget", s)
 	}
 }
 
