@@ -7,8 +7,17 @@ import (
 	"testing"
 )
 
+// resetExportFlags resets global flags between tests.
+func resetExportFlags() {
+	skillExportForMarketplace = false
+	skillExportOutput = ""
+	skillExportRepo = ""
+	skillExportDryRun = false
+}
+
 func TestSkillExport(t *testing.T) {
 	t.Run("exports skill with correct directory structure", func(t *testing.T) {
+		resetExportFlags()
 		// Setup test skill directory
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "test-skill")
@@ -111,6 +120,7 @@ name = "helpers"
 	})
 
 	t.Run("generates valid marketplace.json", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "market-test")
 		workflowDir := filepath.Join(tmpDir, "workflows")
@@ -186,6 +196,7 @@ version = "2.0.0"
 	})
 
 	t.Run("generates valid plugin.json", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "plugin-test")
 		workflowDir := filepath.Join(tmpDir, "workflows")
@@ -260,6 +271,7 @@ workflows = ["workflows/main.meow.toml"]
 	})
 
 	t.Run("dry-run does not write files", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "dry-test")
 		workflowDir := filepath.Join(tmpDir, "workflows")
@@ -315,6 +327,7 @@ workflows = ["workflows/main.meow.toml"]
 	})
 
 	t.Run("fails if workflow paths do not exist", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "missing-workflow")
 		outputDir := filepath.Join(tmpDir, "dist")
@@ -354,6 +367,7 @@ workflows = ["workflows/nonexistent.meow.toml"]
 	})
 
 	t.Run("fails if export.workflows is empty", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "empty-workflows")
 		outputDir := filepath.Join(tmpDir, "dist")
@@ -393,6 +407,7 @@ workflows = []
 	})
 
 	t.Run("copies references directory", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "refs-test")
 		refDir := filepath.Join(skillDir, "references")
@@ -448,6 +463,7 @@ workflows = ["workflows/main.meow.toml"]
 	})
 
 	t.Run("preserves workflow directory structure", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "nested-test")
 		workflowDir := filepath.Join(tmpDir, "workflows")
@@ -505,6 +521,7 @@ workflows = [
 	})
 
 	t.Run("uses skill name for plugin when marketplace config not set", func(t *testing.T) {
+		resetExportFlags()
 		tmpDir := t.TempDir()
 		skillDir := filepath.Join(tmpDir, "skills", "no-marketplace")
 		workflowDir := filepath.Join(tmpDir, "workflows")
