@@ -467,3 +467,46 @@ func TestExecuteShell_MeowEnvVarsInjected(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, result.Outputs["env_vars"])
 	}
 }
+
+func TestExecuteShell_JSONOutputParsing(t *testing.T) {
+	// Test that type="json" parses stdout as JSON
+	step := &types.Step{
+		ID:       "test-json-output",
+		Executor: types.ExecutorShell,
+		Shell: &types.ShellConfig{
+			Command: `echo '{"name":"test-obj","data":{"nested":"value"}}'`,
+			Outputs: map[string]types.OutputSource{
+				"config": {Source: "stdout", Type: "json"},
+			},
+		},
+	}
+
+	result, stepErr := ExecuteShell(context.Background(), step)
+	if stepErr != nil {
+		t.Fatalf("unexpected error: %v", stepErr)
+	}
+
+	// Verify config was parsed as map, not string
+	config, ok := result.Outputs["config"]
+	if !ok {
+		t.Fatalf("config output not found")
+	}
+
+	configMap, ok := config.(map[string]any)
+	if !ok {
+		t.Fatalf("config is not a map, got %T: %v", config, config)
+	}
+
+	if configMap["name"] != "test-obj" {
+		t.Errorf("expected name='test-obj', got %v", configMap["name"])
+	}
+
+	dataMap, ok := configMap["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data is not a map, got %T", configMap["data"])
+	}
+
+	if dataMap["nested"] != "value" {
+		t.Errorf("expected nested='value', got %v", dataMap["nested"])
+	}
+}

@@ -1409,14 +1409,14 @@ func TestBakeWorkflow_DefaultObjectPreservesType(t *testing.T) {
 	if step.Expand == nil {
 		t.Fatal("expected ExpandConfig")
 	}
-	// When substituted in a string context ({{config}}), maps are JSON-stringified
+	// Pure references like "{{config}}" preserve typed values (not stringified)
 	taskConfigVal := step.Expand.Variables["task_config"]
-	taskConfigStr, ok := taskConfigVal.(string)
+	taskConfigMap, ok := taskConfigVal.(map[string]any)
 	if !ok {
-		t.Fatalf("expected string, got %T", taskConfigVal)
+		t.Fatalf("expected map[string]any, got %T", taskConfigVal)
 	}
-	if !strings.Contains(taskConfigStr, "key") {
-		t.Errorf("expected JSON-stringified config, got %q", taskConfigStr)
+	if taskConfigMap["key"] != "value" {
+		t.Errorf("expected task_config.key='value', got %v", taskConfigMap["key"])
 	}
 }
 

@@ -201,7 +201,7 @@ func (b *Baker) setShellConfig(step *types.Step, ts *Step) error {
 					return fmt.Errorf("substitute shell_outputs.%s.source: %w", k, err)
 				}
 			}
-			outputs[k] = types.OutputSource{Source: source}
+			outputs[k] = types.OutputSource{Source: source, Type: v.Type}
 		}
 	}
 
@@ -306,19 +306,10 @@ func (b *Baker) setExpandConfig(step *types.Step, ts *Step) error {
 		return fmt.Errorf("substitute template: %w", err)
 	}
 
-	// Substitute variable values (preserving types for non-strings)
-	variables := make(map[string]any)
-	for k, v := range ts.Variables {
-		if s, ok := v.(string); ok {
-			subV, err := b.VarContext.Substitute(s)
-			if err != nil {
-				return fmt.Errorf("substitute variable %s: %w", k, err)
-			}
-			variables[k] = subV
-		} else {
-			// Non-string values are passed through (preserving types)
-			variables[k] = v
-		}
+	// Evaluate variable values, preserving types for pure references like "{{init.outputs.config}}"
+	variables, err := b.VarContext.EvalMap(ts.Variables)
+	if err != nil {
+		return fmt.Errorf("substitute variables: %w", err)
 	}
 
 	step.Expand = &types.ExpandConfig{
@@ -352,19 +343,10 @@ func (b *Baker) setForeachConfig(step *types.Step, ts *Step) error {
 		return fmt.Errorf("substitute template: %w", err)
 	}
 
-	// Substitute variable values (preserving types for non-strings)
-	variables := make(map[string]any)
-	for k, v := range ts.Variables {
-		if s, ok := v.(string); ok {
-			subV, err := b.VarContext.Substitute(s)
-			if err != nil {
-				return fmt.Errorf("substitute variable %s: %w", k, err)
-			}
-			variables[k] = subV
-		} else {
-			// Non-string values are passed through (preserving types)
-			variables[k] = v
-		}
+	// Evaluate variable values, preserving types for pure references like "{{init.outputs.config}}"
+	variables, err := b.VarContext.EvalMap(ts.Variables)
+	if err != nil {
+		return fmt.Errorf("substitute variables: %w", err)
 	}
 
 	// Convert and substitute parallel (supports bool or string like "{{parallel}}")
@@ -467,7 +449,7 @@ func (b *Baker) setBranchConfig(step *types.Step, ts *Step) error {
 					return fmt.Errorf("substitute shell_outputs.%s.source: %w", k, err)
 				}
 			}
-			outputs[k] = types.OutputSource{Source: source}
+			outputs[k] = types.OutputSource{Source: source, Type: v.Type}
 		}
 	}
 
@@ -518,19 +500,10 @@ func (b *Baker) expansionTargetToTypesBranch(et *ExpansionTarget) (*types.Branch
 		}
 	}
 
-	// Substitute variable values (preserving types for non-strings)
-	variables := make(map[string]any)
-	for k, v := range et.Variables {
-		if s, ok := v.(string); ok {
-			subV, err := b.VarContext.Substitute(s)
-			if err != nil {
-				return nil, fmt.Errorf("substitute variable %s: %w", k, err)
-			}
-			variables[k] = subV
-		} else {
-			// Non-string values are passed through (preserving types)
-			variables[k] = v
-		}
+	// Evaluate variable values, preserving types for pure references like "{{init.outputs.config}}"
+	variables, err := b.VarContext.EvalMap(et.Variables)
+	if err != nil {
+		return nil, fmt.Errorf("substitute variables: %w", err)
 	}
 
 	target := &types.BranchTarget{

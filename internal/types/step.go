@@ -90,7 +90,8 @@ func (s StepStatus) CanTransitionTo(target StepStatus) bool {
 
 // OutputSource defines where to capture output from shell commands.
 type OutputSource struct {
-	Source string `yaml:"source" toml:"source"` // stdout | stderr | exit_code | file:/path
+	Source string `yaml:"source" toml:"source"`                  // stdout | stderr | exit_code | file:/path
+	Type   string `yaml:"type,omitempty" toml:"type,omitempty"` // json | (empty for string)
 }
 
 // ShellConfig for executor: shell

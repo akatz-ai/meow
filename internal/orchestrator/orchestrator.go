@@ -604,6 +604,22 @@ func (o *Orchestrator) resolveStepOutputRefs(wf *types.Run, step *types.Step) {
 			step.Expand.Template = resolve(step.Expand.Template)
 			for k, v := range step.Expand.Variables {
 				if s, ok := v.(string); ok {
+					// Check if entire string is a single step output reference
+					// If so, preserve the typed value instead of stringifying
+					matches := stepOutputRefPattern.FindAllStringSubmatch(s, -1)
+					if len(matches) == 1 && matches[0][0] == s {
+						// Pure reference - preserve typed value
+						refStepID := matches[0][1]
+						fieldName := matches[0][2]
+						depStep, _, found := findStepWithScopeWalk(wf, refStepID, step.ID)
+						if found && depStep.Outputs != nil {
+							if val, valOk := getNestedOutputValue(depStep.Outputs, fieldName); valOk {
+								step.Expand.Variables[k] = val // Keep typed value
+								continue
+							}
+						}
+					}
+					// Otherwise use string substitution
 					step.Expand.Variables[k] = resolve(s)
 				}
 				// Non-string values are preserved as-is
@@ -1448,7 +1464,7 @@ func (o *Orchestrator) completeBranchCondition(
 
 	if cfg.Outputs != nil {
 		for name, source := range cfg.Outputs {
-			value, err := captureOutput(source.Source, result, substituteSource)
+			value, err := captureOutput(source, result, substituteSource)
 			if err != nil {
 				o.logger.Warn("output capture failed", "name", name, "error", err)
 				outputs[name] = nil

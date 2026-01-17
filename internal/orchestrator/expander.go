@@ -221,6 +221,41 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 	}, nil
 }
 
+// resolveExpandConfig resolves any step output references in the expand config's variables.
+// This is called at runtime when the expand step executes, so step outputs are available.
+func (a *TemplateExpanderAdapter) resolveExpandConfig(wf *types.Run, config *types.ExpandConfig) (*types.ExpandConfig, error) {
+	if len(config.Variables) == 0 {
+		return config, nil
+	}
+
+	// Create a VarContext with access to step outputs
+	vc := workflow.NewVarContext()
+
+	// Add workflow variables
+	for k, v := range wf.Variables {
+		vc.Set(k, v)
+	}
+
+	// Add step outputs from all done steps
+	for stepID, step := range wf.Steps {
+		if step.Status == types.StepStatusDone && step.Outputs != nil {
+			vc.SetOutputs(stepID, step.Outputs)
+		}
+	}
+
+	// Resolve variables using EvalMap which preserves types for pure references
+	resolvedVars, err := vc.EvalMap(config.Variables)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return a copy with resolved variables
+	return &types.ExpandConfig{
+		Template:  config.Template,
+		Variables: resolvedVars,
+	}, nil
+}
+
 // sanitizeID creates a safe ID component from a template reference.
 func sanitizeID(ref string) string {
 	// Remove path separators and extensions
@@ -257,8 +292,15 @@ func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Run, ste
 		sourceModule = wf.Template
 	}
 
+	// Resolve any step output references in variables at runtime
+	// This is needed because references like "{{init.outputs.config}}" are deferred at bake time
+	resolvedConfig, err := a.resolveExpandConfig(wf, step.Expand)
+	if err != nil {
+		return fmt.Errorf("resolving expand variables: %w", err)
+	}
+
 	// Call the underlying expander, passing the source module for local refs
-	result, err := a.Expander.Expand(ctx, step.Expand, step.ID, wf.ID, sourceModule)
+	result, err := a.Expander.Expand(ctx, resolvedConfig, step.ID, wf.ID, sourceModule)
 	if err != nil {
 		return err
 	}

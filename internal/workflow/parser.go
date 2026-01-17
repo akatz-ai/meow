@@ -92,7 +92,8 @@ func (e ExecutorType) IsOrchestrator() bool {
 
 // OutputSource defines where to capture output from for shell executor.
 type OutputSource struct {
-	Source string `toml:"source"` // stdout | stderr | exit_code | file:/path
+	Source string `toml:"source"`         // stdout | stderr | exit_code | file:/path
+	Type   string `toml:"type,omitempty"` // json | (empty for string)
 }
 
 // AgentOutputDef defines an expected output from an agent step.

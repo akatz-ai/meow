@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,7 +90,7 @@ func runShellCommand(ctx context.Context, cfg *types.ShellConfig) (*ShellResult,
 	// Note: This standalone executor doesn't have workflow context for step output substitution
 	if cfg.Outputs != nil {
 		for name, source := range cfg.Outputs {
-			value, captureErr := captureOutput(source.Source, result, nil)
+			value, captureErr := captureOutput(source, result, nil)
 			if captureErr != nil {
 				// Log but don't fail on capture errors
 				result.Outputs[name] = nil
@@ -112,14 +113,17 @@ type SourceSubstituteFunc func(source string) (string, error)
 // captureOutput extracts a value based on the source specification.
 // If substituteSource is provided, it will be called to substitute any remaining
 // variable references in file paths before reading.
-func captureOutput(source string, result *ShellResult, substituteSource SourceSubstituteFunc) (any, error) {
+func captureOutput(outputSource types.OutputSource, result *ShellResult, substituteSource SourceSubstituteFunc) (any, error) {
+	source := outputSource.Source
+	var value string
+
 	switch source {
 	case "stdout":
-		return result.Stdout, nil
+		value = result.Stdout
 	case "stderr":
-		return result.Stderr, nil
+		value = result.Stderr
 	case "exit_code":
-		return result.ExitCode, nil
+		return result.ExitCode, nil // exit_code is always int, ignore type
 	default:
 		// Check for file: prefix
 		if strings.HasPrefix(source, "file:") {
@@ -136,8 +140,20 @@ func captureOutput(source string, result *ShellResult, substituteSource SourceSu
 			if err != nil {
 				return nil, fmt.Errorf("reading output file %s: %w", filePath, err)
 			}
-			return strings.TrimSpace(string(content)), nil
+			value = strings.TrimSpace(string(content))
+		} else {
+			return nil, fmt.Errorf("unknown output source: %s", source)
 		}
-		return nil, fmt.Errorf("unknown output source: %s", source)
 	}
+
+	// Handle type conversion
+	if outputSource.Type == "json" {
+		var parsed any
+		if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+			return nil, fmt.Errorf("parsing JSON from %s: %w", source, err)
+		}
+		return parsed, nil
+	}
+
+	return value, nil
 }

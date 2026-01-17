@@ -277,6 +277,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 				if src, ok := vm["source"].(string); ok {
 					os.Source = src
 				}
+				if typ, ok := vm["type"].(string); ok {
+					os.Type = typ
+				}
 				s.ShellOutputs[k] = os
 			}
 		}
