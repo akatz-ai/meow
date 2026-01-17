@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -512,6 +513,63 @@ func TestStore_ListReturnsCopies(t *testing.T) {
 	got, _ := s.Get(ctx, "test-agent")
 	if got.Name != "Original Name" {
 		t.Errorf("List returned reference to internal state: Name = %s, want 'Original Name'", got.Name)
+	}
+}
+
+// TestStore_SaveUsesExclusiveLock verifies that Save() uses an exclusive lock (Lock),
+// not a read lock (RLock). This test exercises concurrent Save() calls which
+// should NOT race since Save() writes to disk and requires exclusive access.
+//
+// Run with: go test -race ./internal/agent/...
+//
+// If Save() incorrectly uses RLock(), the race detector will catch it because
+// multiple goroutines will be writing to the same file concurrently.
+func TestStore_SaveUsesExclusiveLock(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := NewStore(tmpDir)
+	ctx := context.Background()
+
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Add some agents to have data to save
+	for i := 0; i < 5; i++ {
+		agent := &types.Agent{
+			ID:     fmt.Sprintf("agent-%d", i),
+			Name:   fmt.Sprintf("Agent %d", i),
+			Status: types.AgentStatusActive,
+		}
+		if err := s.Set(ctx, agent); err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+	}
+
+	// Run concurrent Save() calls
+	// If Save() uses RLock incorrectly, the race detector will catch concurrent writes
+	const numGoroutines = 10
+	errCh := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			errCh <- s.Save(ctx)
+		}()
+	}
+
+	// Collect results
+	for i := 0; i < numGoroutines; i++ {
+		if err := <-errCh; err != nil {
+			t.Errorf("Save() error = %v", err)
+		}
+	}
+
+	// Verify data is still intact
+	agents, err := s.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(agents) != 5 {
+		t.Errorf("expected 5 agents, got %d", len(agents))
 	}
 }
 

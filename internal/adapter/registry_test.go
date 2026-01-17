@@ -213,62 +213,43 @@ command = "modified-command"
 	}
 }
 
-func TestRegistry_Resolve(t *testing.T) {
+// TestRegistry_Resolve_SimplifiedAPI tests the simplified 2-parameter Resolve API.
+// Resolution order: step adapter > workflow default > empty.
+// Project/global defaults were removed as they were never wired up.
+func TestRegistry_Resolve_SimplifiedAPI(t *testing.T) {
 	registry := NewRegistry("", "")
 
 	tests := []struct {
 		name            string
 		stepAdapter     string
 		workflowDefault string
-		projectDefault  string
-		globalDefault   string
 		expected        string
 	}{
 		{
 			name:            "step adapter wins",
 			stepAdapter:     "step-adapter",
 			workflowDefault: "workflow-adapter",
-			projectDefault:  "project-adapter",
-			globalDefault:   "global-adapter",
 			expected:        "step-adapter",
 		},
 		{
 			name:            "workflow default when no step",
 			stepAdapter:     "",
 			workflowDefault: "workflow-adapter",
-			projectDefault:  "project-adapter",
-			globalDefault:   "global-adapter",
 			expected:        "workflow-adapter",
-		},
-		{
-			name:            "project default when no workflow",
-			stepAdapter:     "",
-			workflowDefault: "",
-			projectDefault:  "project-adapter",
-			globalDefault:   "global-adapter",
-			expected:        "project-adapter",
-		},
-		{
-			name:            "global default when no project",
-			stepAdapter:     "",
-			workflowDefault: "",
-			projectDefault:  "",
-			globalDefault:   "global-adapter",
-			expected:        "global-adapter",
 		},
 		{
 			name:            "empty when nothing set",
 			stepAdapter:     "",
 			workflowDefault: "",
-			projectDefault:  "",
-			globalDefault:   "",
 			expected:        "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := registry.Resolve(tt.stepAdapter, tt.workflowDefault, tt.projectDefault, tt.globalDefault)
+			// Simplified API: only 2 parameters (step, workflow)
+			// No more project/global defaults that were never implemented
+			result := registry.Resolve(tt.stepAdapter, tt.workflowDefault)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}

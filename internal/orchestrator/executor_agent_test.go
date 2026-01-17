@@ -448,13 +448,43 @@ func TestParseAgentMode(t *testing.T) {
 		{"FIRE_FORGET", AgentModeFireForget},
 		{"Fire_Forget", AgentModeFireForget},
 		{"", AgentModeAutonomous},
-		{"unknown", AgentModeAutonomous},
 	}
 
 	for _, tc := range tests {
-		result := ParseAgentMode(tc.input)
+		result, err := ParseAgentMode(tc.input)
+		if err != nil {
+			t.Errorf("ParseAgentMode(%q) unexpected error: %v", tc.input, err)
+			continue
+		}
 		if result != tc.expected {
 			t.Errorf("ParseAgentMode(%q) = %q, expected %q", tc.input, result, tc.expected)
+		}
+	}
+}
+
+// TestParseAgentMode_InvalidReturnsError verifies that ParseAgentMode returns
+// an error for invalid modes, with a message listing all valid options.
+// This helps users understand what modes are available.
+func TestParseAgentMode_InvalidReturnsError(t *testing.T) {
+	invalidModes := []string{"unknown", "auto", "fireforget", "fire-forget", "sync", "async"}
+
+	for _, mode := range invalidModes {
+		_, err := ParseAgentMode(mode)
+		if err == nil {
+			t.Errorf("ParseAgentMode(%q) should return error for invalid mode", mode)
+			continue
+		}
+
+		errMsg := err.Error()
+		// Error message should list all valid modes
+		if !strings.Contains(errMsg, "autonomous") {
+			t.Errorf("error message should mention 'autonomous', got: %s", errMsg)
+		}
+		if !strings.Contains(errMsg, "interactive") {
+			t.Errorf("error message should mention 'interactive', got: %s", errMsg)
+		}
+		if !strings.Contains(errMsg, "fire_forget") {
+			t.Errorf("error message should mention 'fire_forget', got: %s", errMsg)
 		}
 	}
 }
