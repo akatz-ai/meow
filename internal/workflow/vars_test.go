@@ -1878,3 +1878,21 @@ func TestVarContext_Eval_DeferredVariable(t *testing.T) {
 		t.Errorf("expected '{{item}}', got %q", s)
 	}
 }
+
+func TestVarContext_Eval_EmptyBraces(t *testing.T) {
+	ctx := NewVarContext()
+
+	// Empty braces should pass through unchanged (consistent with Substitute)
+	result, err := ctx.Eval("{{}}")
+	if err != nil {
+		t.Fatalf("Eval failed: %v", err)
+	}
+
+	s, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", result)
+	}
+	if s != "{{}}" {
+		t.Errorf("expected '{{}}', got %q", s)
+	}
+}

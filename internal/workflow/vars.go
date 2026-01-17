@@ -515,7 +515,8 @@ func (c *VarContext) Eval(expr string) (any, error) {
 	if strings.HasPrefix(trimmed, "{{") && strings.HasSuffix(trimmed, "}}") {
 		inner := strings.TrimSpace(trimmed[2 : len(trimmed)-2])
 		// Ensure no nested references (no {{ inside the inner content)
-		if !strings.Contains(inner, "{{") {
+		// and ensure inner is non-empty (empty braces pass through unchanged)
+		if inner != "" && !strings.Contains(inner, "{{") {
 			val, err := c.resolve(inner)
 			if err != nil {
 				// If deferred, return the original expression as a string
@@ -528,7 +529,7 @@ func (c *VarContext) Eval(expr string) (any, error) {
 		}
 	}
 
-	// Mixed content - return as string
+	// Mixed content or empty braces - return as string
 	return c.Substitute(expr)
 }
 
