@@ -27,7 +27,8 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
@@ -50,7 +51,7 @@ changelog:
 release:
   github:
     owner: akatz-ai
-    name: meow-machine
+    name: meow
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
