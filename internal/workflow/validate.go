@@ -265,7 +265,10 @@ func validateVariableReferences(t *Template, name string, result *ValidationResu
 		checkVarRefs(step.Template, name, step.ID, "template", defined, t, result)
 
 		for k, v := range step.Variables {
-			checkVarRefs(v, name, step.ID, fmt.Sprintf("variables.%s", k), defined, t, result)
+			// Only check string values for variable references (typed values are preserved as-is)
+			if vs, ok := v.(string); ok {
+				checkVarRefs(vs, name, step.ID, fmt.Sprintf("variables.%s", k), defined, t, result)
+			}
 		}
 
 		if step.OnTrue != nil {
@@ -283,7 +286,10 @@ func validateVariableReferences(t *Template, name string, result *ValidationResu
 func checkExpansionTargetVarRefs(target *ExpansionTarget, name, stepID, field string, defined map[string]bool, t *Template, result *ValidationResult) {
 	checkVarRefs(target.Template, name, stepID, field+".template", defined, t, result)
 	for k, v := range target.Variables {
-		checkVarRefs(v, name, stepID, fmt.Sprintf("%s.variables.%s", field, k), defined, t, result)
+		// Only check string values for variable references (typed values are preserved as-is)
+		if vs, ok := v.(string); ok {
+			checkVarRefs(vs, name, stepID, fmt.Sprintf("%s.variables.%s", field, k), defined, t, result)
+		}
 	}
 }
 

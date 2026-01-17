@@ -303,11 +303,9 @@ func parseModuleStep(data map[string]any) (*Step, error) {
 		s.Template = v
 	}
 	if vars, ok := data["variables"].(map[string]any); ok {
-		s.Variables = make(map[string]string)
+		s.Variables = make(map[string]any)
 		for k, v := range vars {
-			if vs, ok := v.(string); ok {
-				s.Variables[k] = vs
-			}
+			s.Variables[k] = v // Preserve typed values
 		}
 	}
 
@@ -399,11 +397,9 @@ func parseExpansionTarget(data map[string]any) (*ExpansionTarget, error) {
 
 	// Parse variables
 	if vars, ok := data["variables"].(map[string]any); ok {
-		target.Variables = make(map[string]string)
+		target.Variables = make(map[string]any)
 		for k, v := range vars {
-			if vs, ok := v.(string); ok {
-				target.Variables[k] = vs
-			}
+			target.Variables[k] = v // Preserve typed values
 		}
 	}
 
@@ -516,11 +512,9 @@ func parseInlineStep(data map[string]any) (*InlineStep, error) {
 		step.Template = v
 	}
 	if vars, ok := data["variables"].(map[string]any); ok {
-		step.Variables = make(map[string]string)
+		step.Variables = make(map[string]any)
 		for k, v := range vars {
-			if vs, ok := v.(string); ok {
-				step.Variables[k] = vs
-			}
+			step.Variables[k] = v // Preserve typed values
 		}
 	}
 
@@ -907,6 +901,7 @@ func checkLocalRef(m *Module, workflowName, stepID, field, ref string, result *M
 		}
 	}
 }
+
 // validateModuleVariableReferences checks that all variable references in a workflow are defined.
 func validateModuleVariableReferences(m *Module, workflowName string, w *Workflow, result *ModuleValidationResult) {
 	// Collect all defined variables
@@ -931,7 +926,10 @@ func validateModuleVariableReferences(m *Module, workflowName string, w *Workflo
 		checkModuleVarRefs(step.Condition, workflowName, step.ID, "condition", defined, result)
 
 		for k, v := range step.Variables {
-			checkModuleVarRefs(v, workflowName, step.ID, fmt.Sprintf("variables.%s", k), defined, result)
+			// Only check string values for variable references (typed values are preserved as-is)
+			if vs, ok := v.(string); ok {
+				checkModuleVarRefs(vs, workflowName, step.ID, fmt.Sprintf("variables.%s", k), defined, result)
+			}
 		}
 
 		if step.OnTrue != nil {
@@ -949,7 +947,10 @@ func validateModuleVariableReferences(m *Module, workflowName string, w *Workflo
 // checkModuleExpansionVarRefs checks variable references in an expansion target.
 func checkModuleExpansionVarRefs(target *ExpansionTarget, workflowName, stepID, field string, defined map[string]bool, result *ModuleValidationResult) {
 	for k, v := range target.Variables {
-		checkModuleVarRefs(v, workflowName, stepID, fmt.Sprintf("%s.variables.%s", field, k), defined, result)
+		// Only check string values for variable references (typed values are preserved as-is)
+		if vs, ok := v.(string); ok {
+			checkModuleVarRefs(vs, workflowName, stepID, fmt.Sprintf("%s.variables.%s", field, k), defined, result)
+		}
 	}
 }
 

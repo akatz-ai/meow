@@ -755,9 +755,9 @@ func TestExecutorType_Valid(t *testing.T) {
 		{ExecutorExpand, true},
 		{ExecutorBranch, true},
 		{ExecutorAgent, true},
-		{"", true},           // Empty allowed during migration
+		{"", true}, // Empty allowed during migration
 		{"invalid", false},
-		{"task", false},      // Old type, not valid executor
+		{"task", false}, // Old type, not valid executor
 	}
 
 	for _, tc := range tests {
@@ -1408,5 +1408,171 @@ needs = ["parallel-builds.*.build"]
 
 	if len(tmpl.Steps) != 2 {
 		t.Errorf("expected 2 steps, got %d", len(tmpl.Steps))
+	}
+}
+
+// ============================================================================
+// Typed Variables Tests
+// ============================================================================
+
+func TestParseString_StepVariablesTypedObject(t *testing.T) {
+	// Test that step variables can contain nested object values
+	toml := `
+[meta]
+name = "test-typed-vars"
+version = "1.0.0"
+
+[[steps]]
+id = "expand-with-object"
+executor = "expand"
+template = ".worker"
+
+[steps.variables]
+task = { name = "build", priority = 1, enabled = true }
+simple_string = "hello"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+
+	// Check that task is a map (object), not a string
+	taskVal, ok := step.Variables["task"]
+	if !ok {
+		t.Fatal("expected task variable to exist")
+	}
+	taskMap, ok := taskVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected task to be map[string]any, got %T", taskVal)
+	}
+	if taskMap["name"] != "build" {
+		t.Errorf("expected task.name = 'build', got %v", taskMap["name"])
+	}
+	if taskMap["priority"] != int64(1) {
+		t.Errorf("expected task.priority = 1, got %v (type %T)", taskMap["priority"], taskMap["priority"])
+	}
+	if taskMap["enabled"] != true {
+		t.Errorf("expected task.enabled = true, got %v", taskMap["enabled"])
+	}
+
+	// String value should still work
+	simpleVal, ok := step.Variables["simple_string"]
+	if !ok {
+		t.Fatal("expected simple_string variable to exist")
+	}
+	if simpleVal != "hello" {
+		t.Errorf("expected simple_string = 'hello', got %v", simpleVal)
+	}
+}
+
+func TestParseString_ExpansionTargetTypedVariables(t *testing.T) {
+	// Test that ExpansionTarget.Variables can contain non-string values
+	toml := `
+[meta]
+name = "test-expansion-typed-vars"
+version = "1.0.0"
+
+[[steps]]
+id = "check"
+executor = "branch"
+condition = "test -f /tmp/flag"
+
+[steps.on_true]
+template = "do-something"
+
+[steps.on_true.variables]
+config = { debug = true, level = 3 }
+path = "/tmp/output"
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.OnTrue == nil {
+		t.Fatal("expected on_true to exist")
+	}
+
+	// Check that config is a map (object)
+	configVal, ok := step.OnTrue.Variables["config"]
+	if !ok {
+		t.Fatal("expected config variable to exist")
+	}
+	configMap, ok := configVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected config to be map[string]any, got %T", configVal)
+	}
+	if configMap["debug"] != true {
+		t.Errorf("expected config.debug = true, got %v", configMap["debug"])
+	}
+	if configMap["level"] != int64(3) {
+		t.Errorf("expected config.level = 3, got %v", configMap["level"])
+	}
+
+	// String value should still work
+	pathVal := step.OnTrue.Variables["path"]
+	if pathVal != "/tmp/output" {
+		t.Errorf("expected path = '/tmp/output', got %v", pathVal)
+	}
+}
+
+func TestParseString_InlineStepTypedVariables(t *testing.T) {
+	// Test that InlineStep.Variables can contain non-string values
+	toml := `
+[meta]
+name = "test-inline-typed-vars"
+version = "1.0.0"
+
+[[steps]]
+id = "check"
+executor = "branch"
+condition = "test -f /tmp/flag"
+
+[steps.on_true]
+inline = [
+	{ id = "action-1", executor = "expand", template = ".subtask", variables = { params = { count = 5, active = true }, label = "test" } }
+]
+`
+
+	tmpl, err := ParseString(toml)
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+
+	step := tmpl.Steps[0]
+	if step.OnTrue == nil {
+		t.Fatal("expected on_true to exist")
+	}
+	if len(step.OnTrue.Inline) != 1 {
+		t.Fatalf("expected 1 inline step, got %d", len(step.OnTrue.Inline))
+	}
+
+	inlineStep := step.OnTrue.Inline[0]
+
+	// Check that params is a map (object)
+	paramsVal, ok := inlineStep.Variables["params"]
+	if !ok {
+		t.Fatal("expected params variable to exist")
+	}
+	paramsMap, ok := paramsVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected params to be map[string]any, got %T", paramsVal)
+	}
+	if paramsMap["count"] != int64(5) {
+		t.Errorf("expected params.count = 5, got %v", paramsMap["count"])
+	}
+	if paramsMap["active"] != true {
+		t.Errorf("expected params.active = true, got %v", paramsMap["active"])
+	}
+
+	// String value should still work
+	labelVal := inlineStep.Variables["label"]
+	if labelVal != "test" {
+		t.Errorf("expected label = 'test', got %v", labelVal)
 	}
 }
