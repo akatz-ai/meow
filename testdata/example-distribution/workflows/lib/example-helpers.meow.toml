@@ -1,0 +1,22 @@
+# Example Helper Workflow
+# Validation helper for task inputs
+#
+# This is a reusable validation helper that can be expanded into other workflows.
+
+[meta]
+name = "example-helpers"
+description = "Helper workflow for input validation"
+
+[variables]
+input = { description = "Input value to validate" }
+type = { description = "Type of validation to perform" }
+
+[[steps]]
+id = "check-empty"
+executor = "shell"
+command = """if [ -z "{{input}}" ]; then
+  echo "Error: {{type}} input cannot be empty" >&2
+  exit 1
+fi
+echo "Input validation passed"
+"""

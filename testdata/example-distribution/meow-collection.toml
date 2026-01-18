@@ -1,0 +1,32 @@
+# Example MEOW Collection
+# This collection demonstrates the full two-pronged distribution pattern:
+# 1. Direct MEOW workflow installation
+# 2. Claude marketplace plugin with bundled workflows
+
+[collection]
+name = "example-distribution"
+description = "Example collection demonstrating MEOW distribution patterns"
+version = "1.0.0"
+meow_version = "0.1.0"
+
+[collection.owner]
+name = "Example Author"
+email = "author@example.com"
+url = "https://example.com"
+
+[collection.repository]
+url = "https://github.com/example/example-distribution"
+license = "MIT"
+
+# Skill manifest paths
+[skills]
+example-skill = "skills/example-skill/skill.toml"
+
+# Workflow packs
+[[packs]]
+name = "core"
+description = "Core example workflows"
+workflows = [
+    "workflows/example-task.meow.toml",
+    "workflows/lib/example-helpers.meow.toml",
+]

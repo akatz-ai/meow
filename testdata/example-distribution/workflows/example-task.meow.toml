@@ -1,0 +1,48 @@
+# Example Task Workflow
+# Demonstrates a simple task execution pattern
+#
+# Usage:
+#   meow run testdata/example-distribution/workflows/example-task --var task="Build a TODO app"
+#   meow run testdata/example-distribution/workflows/example-task --var task="Fix bug in auth" --var priority="high"
+
+[meta]
+name = "example-task"
+description = "Execute a task with validation and logging"
+
+[variables]
+task = { description = "Task description to execute" }
+priority = { default = "medium", description = "Task priority (low/medium/high)" }
+
+# Step 1: Validate task input
+[[steps]]
+id = "validate"
+executor = "shell"
+command = """if [ -z "{{task}}" ]; then
+  echo "Error: task input cannot be empty" >&2
+  exit 1
+fi
+echo "Validation passed"
+"""
+
+# Step 2: Log task start
+[[steps]]
+id = "log-start"
+executor = "shell"
+needs = ["validate"]
+command = "echo '[{{priority}}] Starting task: {{task}}'"
+
+# Step 3: Execute task (placeholder - would call actual work)
+[[steps]]
+id = "execute"
+executor = "shell"
+needs = ["log-start"]
+command = """echo 'Executing: {{task}}'
+sleep 1
+echo 'Task execution completed'"""
+
+# Step 4: Log completion
+[[steps]]
+id = "log-complete"
+executor = "shell"
+needs = ["execute"]
+command = "echo '[COMPLETE] Task completed: {{task}}'"
