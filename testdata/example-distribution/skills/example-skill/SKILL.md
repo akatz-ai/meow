@@ -24,7 +24,7 @@ which meow && meow --version
 If MEOW is not installed, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meow-stack/meow-machine/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/akatz-ai/meow/main/install.sh | sh
 ```
 
 Or with Go:
