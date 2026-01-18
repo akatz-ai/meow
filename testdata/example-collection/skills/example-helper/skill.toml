@@ -1,0 +1,9 @@
+[skill]
+name = "example-helper"
+description = "Example skill for testing MEOW skill bundling"
+version = "1.0.0"
+files = ["SKILL.md", "references/"]
+
+[targets.claude]
+
+[targets.opencode]
