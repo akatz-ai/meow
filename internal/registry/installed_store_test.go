@@ -3,6 +3,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,7 +165,7 @@ func TestInstalledStore_RemoveNotFound(t *testing.T) {
 	}
 
 	// Error message should mention the collection name
-	if !contains(err.Error(), "nonexistent") || !contains(err.Error(), "not installed") {
+	if !strings.Contains(err.Error(), "nonexistent") || !strings.Contains(err.Error(), "not installed") {
 		t.Errorf("Remove() error = %q, want error mentioning collection not installed", err)
 	}
 }
@@ -324,16 +325,3 @@ func TestNewInstalledStore(t *testing.T) {
 	}
 }
 
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
