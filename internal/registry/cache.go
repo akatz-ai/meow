@@ -92,6 +92,14 @@ func (c *Cache) Fetch(name string) error {
 		return fmt.Errorf("git reset failed: %w\n%s", err, output)
 	}
 
+	// Touch .git directory to update modtime for IsFresh() checks
+	now := time.Now()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Chtimes(gitDir, now, now); err != nil {
+		// Non-fatal: cache still works, just freshness tracking may be off
+		return nil
+	}
+
 	return nil
 }
 
