@@ -668,3 +668,363 @@ func TestLoadContext_ChildStackIndependence(t *testing.T) {
 		t.Errorf("Child CurrentRef = %s, want child.toml#helper", child.CurrentRef())
 	}
 }
+
+// Collection resolution tests
+
+func writeManifest(t *testing.T, dir string, name string, entrypoint string) {
+	t.Helper()
+
+	manifest := fmt.Sprintf(`{
+  "name": %q,
+  "description": "Test collection",
+  "entrypoint": %q
+}`, name, entrypoint)
+
+	metaDir := filepath.Join(dir, ".meow")
+	if err := os.MkdirAll(metaDir, 0755); err != nil {
+		t.Fatalf("failed to create .meow dir: %v", err)
+	}
+
+	manifestPath := filepath.Join(metaDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
+		t.Fatalf("failed to write manifest: %v", err)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionWithEntrypoint(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a collection directory with manifest
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+
+	// Create the entrypoint workflow
+	entrypointPath := filepath.Join(collectionDir, "main.meow.toml")
+	writeModuleFile(t, entrypointPath, "sprint main workflow", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("sprint")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	if result.Source != "project-collection" {
+		t.Errorf("Source = %s, want project-collection", result.Source)
+	}
+	if result.Path != entrypointPath {
+		t.Errorf("Path = %s, want %s", result.Path, entrypointPath)
+	}
+	if result.Name != "main" {
+		t.Errorf("Name = %s, want main", result.Name)
+	}
+	if result.CollectionDir != collectionDir {
+		t.Errorf("CollectionDir = %s, want %s", result.CollectionDir, collectionDir)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionWithPath(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a collection with lib/ subdirectory
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+
+	// Create a workflow in lib/
+	libWorkflowPath := filepath.Join(collectionDir, "lib", "agent-track.meow.toml")
+	writeModuleFile(t, libWorkflowPath, "agent track workflow", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("sprint:lib/agent-track")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	if result.Source != "project-collection" {
+		t.Errorf("Source = %s, want project-collection", result.Source)
+	}
+	if result.Path != libWorkflowPath {
+		t.Errorf("Path = %s, want %s", result.Path, libWorkflowPath)
+	}
+	if result.CollectionDir != collectionDir {
+		t.Errorf("CollectionDir = %s, want %s", result.CollectionDir, collectionDir)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionWithSection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a collection
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+
+	// Create entrypoint with helper workflow
+	entrypointPath := filepath.Join(collectionDir, "main.meow.toml")
+	writeModuleFile(t, entrypointPath, "sprint main", true)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("sprint#helper")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	if result.Name != "helper" {
+		t.Errorf("Name = %s, want helper", result.Name)
+	}
+	if result.Path != entrypointPath {
+		t.Errorf("Path = %s, want %s", result.Path, entrypointPath)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionWithPathAndSection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a collection
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+
+	// Create lib workflow with multiple sections
+	libWorkflowPath := filepath.Join(collectionDir, "lib", "tools.meow.toml")
+	writeModuleFile(t, libWorkflowPath, "tools main", true)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("sprint:lib/tools#helper")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	if result.Name != "helper" {
+		t.Errorf("Name = %s, want helper", result.Name)
+	}
+	if result.Path != libWorkflowPath {
+		t.Errorf("Path = %s, want %s", result.Path, libWorkflowPath)
+	}
+	if result.CollectionDir != collectionDir {
+		t.Errorf("CollectionDir = %s, want %s", result.CollectionDir, collectionDir)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionPrecedenceOverStandalone(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create both a collection and a standalone file with the same name
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "shared")
+	writeManifest(t, collectionDir, "shared", "main.meow.toml")
+	collectionEntrypoint := filepath.Join(collectionDir, "main.meow.toml")
+	writeModuleFile(t, collectionEntrypoint, "collection version", false)
+
+	standalonePath := filepath.Join(projectDir, ".meow", "workflows", "shared.meow.toml")
+	writeModuleFile(t, standalonePath, "standalone version", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("shared")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	// Collection should take precedence
+	if result.Source != "project-collection" {
+		t.Errorf("Source = %s, want project-collection (collections have precedence)", result.Source)
+	}
+	if result.Path != collectionEntrypoint {
+		t.Errorf("Path = %s, want %s", result.Path, collectionEntrypoint)
+	}
+}
+
+func TestLoader_ResolveWorkflow_ProjectCollectionOverUserCollection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create collection in both project and user
+	projectCollectionDir := filepath.Join(projectDir, ".meow", "workflows", "shared")
+	writeManifest(t, projectCollectionDir, "shared", "main.meow.toml")
+	projectEntrypoint := filepath.Join(projectCollectionDir, "main.meow.toml")
+	writeModuleFile(t, projectEntrypoint, "project collection", false)
+
+	userCollectionDir := filepath.Join(userHome, ".meow", "workflows", "shared")
+	writeManifest(t, userCollectionDir, "shared", "main.meow.toml")
+	userEntrypoint := filepath.Join(userCollectionDir, "main.meow.toml")
+	writeModuleFile(t, userEntrypoint, "user collection", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("shared")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	// Project collection should win
+	if result.Source != "project-collection" {
+		t.Errorf("Source = %s, want project-collection", result.Source)
+	}
+	if result.Path != projectEntrypoint {
+		t.Errorf("Path = %s, want %s", result.Path, projectEntrypoint)
+	}
+}
+
+func TestLoader_ResolveWorkflow_UserCollectionFallback(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create collection only in user
+	userCollectionDir := filepath.Join(userHome, ".meow", "workflows", "global")
+	writeManifest(t, userCollectionDir, "global", "main.meow.toml")
+	userEntrypoint := filepath.Join(userCollectionDir, "main.meow.toml")
+	writeModuleFile(t, userEntrypoint, "user collection", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("global")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	if result.Source != "user-collection" {
+		t.Errorf("Source = %s, want user-collection", result.Source)
+	}
+	if result.Path != userEntrypoint {
+		t.Errorf("Path = %s, want %s", result.Path, userEntrypoint)
+	}
+}
+
+func TestLoader_ResolveWorkflow_DirectoryWithoutManifestNotCollection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a directory without manifest (just a regular directory)
+	dirWithoutManifest := filepath.Join(projectDir, ".meow", "workflows", "notacollection")
+	workflowInDir := filepath.Join(dirWithoutManifest, "main.meow.toml")
+	writeModuleFile(t, workflowInDir, "not a collection", false)
+
+	// Also create a standalone file as fallback
+	standalonePath := filepath.Join(projectDir, ".meow", "workflows", "notacollection.meow.toml")
+	writeModuleFile(t, standalonePath, "standalone fallback", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("notacollection")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	// Should fall back to standalone file (no manifest, so not a collection)
+	if result.Source != "project" {
+		t.Errorf("Source = %s, want project (directory without manifest is not a collection)", result.Source)
+	}
+	if result.Path != standalonePath {
+		t.Errorf("Path = %s, want %s", result.Path, standalonePath)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionMissingEntrypointFile(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create collection with manifest but missing entrypoint file
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "broken")
+	writeManifest(t, collectionDir, "broken", "missing.meow.toml")
+	// Don't create the actual workflow file
+
+	// Create a standalone fallback
+	standalonePath := filepath.Join(projectDir, ".meow", "workflows", "broken.meow.toml")
+	writeModuleFile(t, standalonePath, "standalone fallback", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("broken")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	// Should fall back to standalone (collection entrypoint doesn't exist)
+	if result.Source != "project" {
+		t.Errorf("Source = %s, want project (collection entrypoint missing)", result.Source)
+	}
+	if result.Path != standalonePath {
+		t.Errorf("Path = %s, want %s", result.Path, standalonePath)
+	}
+}
+
+func TestLoader_ResolveWorkflow_CollectionWithPathNotFound(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create collection but without the requested path
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+	entrypointPath := filepath.Join(collectionDir, "main.meow.toml")
+	writeModuleFile(t, entrypointPath, "sprint main", false)
+
+	loader := NewLoader(projectDir)
+	_, err := loader.ResolveWorkflow("sprint:lib/missing")
+	if err == nil {
+		t.Fatal("Expected error for missing collection path")
+	}
+
+	// Should get a WorkflowNotFoundError
+	if _, ok := err.(*WorkflowNotFoundError); !ok {
+		t.Errorf("Expected WorkflowNotFoundError, got %T: %v", err, err)
+	}
+}
+
+func TestLoader_ResolveWorkflow_StandaloneStillWorks(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create only standalone files (no collections)
+	standalonePath := filepath.Join(projectDir, ".meow", "workflows", "simple.meow.toml")
+	writeModuleFile(t, standalonePath, "simple standalone", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.ResolveWorkflow("simple")
+	if err != nil {
+		t.Fatalf("ResolveWorkflow failed: %v", err)
+	}
+
+	// Should resolve as standalone
+	if result.Source != "project" {
+		t.Errorf("Source = %s, want project", result.Source)
+	}
+	if result.Path != standalonePath {
+		t.Errorf("Path = %s, want %s", result.Path, standalonePath)
+	}
+	if result.CollectionDir != "" {
+		t.Errorf("CollectionDir should be empty for standalone files, got %s", result.CollectionDir)
+	}
+}
+
+func TestLoader_LoadWorkflow_Collection(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Create a collection
+	collectionDir := filepath.Join(projectDir, ".meow", "workflows", "sprint")
+	writeManifest(t, collectionDir, "sprint", "main.meow.toml")
+	entrypointPath := filepath.Join(collectionDir, "main.meow.toml")
+	writeModuleFile(t, entrypointPath, "sprint workflow", false)
+
+	loader := NewLoader(projectDir)
+	result, err := loader.LoadWorkflow("sprint")
+	if err != nil {
+		t.Fatalf("LoadWorkflow failed: %v", err)
+	}
+
+	if result.Source != "project-collection" {
+		t.Errorf("Source = %s, want project-collection", result.Source)
+	}
+	if result.Workflow.Description != "sprint workflow" {
+		t.Errorf("Description = %s, want 'sprint workflow'", result.Workflow.Description)
+	}
+}

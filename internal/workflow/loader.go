@@ -41,9 +41,10 @@ type Loader struct {
 
 // WorkflowLocation describes where a workflow reference resolved.
 type WorkflowLocation struct {
-	Path   string
-	Source string
-	Name   string
+	Path          string
+	Source        string
+	Name          string
+	CollectionDir string // Root of collection for collection-relative resolution (empty for standalone files)
 }
 
 // LoadedWorkflow contains a resolved workflow and its module.
