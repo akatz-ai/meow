@@ -276,27 +276,53 @@ go test -count=1 ./...                  # Disable test cache
 
 E2E tests use a **spec-driven approach** for traceability and regression analysis.
 
-**Spec files** (`internal/testutil/e2e/specs/*.yaml`) document:
-- What each test verifies
-- Why it matters (regression context)
-- Which beads implement the feature
+**Spec files** (`internal/testutil/e2e/specs/*.yaml`):
+
+| Spec | Coverage |
+|------|----------|
+| `core-orchestrator.yaml` | 7 executors (shell, expand, branch, foreach, agent) |
+| `crash-recovery.yaml` | Resume after crash scenarios |
+| `agent-lifecycle.yaml` | Spawn, timeout, crash detection |
+| `event-system.yaml` | Event routing, gates |
+| `typed-variables.yaml` | Object/array preservation |
+| `output-validation.yaml` | Required outputs, type checking |
+| `registry-distribution.yaml` | Registry and collection commands |
+
+**Finding spec references in tests:**
+
+Tests include `// Spec:` comments linking to their spec entries:
+
+```go
+// TestE2E_SimpleExpand tests basic expand inlines sub-workflow steps.
+// Spec: expand-executor.simple-expand
+func TestE2E_SimpleExpand(t *testing.T) { ... }
+```
+
+Section headers in test files also reference their spec file:
+
+```go
+// ===========================================================================
+// Expand Executor Tests
+// Spec: specs/core-orchestrator.yaml (expand-executor scenario)
+// ===========================================================================
+```
 
 **When a test fails:**
 1. Find the `// Spec: <scenario>.<test>` comment in the test
-2. Look up that ID in the spec YAML
+2. Look up that ID in the spec YAML (e.g., `specs/core-orchestrator.yaml`)
 3. Read the `why:` field to understand original intent
 4. Decide: fix the code, or update the expectation
 
 **Example spec entry:**
 ```yaml
 scenarios:
-  - id: collection-expand
+  - id: expand-executor
     tests:
-      - id: expand-resolves-within-collection
+      - id: simple-expand
         why: |
-          This is the KEY FEATURE that makes collections self-contained.
-          Without collection-relative resolution, expand would look for
-          templates globally and fail.
+          Expand is the composition primitive. It allows building large
+          workflows from reusable parts. Steps get prefixed with the
+          expand step's ID.
 ```
 
 **Full documentation:** See `internal/testutil/e2e/README.md`

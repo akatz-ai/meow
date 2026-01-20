@@ -87,8 +87,11 @@ func runMeowWithTimeout(h *e2e.Harness, timeout time.Duration, args ...string) (
 
 // ===========================================================================
 // Happy Path Tests
+// Spec: specs/core-orchestrator.yaml
 // ===========================================================================
 
+// TestE2E_SingleShellStep tests basic shell step execution.
+// Spec: shell-executor.single-shell-step
 func TestE2E_SingleShellStep(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -118,6 +121,8 @@ command = "echo 'hello world'"
 	}
 }
 
+// TestE2E_MultipleShellSteps tests sequential shell steps with dependencies.
+// Spec: shell-executor.multiple-shell-steps
 func TestE2E_MultipleShellSteps(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -156,6 +161,8 @@ command = "echo 'step 3'"
 	}
 }
 
+// TestE2E_ParallelShellSteps tests concurrent shell steps without dependencies.
+// Spec: shell-executor.parallel-shell-steps
 func TestE2E_ParallelShellSteps(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -208,6 +215,8 @@ command = "echo 'all done'"
 	}
 }
 
+// TestE2E_ShellOutputCapture tests shell outputs captured and available to dependents.
+// Spec: shell-executor.shell-output-capture
 func TestE2E_ShellOutputCapture(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -244,8 +253,11 @@ command = "echo 'got: {{produce.outputs.result}}'"
 
 // ===========================================================================
 // Agent Step Tests (with Simulator)
+// Spec: specs/agent-lifecycle.yaml
 // ===========================================================================
 
+// TestE2E_SingleAgentStep tests spawn → agent work → kill lifecycle.
+// Spec: basic-lifecycle.spawn-work-kill
 func TestE2E_SingleAgentStep(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -313,6 +325,8 @@ graceful = true
 	}
 }
 
+// TestE2E_AgentWithOutputs tests agent producing outputs via meow done --output.
+// Spec: basic-lifecycle.agent-with-outputs
 func TestE2E_AgentWithOutputs(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -377,6 +391,8 @@ graceful = true
 	}
 }
 
+// TestE2E_ParallelAgents tests multiple agents working concurrently.
+// Spec: basic-lifecycle.parallel-agents
 func TestE2E_ParallelAgents(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -470,8 +486,11 @@ command = "echo 'both agents done'"
 
 // ===========================================================================
 // Error Handling Tests
+// Spec: specs/core-orchestrator.yaml (error-handling scenario)
 // ===========================================================================
 
+// TestE2E_ShellStepFailure tests shell step failure marks workflow failed.
+// Spec: error-handling.shell-step-failure
 func TestE2E_ShellStepFailure(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -502,6 +521,8 @@ command = "exit 1"
 	}
 }
 
+// TestE2E_ShellStepFailureWithOnErrorContinue tests on_error=continue allows workflow to proceed.
+// Spec: error-handling.shell-step-failure-on-error-continue
 func TestE2E_ShellStepFailureWithOnErrorContinue(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -590,8 +611,11 @@ command = "echo 'done'"
 
 // ===========================================================================
 // Dependency Chain Tests
+// Spec: specs/core-orchestrator.yaml (dependency-graph scenario)
 // ===========================================================================
 
+// TestE2E_DiamondDependency tests diamond pattern (A→B,C→D) executes correctly.
+// Spec: dependency-graph.diamond-dependency
 func TestE2E_DiamondDependency(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -644,8 +668,11 @@ command = "echo 'D'"
 
 // ===========================================================================
 // Expand Executor Tests
+// Spec: specs/core-orchestrator.yaml (expand-executor scenario)
 // ===========================================================================
 
+// TestE2E_SimpleExpand tests basic expand inlines sub-workflow steps.
+// Spec: expand-executor.simple-expand
 func TestE2E_SimpleExpand(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -701,6 +728,8 @@ needs = ["step-a"]
 	}
 }
 
+// TestE2E_ExpandWithVariables tests expand passes variables to sub-workflow.
+// Spec: expand-executor.expand-with-variables
 func TestE2E_ExpandWithVariables(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -753,6 +782,8 @@ command = "echo 'param={{param}} name={{name}}'"
 	}
 }
 
+// TestE2E_NestedExpand tests expand within expand (multi-level).
+// Spec: expand-executor.nested-expand
 func TestE2E_NestedExpand(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -820,8 +851,11 @@ command = "echo 'second level - deepest'"
 
 // ===========================================================================
 // Branch Executor Tests
+// Spec: specs/core-orchestrator.yaml (branch-executor scenario)
 // ===========================================================================
 
+// TestE2E_BranchTrueCondition tests branch with true condition expands on_true.
+// Spec: branch-executor.branch-true-condition
 func TestE2E_BranchTrueCondition(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -1491,11 +1525,12 @@ func TestE2E_AgentSessionControl(t *testing.T) {
 
 // ===========================================================================
 // Agent Step Timeout Tests
+// Spec: specs/agent-lifecycle.yaml (timeout-handling scenario)
 // ===========================================================================
 
 // TestE2E_AgentStepTimeout_SendsSignal tests that when an agent step times out,
 // the orchestrator sends C-c to the agent and marks the step as failed.
-//
+// Spec: timeout-handling.timeout-sends-signal
 // Per MVP-SPEC-v2 (lines 622-629):
 //   1. Send `C-c` (interrupt) to the agent's tmux session
 //   2. Wait 10 seconds for graceful stop
@@ -1950,6 +1985,7 @@ needs = ["handle-timeout"]
 
 // ===========================================================================
 // Agent Crash Tests
+// Spec: specs/agent-lifecycle.yaml (crash-handling scenario)
 //
 // These tests verify that the orchestrator properly detects and handles agent
 // crashes. Per MVP-SPEC-v2, when an agent's tmux session dies unexpectedly:
@@ -1968,7 +2004,7 @@ needs = ["handle-timeout"]
 
 // TestE2E_AgentCrash_SessionDies tests that when an agent's tmux session dies
 // unexpectedly (via crash), the orchestrator detects it and marks the step as failed.
-//
+// Spec: crash-handling.crash-session-dies
 // Expected behavior per MVP-SPEC-v2:
 // - Orchestrator polls for session liveness
 // - Detects that session is gone
@@ -2164,6 +2200,7 @@ func TestE2E_AgentCrash_DetectionLatency(t *testing.T) {
 
 // ===========================================================================
 // Output Validation Retry Tests
+// Spec: specs/output-validation.yaml
 //
 // These tests verify that when output validation fails:
 // 1. Step status returns to "running" (not "failed")
@@ -2172,6 +2209,8 @@ func TestE2E_AgentCrash_DetectionLatency(t *testing.T) {
 // 4. Step eventually completes when outputs are valid
 // ===========================================================================
 
+// TestE2E_OutputValidation_MissingRequired tests missing required output triggers retry.
+// Spec: missing-required.validation-missing-required
 func TestE2E_OutputValidation_MissingRequired(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
@@ -2543,9 +2582,11 @@ graceful = true
 
 // ===========================================================================
 // Crash Recovery E2E Tests
+// Spec: specs/crash-recovery.yaml
 // ===========================================================================
 
 // TestE2E_CrashRecovery_PendingSteps tests recovery when workflow has pending steps.
+// Spec: pending-steps.recover-pending-steps
 // Scenario: Workflow has step1 done, step2/step3 pending. Simulate crash by creating
 // workflow state directly, then resume and verify completion.
 func TestE2E_CrashRecovery_PendingSteps(t *testing.T) {
@@ -3033,6 +3074,8 @@ func TestE2E_CrashRecovery_WorkflowCompleted(t *testing.T) {
 
 // ===========================================================================
 // Async Execution Tests
+// Spec: specs/core-orchestrator.yaml (branch-executor.parallel-branch-steps)
+// Spec: specs/event-system.yaml (for event routing tests)
 // ===========================================================================
 
 // TestE2E_ParallelBranchSteps tests that two branch steps with the same
@@ -3221,6 +3264,7 @@ command = "echo '{{step-1.outputs.greeting}} {{step-2.outputs.target}}' > %s"
 //   - t=1s: verify step runs (both branches done)
 //
 // Expected: Workflow completes successfully with event routing working
+// Spec: basic-routing.event-emission-and-receipt
 func TestE2E_EventRouting(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
@@ -3316,6 +3360,7 @@ command = "echo 'event routing verified'"
 //   - Simulator stop hook fires agent-stopped event after meow done
 //   - EventRouter delivers event to waiting await-event
 //   - Workflow completes via event-driven coordination (not timeout)
+// Spec: agent-stopped.agent-stopped-event
 func TestE2E_EventRouting_AgentStopped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
@@ -3760,8 +3805,11 @@ echo 'VERIFIED'
 
 // ===========================================================================
 // Foreach with Dynamic Items Tests
+// Spec: specs/core-orchestrator.yaml (foreach-executor scenario)
 // ===========================================================================
 
+// TestE2E_ForeachDynamicItems_BasicArray tests foreach iterates over JSON array.
+// Spec: foreach-executor.foreach-basic-array
 func TestE2E_ForeachDynamicItems_BasicArray(t *testing.T) {
 	h := e2e.NewHarness(t)
 

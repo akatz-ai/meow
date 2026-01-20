@@ -1,3 +1,7 @@
+// Package e2e_test contains end-to-end tests for MEOW.
+//
+// This file contains typed variable tests.
+// Spec: specs/typed-variables.yaml
 package e2e_test
 
 import (
@@ -19,6 +23,7 @@ import (
 //
 // This verifies that typed variables (maps) are preserved through multiple
 // expansion layers, not stringified to JSON.
+// Spec: foreach-objects.foreach-expand-chain
 func TestTypedVariables_ForeachExpandChain(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -115,6 +120,7 @@ command = "echo 'Task: {{task.name}}, IDs: {{task.task_ids}}'"
 
 // TestTypedVariables_ForeachDirectFieldAccess tests a simpler case where
 // foreach item_var is used directly in the template for field access.
+// Spec: foreach-objects.foreach-direct-field-access
 func TestTypedVariables_ForeachDirectFieldAccess(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -177,6 +183,7 @@ command = "echo 'Index={{idx}} ID={{item.id}} Priority={{item.priority}}'"
 
 // TestTypedVariables_SurvivesYAMLRoundTrip verifies that typed variables
 // survive being saved to YAML and reloaded. This is critical for crash recovery.
+// Spec: yaml-persistence.workflow-variables-roundtrip
 func TestTypedVariables_SurvivesYAMLRoundTrip(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -279,6 +286,7 @@ func TestTypedVariables_SurvivesYAMLRoundTrip(t *testing.T) {
 
 // TestTypedVariables_ExpandPassThrough tests that expand preserves typed variables
 // when passing them through via variables = { config = "{{init.outputs.config}}" }
+// Spec: expand-pass-through.expand-preserves-objects
 //
 // DEPENDS ON: meow-c8uh (Update baker to accept map[string]any)
 // This test will FAIL until the baker properly handles typed values from shell outputs.
@@ -347,6 +355,7 @@ command = "echo 'Name: {{config.name}}, Nested: {{config.data.nested}}'"
 
 // TestTypedVariables_StepVariablesInRun verifies that step-level Variables
 // map (in ExpandConfig) survives YAML round-trip with typed values.
+// Spec: yaml-persistence.step-variables-roundtrip
 func TestTypedVariables_StepVariablesInRun(t *testing.T) {
 	h := e2e.NewHarness(t)
 
@@ -411,8 +420,9 @@ func TestTypedVariables_StepVariablesInRun(t *testing.T) {
 }
 
 
-// Verify the YAML marshaling/unmarshaling preserves types correctly
-// by doing a direct marshal/unmarshal test outside the harness
+// TestTypedVariables_YAMLMarshalUnmarshal verifies YAML marshaling/unmarshaling
+// preserves types correctly by doing a direct marshal/unmarshal test.
+// Spec: yaml-persistence.nested-structures-roundtrip
 func TestTypedVariables_YAMLMarshalUnmarshal(t *testing.T) {
 	original := map[string]any{
 		"task": map[string]any{
