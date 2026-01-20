@@ -269,8 +269,37 @@ go test -count=1 ./...                  # Disable test cache
 | `internal/template/*_test.go` | Template parsing, validation, variable expansion |
 | `internal/orchestrator/*_test.go` | State management, executor dispatch |
 | `internal/agent/*_test.go` | Tmux session management, agent spawning |
-| `internal/testutil/e2e/e2e_test.go` | Full workflow execution scenarios |
+| `internal/testutil/e2e/` | Full workflow execution scenarios |
 | `cmd/meow/cmd/*_test.go` | CLI command tests |
+
+### E2E Spec-Driven Testing
+
+E2E tests use a **spec-driven approach** for traceability and regression analysis.
+
+**Spec files** (`internal/testutil/e2e/specs/*.yaml`) document:
+- What each test verifies
+- Why it matters (regression context)
+- Which beads implement the feature
+
+**When a test fails:**
+1. Find the `// Spec: <scenario>.<test>` comment in the test
+2. Look up that ID in the spec YAML
+3. Read the `why:` field to understand original intent
+4. Decide: fix the code, or update the expectation
+
+**Example spec entry:**
+```yaml
+scenarios:
+  - id: collection-expand
+    tests:
+      - id: expand-resolves-within-collection
+        why: |
+          This is the KEY FEATURE that makes collections self-contained.
+          Without collection-relative resolution, expand would look for
+          templates globally and fail.
+```
+
+**Full documentation:** See `internal/testutil/e2e/README.md`
 
 ## Best Practices
 

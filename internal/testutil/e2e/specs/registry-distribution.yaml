@@ -1,0 +1,445 @@
+# E2E Spec: Registry Distribution System
+# =======================================
+#
+# Purpose: Verify the complete workflow for distributing and consuming collections
+# Reference: docs/REGISTRY-DISTRIBUTION.md
+#
+# This spec serves as:
+# - Documentation for what each test verifies and why
+# - Regression map linking tests to implementing beads
+# - Decision anchor for "fix code or update expectation"
+#
+# Usage: When a test fails, find its spec_id in this file to understand
+# the original intent and decide whether to fix the implementation or
+# update the expectation.
+
+version: "1.0"
+feature: registry-distribution
+description: |
+  Tests the registry -> collection -> workflow lifecycle as specified in
+  docs/REGISTRY-DISTRIBUTION.md. The distribution system uses a two-level
+  hierarchy: Registry (indexes collections) -> Collection (self-contained
+  workflow bundle).
+
+# Maps spec sections to implementing beads for traceability
+beads:
+  foundation:
+    types: meow-5zaf        # Define Registry JSON Types
+    parse: meow-mkob        # Implement Registry JSON Parse/Load
+    validate: meow-6689     # Implement Registry Validation
+
+  storage:
+    registries-store: meow-2blo  # Implement Registries File Manager
+    installed-store: meow-21fk   # Implement Installed Collections Store
+    cache: meow-r8gd             # Implement Registry Cache Manager
+
+  cli:
+    registry-add: meow-6b56      # Implement meow registry add Command
+    registry-cmds: meow-ulcc     # Implement meow registry list/show/update/remove
+    install: meow-ay2i           # Implement meow install Command
+    collection-cmds: meow-4wcf   # Implement meow collection list/show/remove
+    validate-cmd: meow-edw6      # Implement meow registry validate Command
+
+  integration:
+    loader: meow-vu08            # Extend Workflow Loader for Collections
+    ls-update: meow-7iq9         # Update meow ls to Show Collections
+    expand-resolve: meow-ydid    # Collection-Relative Workflow Resolution
+
+# Test scenarios grouped by functionality
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Registry Validation
+  # ===========================================================================
+  - id: validation
+    description: Validate registry and collection JSON structures
+    beads: [meow-6689, meow-edw6]
+
+    tests:
+      - id: validate-valid-registry
+        name: Validate valid registry structure
+        command: meow registry validate <registry-path>
+        setup:
+          - Create registry with .meow/registry.json
+          - Create collection with .meow/manifest.json and entrypoint
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Registry is valid"
+            - "1 collections"
+        why: |
+          Registry validation is the first line of defense against malformed
+          distribution packages. Authors should validate before publishing.
+
+      - id: validate-valid-collection
+        name: Validate standalone collection
+        command: meow collection validate <collection-path>
+        setup:
+          - Create collection directory with .meow/manifest.json
+          - Create entrypoint workflow file
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "is valid"
+        why: |
+          Collections can exist standalone (single-collection repos). This
+          validates the manifest and entrypoint without requiring a registry.
+
+      - id: validate-invalid-missing-collection
+        name: Validation fails for missing collection
+        command: meow registry validate <registry-path>
+        setup:
+          - Create registry referencing non-existent collection
+        expect:
+          exit_code: 1
+          output_contains:
+            - "Error"
+        why: |
+          Early detection of broken registry references prevents install failures.
+
+  # ===========================================================================
+  # Scenario 2: Registry Lifecycle
+  # ===========================================================================
+  - id: registry-lifecycle
+    description: Complete registry add -> list -> show -> update -> remove cycle
+    beads: [meow-6b56, meow-ulcc, meow-r8gd, meow-2blo]
+
+    tests:
+      - id: add-registry-local
+        name: Add registry from local git repo
+        command: meow registry add <local-git-path>
+        setup:
+          - Create test registry as git repo with initial commit
+          - Include .meow/registry.json and at least one collection
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Added registry:"
+            - "collections available"
+          creates:
+            - ~/.meow/registries.json entry
+            - ~/.cache/meow/registries/<name>/ clone
+        why: |
+          Local git repos are essential for development and testing workflows
+          before publishing. This is the primary entry point for the
+          distribution system.
+
+      - id: list-registries
+        name: List shows registered registries
+        command: meow registry list
+        prereq: add-registry-local
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "test-registry"
+            - "1.0.0"
+            - "REGISTRY"
+            - "VERSION"
+            - "SOURCE"
+        why: |
+          Users need to see what registries are available before installing
+          collections. This is the discovery mechanism.
+
+      - id: show-registry
+        name: Show displays registry details and collections
+        command: meow registry show <registry-name>
+        prereq: add-registry-local
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Registry:"
+            - "Owner:"
+            - "COLLECTION"
+            - "DESCRIPTION"
+        why: |
+          Before installing, users browse available collections. This shows
+          the registry metadata and collection index.
+
+      - id: update-registry
+        name: Update fetches new version from remote
+        command: meow registry update <registry-name>
+        setup:
+          - Modify registry source to bump version to 1.1.0
+          - Commit the change
+        prereq: add-registry-local
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Updated"
+            - "1.1.0"
+        why: |
+          Registries evolve - new collections, bug fixes, version bumps.
+          Update pulls the latest without re-adding.
+
+      - id: remove-registry
+        name: Remove unregisters and cleans cache
+        command: meow registry remove <registry-name>
+        prereq: add-registry-local
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Removed registry"
+          removes:
+            - ~/.meow/registries.json entry
+        why: |
+          Clean removal is important for managing subscriptions. Cache may
+          or may not be removed (implementation detail).
+
+  # ===========================================================================
+  # Scenario 3: Collection Installation
+  # ===========================================================================
+  - id: collection-install
+    description: Install collection from registry -> list -> show -> remove
+    beads: [meow-ay2i, meow-4wcf, meow-21fk]
+
+    tests:
+      - id: install-from-registry
+        name: Install collection from registered registry
+        command: meow install <collection>@<registry>
+        prereq: registry-lifecycle.add-registry-local
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Installed"
+            - "~/.meow/workflows/"
+          creates:
+            - ~/.meow/workflows/<collection>/.meow/manifest.json
+            - ~/.meow/workflows/<collection>/<entrypoint>
+            - ~/.meow/installed.json entry
+        why: |
+          This is the primary install path - from a registered registry.
+          Collections are copied to the workflows directory with their
+          full structure intact.
+
+      - id: install-to-project
+        name: Install with --local flag installs to project
+        command: meow install --local <collection>@<registry>
+        prereq: registry-lifecycle.add-registry-local
+        expect:
+          exit_code: 0
+          creates:
+            - .meow/workflows/<collection>/.meow/manifest.json
+        why: |
+          Project-scoped collections override user-global ones. Useful for
+          pinning specific versions or customizing for a project.
+
+      - id: collection-list
+        name: Collection list shows installed with metadata
+        command: meow collection list
+        prereq: install-from-registry
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "COLLECTION"
+            - "REGISTRY"
+            - "SCOPE"
+        why: |
+          Users need to see what's installed and where it came from.
+          This enables update tracking and cleanup.
+
+      - id: collection-show
+        name: Collection show displays manifest and workflows
+        command: meow collection show <collection>
+        prereq: install-from-registry
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Collection:"
+            - "Entrypoint:"
+            - "Workflows:"
+        why: |
+          Detailed view of an installed collection helps users understand
+          what's available before running.
+
+      - id: collection-remove
+        name: Collection remove uninstalls cleanly
+        command: meow collection remove <collection>
+        prereq: install-from-registry
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - "Removed collection"
+          removes:
+            - ~/.meow/workflows/<collection>/
+            - ~/.meow/installed.json entry
+        why: |
+          Clean uninstall removes the directory and tracking. Does not
+          affect the source registry.
+
+  # ===========================================================================
+  # Scenario 4: Workflow Discovery (meow ls)
+  # ===========================================================================
+  - id: workflow-discovery
+    description: meow ls shows collections alongside standalone workflows
+    beads: [meow-7iq9]
+
+    tests:
+      - id: ls-shows-collections
+        name: meow ls displays installed collections
+        command: meow ls
+        prereq: collection-install.install-from-registry
+        expect:
+          exit_code: 0
+          stdout_contains:
+            - collection name
+            - "(collection)"
+        why: |
+          Collections should appear in workflow listings so users discover
+          them alongside standalone workflows.
+
+      - id: ls-json-includes-metadata
+        name: meow ls --json includes collection metadata
+        command: meow ls --json
+        prereq: collection-install.install-from-registry
+        expect:
+          exit_code: 0
+          json_contains:
+            - workflow: collection name
+              isCollection: true
+              entrypoint: non-empty
+        why: |
+          JSON output enables scripting and tooling. Collection metadata
+          helps tools distinguish collections from standalone workflows.
+
+  # ===========================================================================
+  # Scenario 5: Collection Execution
+  # ===========================================================================
+  - id: collection-execution
+    description: Run workflows from installed collections
+    beads: [meow-vu08, meow-ydid]
+
+    tests:
+      - id: run-entrypoint
+        name: Run collection by name uses entrypoint
+        command: meow run <collection>
+        prereq: collection-install.install-from-registry
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Running by collection name should automatically use the manifest's
+          entrypoint. This is the primary execution path.
+
+      - id: run-subworkflow
+        name: Run sub-workflow with colon syntax
+        command: meow run <collection>:lib/helper
+        setup:
+          - Collection must have lib/helper.meow.toml
+        prereq: collection-install.install-from-registry
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Collections contain multiple workflows. The colon syntax allows
+          running any workflow file, not just the entrypoint.
+
+      - id: run-section
+        name: Run specific section with hash syntax
+        command: meow run <collection>#section-name
+        setup:
+          - Collection entrypoint must have [section-name] workflow
+        prereq: collection-install.install-from-registry
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Workflow files can have multiple sections. The hash syntax
+          selects a specific section within the entrypoint.
+
+  # ===========================================================================
+  # Scenario 6: Collection-Relative Expand (Critical)
+  # ===========================================================================
+  - id: collection-expand
+    description: Expand steps resolve templates relative to collection root
+    beads: [meow-ydid]
+
+    tests:
+      - id: expand-resolves-within-collection
+        name: Expand with relative path resolves within collection
+        command: meow run <collection>
+        setup:
+          - Collection entrypoint has: template = "lib/helper"
+          - Collection has: lib/helper.meow.toml
+        expect:
+          exit_code: 0
+          steps_dispatched:
+            - "expand-step"           # The expand step
+            - "expand-step.child"     # Expanded child from lib/helper
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          THIS IS THE KEY FEATURE that makes collections self-contained.
+          Without collection-relative resolution, expand would look for
+          "lib/helper" globally and fail. The orchestrator must track
+          collection context and resolve expand templates within it.
+
+      - id: nested-expand-within-collection
+        name: Nested expand maintains collection context
+        command: meow run <collection>
+        setup:
+          - main.meow.toml expands lib/middle
+          - lib/middle.meow.toml expands lib/inner
+          - lib/inner.meow.toml has shell step
+        expect:
+          exit_code: 0
+          steps_dispatched:
+            - "expand-middle"
+            - "expand-middle.expand-inner"
+            - "expand-middle.expand-inner.final-step"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Multi-level expansion must maintain collection context throughout.
+          Each nested expand should continue resolving relative to the
+          original collection root, not the expanded template's location.
+
+  # ===========================================================================
+  # Scenario 7: Error Cases
+  # ===========================================================================
+  - id: error-handling
+    description: Graceful handling of error conditions
+    beads: [meow-6689, meow-ay2i, meow-ulcc]
+
+    tests:
+      - id: install-nonexistent-collection
+        name: Install fails gracefully for unknown collection
+        command: meow install nonexistent@test-registry
+        prereq: registry-lifecycle.add-registry-local
+        expect:
+          exit_code: 1
+          output_contains:
+            - "not found"
+        why: |
+          Clear error messages help users diagnose typos and missing
+          collections without confusion.
+
+      - id: install-nonexistent-registry
+        name: Install fails gracefully for unknown registry
+        command: meow install something@unknown-registry
+        expect:
+          exit_code: 1
+          output_contains:
+            - "not found"
+            - "registry"
+        why: |
+          Users need to know when they reference an unregistered registry.
+
+      - id: run-missing-collection
+        name: Run fails gracefully for uninstalled collection
+        command: meow run nonexistent-collection
+        expect:
+          exit_code: 1
+          output_contains:
+            - "not found"
+        why: |
+          Clear error when trying to run something that isn't installed.
+
+# Notes for test implementation:
+#
+# 1. Each test function should include a comment: // Spec: <scenario-id>.<test-id>
+# 2. The harness needs HOME override to isolate ~/.meow/ state
+# 3. Registry add requires actual git repos (use t.TempDir() + git init)
+# 4. Tests should clean up between scenarios or use fresh harnesses
+# 5. The "why" field helps future maintainers decide fix vs update expectation
