@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -110,13 +111,29 @@ func (l *Loader) LoadWorkflow(ref string) (*LoadedWorkflow, error) {
 
 // ResolveWorkflow returns the path and workflow name for a reference.
 // Search order depends on the Scope setting:
-//   - ScopeProject or empty: project -> user -> embedded
-//   - ScopeUser: user -> embedded (never project)
+//   - ScopeProject or empty: project collection -> user collection -> project standalone -> user standalone -> embedded
+//   - ScopeUser: user collection -> user standalone -> embedded (never project)
 //   - ScopeEmbedded: embedded only
+//
+// Collection syntax:
+//   - "sprint" - resolves to collection's entrypoint
+//   - "sprint:lib/foo" - resolves to lib/foo.meow.toml within collection
+//   - "sprint#section" - resolves to collection entrypoint, specific section
+//   - "sprint:lib/foo#section" - combination of both
 func (l *Loader) ResolveWorkflow(ref string) (*WorkflowLocation, error) {
-	fileRef, workflowName, err := parseWorkflowRef(ref)
-	if err != nil {
-		return nil, err
+	// Parse as collection reference first
+	collectionRef, workflowPath, workflowName := parseCollectionRef(ref)
+
+	// Try to resolve as collection (collections have precedence over standalone files)
+	if location := l.resolveAsCollection(collectionRef, workflowPath, workflowName); location != nil {
+		return location, nil
+	}
+
+	// Fall back to standalone file resolution
+	// If workflowPath is set, the user used collection:path syntax but it wasn't a collection
+	fileRef := collectionRef
+	if workflowPath != "" {
+		fileRef = workflowPath
 	}
 
 	filename := fileRef + ".meow.toml"
@@ -158,6 +175,98 @@ func (l *Loader) loadModule(location *WorkflowLocation) (*Module, error) {
 	}
 
 	return ParseModuleFile(location.Path)
+}
+
+// resolveAsCollection checks if the reference resolves to a collection.
+// Returns nil if not a collection or collection not found.
+func (l *Loader) resolveAsCollection(name, subPath, workflowName string) *WorkflowLocation {
+	// Check project collections
+	if l.Scope.SearchesProject() && l.ProjectDir != "" {
+		if loc := l.checkCollection(
+			filepath.Join(l.ProjectDir, ".meow", "workflows", name),
+			subPath, workflowName, "project-collection",
+		); loc != nil {
+			return loc
+		}
+	}
+
+	// Check user collections
+	if l.Scope.SearchesUser() && l.UserDir != "" {
+		if loc := l.checkCollection(
+			filepath.Join(l.UserDir, "workflows", name),
+			subPath, workflowName, "user-collection",
+		); loc != nil {
+			return loc
+		}
+	}
+
+	return nil
+}
+
+// checkCollection verifies a directory is a collection and resolves the workflow.
+func (l *Loader) checkCollection(collectionDir, subPath, workflowName, source string) *WorkflowLocation {
+	manifestPath := filepath.Join(collectionDir, ".meow", "manifest.json")
+	if !fileExists(manifestPath) {
+		return nil
+	}
+
+	// Load manifest to get entrypoint
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+
+	var manifest struct {
+		Entrypoint string `json:"entrypoint"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil
+	}
+
+	// Determine workflow file
+	var workflowFile string
+	if subPath != "" {
+		// User specified path: sprint:lib/agent-track
+		workflowFile = subPath + ".meow.toml"
+	} else {
+		// Use entrypoint
+		workflowFile = manifest.Entrypoint
+	}
+
+	workflowPath := filepath.Join(collectionDir, workflowFile)
+	if !fileExists(workflowPath) {
+		return nil
+	}
+
+	return &WorkflowLocation{
+		Path:          workflowPath,
+		Source:        source,
+		Name:          workflowName,
+		CollectionDir: collectionDir,
+	}
+}
+
+// parseCollectionRef parses a workflow reference that may be a collection.
+// Handles: sprint, sprint:lib/foo, sprint#section, sprint:lib/foo#section
+// Returns: collection name, path within collection (or empty), workflow name
+func parseCollectionRef(ref string) (collection, path, workflowName string) {
+	workflowName = "main"
+
+	// Handle # for workflow section
+	if idx := strings.Index(ref, "#"); idx != -1 {
+		workflowName = ref[idx+1:]
+		ref = ref[:idx]
+	}
+
+	// Handle : for collection:path
+	if idx := strings.Index(ref, ":"); idx != -1 {
+		collection = ref[:idx]
+		path = ref[idx+1:]
+	} else {
+		collection = ref
+	}
+
+	return collection, path, workflowName
 }
 
 func parseWorkflowRef(ref string) (string, string, error) {
