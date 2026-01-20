@@ -379,6 +379,13 @@ func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Run, ste
 		return fmt.Errorf("resolving expand variables: %w", err)
 	}
 
+	// Inject built-in __step_prefix__ variable for templates that need to reference
+	// their own expanded step IDs. The prefix is the parent step's ID + "."
+	if resolvedConfig.Variables == nil {
+		resolvedConfig.Variables = make(map[string]any)
+	}
+	resolvedConfig.Variables["__step_prefix__"] = step.ID + "."
+
 	// Call the underlying expander, passing the source module for local refs
 	result, err := a.Expander.Expand(ctx, resolvedConfig, step.ID, wf.ID, sourceModule)
 	if err != nil {

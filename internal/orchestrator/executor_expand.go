@@ -81,8 +81,17 @@ func ExecuteExpand(
 		}
 	}
 
-	// Load the template, passing any variables from the expand config
-	templateSteps, err := loader.Load(ctx, cfg.Template, cfg.Variables)
+	// Inject built-in __step_prefix__ variable BEFORE loading the template.
+	// This allows templates to reference their own expanded step IDs.
+	// The prefix is the parent step's ID + "." (e.g., "agents.0.track.").
+	loadVars := make(map[string]any)
+	for k, v := range cfg.Variables {
+		loadVars[k] = v
+	}
+	loadVars["__step_prefix__"] = step.ID + "."
+
+	// Load the template, passing variables including __step_prefix__
+	templateSteps, err := loader.Load(ctx, cfg.Template, loadVars)
 	if err != nil {
 		return nil, &types.StepError{
 			Message: fmt.Sprintf("failed to load template %s: %v", cfg.Template, err),
@@ -97,12 +106,12 @@ func ExecuteExpand(
 		}, nil
 	}
 
-	// Merge variables: workflow variables + expand step variables
+	// Merge variables: workflow variables + expand step variables + __step_prefix__
 	mergedVars := make(map[string]any)
 	for k, v := range variables {
 		mergedVars[k] = v
 	}
-	for k, v := range cfg.Variables {
+	for k, v := range loadVars {
 		mergedVars[k] = v
 	}
 

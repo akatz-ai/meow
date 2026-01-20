@@ -350,6 +350,14 @@ The executors are: shell, spawn, kill, expand, branch, foreach, agent. No more, 
 
 Dots are reserved for expansion prefixes (e.g., `parent-step.child-step`).
 
+Templates can use `{{__step_prefix__}}` to access their expansion prefix and construct full step IDs for sibling steps:
+
+```toml
+# Check if sibling step "protocol.done" is complete
+# Resolves to e.g., "agents.0.track.protocol.done"
+check_step = "{{__step_prefix__}}protocol.done"
+```
+
 ### 5. Single Writer Principle
 
 All workflow state mutations go through the orchestrator's mutex-protected methods. The IPC handler delegates to the orchestrator.

@@ -198,6 +198,10 @@ func ExecuteForeach(
 		if cfg.IndexVar != "" {
 			iterVars[cfg.IndexVar] = i
 		}
+		// Inject __step_prefix__ built-in variable for this iteration.
+		// This allows templates to reference sibling steps by their full prefixed ID.
+		// For example, if foreach step is "agents" and index is 0, the prefix is "agents.0."
+		iterVars["__step_prefix__"] = iterationPrefix + "."
 
 		var iterFirstStepID string
 

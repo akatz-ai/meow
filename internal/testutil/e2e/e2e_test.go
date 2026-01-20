@@ -4049,3 +4049,412 @@ command = "echo 'Processing number {{num}}' && sleep 0.1"
 
 	t.Logf("✓ Foreach with large array and max_concurrent works correctly")
 }
+
+// ===========================================================================
+// Step Status Check Tests (Persistence Monitor Pattern)
+// ===========================================================================
+
+// TestE2E_StepStatusCheck_NonExistentStepWithDoneInName tests that checking
+// a non-existent step with "done" in its name correctly reports NOT done.
+//
+// This is a regression test for a bug where using `grep -q "done"` on the
+// step-status output would incorrectly match the step ID in error messages:
+//   - step-status returns: "error: server error: step not found: protocol.done"
+//   - grep -q "done" matches "protocol.done" in the error message!
+//
+// The correct approach is to use `meow step-status <id> --is done` which
+// uses exit codes rather than text matching.
+//
+// Spec: agent-stopped.persistence-monitor-step-check
+func TestE2E_StepStatusCheck_NonExistentStepWithDoneInName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Create output file for test results
+	outputFile := filepath.Join(h.TempDir, "step-status-check-results.txt")
+
+	// This template tests that step-status correctly handles non-existent steps
+	// whose names contain "done" - the check should report NOT_DONE, not falsely match
+	template := fmt.Sprintf(`
+[main]
+name = "step-status-check"
+
+# Create an expand step that produces a .done suffix step
+[[main.steps]]
+id = "wrapper"
+executor = "expand"
+template = ".inner"
+
+# Inner template with a step ending in ".done"
+[".inner"]
+[[".inner".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'doing work'"
+
+[[".inner".steps]]
+id = "done"
+executor = "shell"
+needs = ["work"]
+command = "echo 'inner done'"
+
+# This step checks a non-existent step ID that has "done" in its name
+# The check should correctly report that the step is NOT done
+[[main.steps]]
+id = "status-check"
+executor = "shell"
+needs = ["wrapper"]
+command = """
+OUTPUT_FILE="%s"
+> "$OUTPUT_FILE"
+
+# Check a non-existent step (inner.done doesn't exist, wrapper.done does)
+# A correct implementation should report NOT_DONE for non-existent steps
+if meow step-status inner.done --is done 2>/dev/null; then
+    echo "RESULT: INCORRECTLY_REPORTED_DONE" >> "$OUTPUT_FILE"
+else
+    echo "RESULT: CORRECTLY_REPORTED_NOT_DONE" >> "$OUTPUT_FILE"
+fi
+"""
+
+[[main.steps]]
+id = "final"
+executor = "shell"
+needs = ["status-check"]
+command = "echo 'workflow done'"
+`, outputFile)
+
+	if err := h.WriteTemplate("step-status-check.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "step-status-check.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify workflow completed
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Read the output file to check results
+	results, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	resultsStr := string(results)
+
+	// The step-status check should correctly report NOT done for non-existent step
+	if !strings.Contains(resultsStr, "CORRECTLY_REPORTED_NOT_DONE") {
+		t.Errorf("step-status should correctly report non-existent step as NOT done\nresults: %s", resultsStr)
+	}
+
+	if strings.Contains(resultsStr, "INCORRECTLY_REPORTED_DONE") {
+		t.Errorf("step-status incorrectly reported non-existent step as done (grep bug)\nresults: %s", resultsStr)
+	}
+
+	t.Logf("✓ step-status correctly handles non-existent steps with 'done' in name")
+}
+
+// TestE2E_StepPrefixBuiltinVariable tests the __step_prefix__ built-in variable
+// that is injected during template expansion.
+//
+// This allows templates to construct full step IDs for sibling steps, which is
+// essential for the persistence monitor pattern where we need to check if
+// "protocol.done" is complete but the actual step ID is "agents.0.track.protocol.done".
+//
+// Spec: expand-executor.step-prefix-builtin
+func TestE2E_StepPrefixBuiltinVariable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Create output file for test results
+	outputFile := filepath.Join(h.TempDir, "step-prefix-results.txt")
+
+	// Template that uses __step_prefix__ to construct a full step ID
+	template := fmt.Sprintf(`
+[main]
+name = "step-prefix-test"
+
+# Parent expand step that will set __step_prefix__ = "parent."
+[[main.steps]]
+id = "parent"
+executor = "expand"
+template = ".child"
+
+# Child template that uses __step_prefix__
+[".child"]
+[[".child".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'child work done'"
+
+[[".child".steps]]
+id = "done"
+executor = "shell"
+needs = ["work"]
+command = "echo 'child done marker'"
+
+# This step demonstrates using __step_prefix__ to check sibling step status
+[[".child".steps]]
+id = "check-sibling"
+executor = "shell"
+needs = ["done"]
+command = """
+OUTPUT_FILE="%s"
+> "$OUTPUT_FILE"
+
+# __step_prefix__ should be "parent." so full step ID is "parent.done"
+echo "PREFIX: {{__step_prefix__}}" >> "$OUTPUT_FILE"
+echo "FULL_STEP_ID: {{__step_prefix__}}done" >> "$OUTPUT_FILE"
+
+# Verify we can check the sibling step using the constructed ID
+if meow step-status "{{__step_prefix__}}done" --is done 2>/dev/null; then
+    echo "SIBLING_CHECK: PASSED" >> "$OUTPUT_FILE"
+else
+    echo "SIBLING_CHECK: FAILED" >> "$OUTPUT_FILE"
+fi
+"""
+
+[[main.steps]]
+id = "final"
+executor = "shell"
+needs = ["parent"]
+command = "echo 'all done'"
+`, outputFile)
+
+	if err := h.WriteTemplate("step-prefix-test.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "step-prefix-test.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Read the output file to check results
+	results, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	resultsStr := string(results)
+
+	// Verify __step_prefix__ was set correctly
+	if !strings.Contains(resultsStr, "PREFIX: parent.") {
+		t.Errorf("expected __step_prefix__ to be 'parent.'\nresults: %s", resultsStr)
+	}
+
+	// Verify full step ID was constructed correctly
+	if !strings.Contains(resultsStr, "FULL_STEP_ID: parent.done") {
+		t.Errorf("expected full step ID to be 'parent.done'\nresults: %s", resultsStr)
+	}
+
+	// Verify sibling step check worked
+	if !strings.Contains(resultsStr, "SIBLING_CHECK: PASSED") {
+		t.Errorf("expected sibling step check to pass\nresults: %s", resultsStr)
+	}
+
+	t.Logf("✓ __step_prefix__ built-in variable works correctly")
+	t.Logf("  Results:\n%s", resultsStr)
+}
+
+// TestE2E_StepStatusPrefixedStepLookup tests that step-status can find
+// prefixed steps when given the full path.
+//
+// This verifies the workaround for the persistence monitor bug: if you pass
+// the fully-prefixed step ID, step-status works correctly.
+func TestE2E_StepStatusPrefixedStepLookup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Create output file for test results
+	outputFile := filepath.Join(h.TempDir, "prefixed-results.txt")
+
+	template := fmt.Sprintf(`
+[main]
+name = "step-status-prefixed"
+
+[[main.steps]]
+id = "wrapper"
+executor = "expand"
+template = ".inner"
+
+[".inner"]
+[[".inner".steps]]
+id = "work"
+executor = "shell"
+command = "echo 'doing work'"
+
+[[".inner".steps]]
+id = "done"
+executor = "shell"
+needs = ["work"]
+command = "echo 'inner done'"
+
+# Check using the FULL prefixed step ID
+# Note: we wait for wrapper.done (the expanded step) not just wrapper (the expand executor)
+[[main.steps]]
+id = "correct-check"
+executor = "shell"
+needs = ["wrapper.done"]
+command = """
+OUTPUT_FILE="%s"
+> "$OUTPUT_FILE"
+
+# The full prefixed step ID works correctly
+if meow step-status wrapper.done --is done; then
+    echo "PREFIXED_CHECK_PASSED" >> "$OUTPUT_FILE"
+else
+    echo "PREFIXED_CHECK_FAILED" >> "$OUTPUT_FILE"
+fi
+"""
+
+[[main.steps]]
+id = "final"
+executor = "shell"
+needs = ["correct-check"]
+command = "echo 'workflow done'"
+`, outputFile)
+
+	if err := h.WriteTemplate("step-status-prefixed.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "step-status-prefixed.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Read the output file to check results
+	results, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	resultsStr := string(results)
+
+	// The prefixed check should work correctly
+	if !strings.Contains(resultsStr, "PREFIXED_CHECK_PASSED") {
+		t.Errorf("expected prefixed step-status check to pass\nresults: %s", resultsStr)
+	}
+
+	t.Logf("✓ Prefixed step-status lookup works correctly")
+}
+
+// TestE2E_StepPrefixInForeach tests that __step_prefix__ is correctly set
+// for each iteration in a foreach loop.
+//
+// This is important for templates that need to reference sibling steps
+// when expanded via foreach (e.g., agent-track checking protocol.done).
+//
+// Spec: foreach-executor.step-prefix-in-foreach
+func TestE2E_StepPrefixInForeach(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Create output file for test results
+	outputFile := filepath.Join(h.TempDir, "foreach-prefix-results.txt")
+
+	// Template that uses __step_prefix__ inside a foreach iteration
+	template := fmt.Sprintf(`
+[main]
+name = "foreach-step-prefix"
+
+[[main.steps]]
+id = "foreach"
+executor = "foreach"
+items = '["a", "b"]'
+item_var = "item"
+index_var = "i"
+template = ".work-template"
+
+# Template that uses __step_prefix__ to check sibling step
+[".work-template"]
+[[".work-template".steps]]
+id = "first"
+executor = "shell"
+command = "echo 'Working on item {{item}} at index {{i}}'"
+
+[[".work-template".steps]]
+id = "second"
+executor = "shell"
+needs = ["first"]
+command = """
+OUTPUT_FILE="%s"
+
+# __step_prefix__ should be e.g., "foreach.0." for first iteration
+echo "ITEM: {{item}}" >> "$OUTPUT_FILE"
+echo "INDEX: {{i}}" >> "$OUTPUT_FILE"
+echo "PREFIX: {{__step_prefix__}}" >> "$OUTPUT_FILE"
+echo "FULL_SIBLING_ID: {{__step_prefix__}}first" >> "$OUTPUT_FILE"
+
+# Verify the sibling step check works
+if meow step-status "{{__step_prefix__}}first" --is done 2>/dev/null; then
+    echo "SIBLING_CHECK_{{i}}: PASSED" >> "$OUTPUT_FILE"
+else
+    echo "SIBLING_CHECK_{{i}}: FAILED" >> "$OUTPUT_FILE"
+fi
+"""
+`, outputFile)
+
+	if err := h.WriteTemplate("foreach-prefix.toml", template); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	stdout, stderr, err := runMeow(h, "run", filepath.Join(h.TemplateDir, "foreach-prefix.toml"))
+	if err != nil {
+		t.Fatalf("meow run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "workflow completed") {
+		t.Errorf("expected workflow to complete\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// Read results
+	results, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("reading results file: %v", err)
+	}
+	resultsStr := string(results)
+
+	// Verify __step_prefix__ was set correctly for each iteration
+	// Foreach iteration 0 should have prefix "foreach.0."
+	if !strings.Contains(resultsStr, "PREFIX: foreach.0.") {
+		t.Errorf("expected __step_prefix__ to be 'foreach.0.' for iteration 0\nresults: %s", resultsStr)
+	}
+	// Foreach iteration 1 should have prefix "foreach.1."
+	if !strings.Contains(resultsStr, "PREFIX: foreach.1.") {
+		t.Errorf("expected __step_prefix__ to be 'foreach.1.' for iteration 1\nresults: %s", resultsStr)
+	}
+
+	// Verify sibling step checks passed for both iterations
+	if !strings.Contains(resultsStr, "SIBLING_CHECK_0: PASSED") {
+		t.Errorf("expected sibling check to pass for iteration 0\nresults: %s", resultsStr)
+	}
+	if !strings.Contains(resultsStr, "SIBLING_CHECK_1: PASSED") {
+		t.Errorf("expected sibling check to pass for iteration 1\nresults: %s", resultsStr)
+	}
+
+	t.Logf("✓ __step_prefix__ works correctly in foreach iterations")
+	t.Logf("  Results:\n%s", resultsStr)
+}

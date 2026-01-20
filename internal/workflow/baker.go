@@ -51,7 +51,13 @@ func (b *Baker) BakeWorkflow(workflow *Workflow, vars map[string]any) (*BakeResu
 
 	// Validate that all provided variables are declared in the workflow
 	// This catches typos like --var adapater=x when the variable is "adapter"
+	// Skip validation for built-in variables (prefixed with __)
 	for k := range vars {
+		// Built-in variables like __step_prefix__ are injected by the system
+		// and don't need to be declared in the workflow
+		if strings.HasPrefix(k, "__") {
+			continue
+		}
 		if _, ok := workflow.Variables[k]; !ok {
 			// Try to find a similar variable name to suggest
 			suggestion := findSimilarVariable(k, workflow.Variables)

@@ -516,6 +516,20 @@ The orchestrator sets these in agent tmux sessions:
 - `MEOW_ORCH_SOCK`: Path to IPC socket
 - `MEOW_STEP`: Current step ID (updated on each new step)
 
+### Built-in Template Variables
+
+These variables are automatically available in templates:
+- `{{workflow_id}}`: Unique workflow run ID
+- `{{__step_prefix__}}`: Expansion prefix for the current template (e.g., `"parent."`)
+
+The `__step_prefix__` variable is injected during template expansion and allows templates to reference sibling steps by their full prefixed ID:
+
+```toml
+# In an expanded template, check if sibling step "done" is complete
+check_step = "{{__step_prefix__}}done"
+# If expanded under "agents.0.track", resolves to "agents.0.track.done"
+```
+
 ---
 
 ## Template System

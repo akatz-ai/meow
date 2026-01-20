@@ -117,6 +117,14 @@ needs = ["main-work"]
 4. Checks if main step is done; loops if not
 5. Self-terminates when main step completes
 
+**Step ID prefixing:** When checking sibling step status from an expanded template, use `{{__step_prefix__}}` to construct the full prefixed step ID:
+
+```toml
+# In lib/agent-persistence, check_step needs the full prefixed ID
+check_step = "{{__step_prefix__}}protocol.done"
+# Resolves to e.g., "agents.0.track.protocol.done"
+```
+
 See `lib/agent-persistence.meow.toml` for the full implementation.
 
 ---
