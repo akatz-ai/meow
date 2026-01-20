@@ -67,7 +67,10 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	existing, _ := installedStore.Get(installName)
+	existing, err := installedStore.Get(installName)
+	if err != nil {
+		return fmt.Errorf("checking existing installation: %w", err)
+	}
 	if existing != nil && !installForce {
 		return fmt.Errorf("collection %q already exists (from %s)\n\nOptions:\n  meow install %s --force          # Reinstall\n  meow install %s --as <alias>     # Install with different name\n  meow collection remove %s        # Remove first",
 			installName, existing.Registry, ref, ref, installName)
@@ -134,14 +137,14 @@ func resolveInstallDestination(name string, local bool) (string, string, error) 
 		if err != nil {
 			return "", "", err
 		}
-		return filepath.Join(cwd, ".meow", "workflows", name), "project", nil
+		return filepath.Join(cwd, ".meow", "workflows", name), registry.ScopeProject, nil
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", err
 	}
-	return filepath.Join(home, ".meow", "workflows", name), "user", nil
+	return filepath.Join(home, ".meow", "workflows", name), registry.ScopeUser, nil
 }
 
 func resolveCollectionSource(collection, registryName string) (string, string, error) {
