@@ -45,7 +45,7 @@ If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), instal
 
 ```bash
 # Add the marketplace
-/plugin marketplace add akatz-ai/meow-skill
+/plugin marketplace add akatz-ai/meow
 
 # Install the skill
 /plugin install meow

@@ -1,0 +1,5 @@
+{
+  "name": "meow",
+  "version": "1.0.0",
+  "description": "MEOW (Meow Executors Orchestrate Work) agent orchestration skill. Helps create, manage, and monitor AI agent workflows using MEOW's tmux-based orchestrator."
+}

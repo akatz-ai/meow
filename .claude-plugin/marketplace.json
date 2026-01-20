@@ -1,0 +1,14 @@
+{
+  "name": "meow-skills",
+  "description": "Skills for MEOW (Meow Executors Orchestrate Work) - AI agent orchestration",
+  "owner": {
+    "name": "akatz-ai"
+  },
+  "plugins": [
+    {
+      "name": "meow",
+      "source": "./plugin/meow",
+      "description": "MEOW agent orchestration - create, manage, and monitor AI agent workflows"
+    }
+  ]
+}
