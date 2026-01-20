@@ -131,15 +131,13 @@ func TestRegistryValidate_ValidRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run validate command
-	cmd := registryValidateCmd
-	cmd.SetArgs([]string{registryDir})
-
+	// Set up command output capture
 	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	registryValidateCmd.SetOut(&out)
+	registryValidateCmd.SetErr(&out)
 
-	if err := cmd.Execute(); err != nil {
+	// Run validate command
+	if err := runRegistryValidate(registryValidateCmd, []string{registryDir}); err != nil {
 		t.Fatalf("Expected valid registry to pass, got error: %v\nOutput: %s", err, out.String())
 	}
 
@@ -188,14 +186,11 @@ func TestRegistryValidate_InvalidRegistry(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cmd := registryValidateCmd
-			cmd.SetArgs([]string{registryDir})
-
 			var out bytes.Buffer
-			cmd.SetOut(&out)
-			cmd.SetErr(&out)
+			registryValidateCmd.SetOut(&out)
+			registryValidateCmd.SetErr(&out)
 
-			err := cmd.Execute()
+			err := runRegistryValidate(registryValidateCmd, []string{registryDir})
 			if err == nil {
 				t.Fatalf("Expected error for invalid registry, got nil\nOutput: %s", out.String())
 			}
@@ -250,15 +245,12 @@ func TestRegistryValidate_CurrentDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run validate without args (should default to ".")
-	cmd := registryValidateCmd
-	cmd.SetArgs([]string{})
-
 	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	registryValidateCmd.SetOut(&out)
+	registryValidateCmd.SetErr(&out)
 
-	if err := cmd.Execute(); err != nil {
+	// Run validate without args (should default to ".")
+	if err := runRegistryValidate(registryValidateCmd, []string{}); err != nil {
 		t.Fatalf("Expected valid registry to pass, got error: %v\nOutput: %s", err, out.String())
 	}
 }
@@ -285,15 +277,12 @@ func TestCollectionValidate_ValidCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run validate command
-	cmd := collectionValidateCmd
-	cmd.SetArgs([]string{collectionDir})
-
 	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	collectionValidateCmd.SetOut(&out)
+	collectionValidateCmd.SetErr(&out)
 
-	if err := cmd.Execute(); err != nil {
+	// Run validate command
+	if err := runRegistryValidate(collectionValidateCmd, []string{collectionDir}); err != nil {
 		t.Fatalf("Expected valid collection to pass, got error: %v\nOutput: %s", err, out.String())
 	}
 
@@ -356,14 +345,11 @@ func TestCollectionValidate_InvalidCollection(t *testing.T) {
 				}
 			}
 
-			cmd := collectionValidateCmd
-			cmd.SetArgs([]string{collectionDir})
-
 			var out bytes.Buffer
-			cmd.SetOut(&out)
-			cmd.SetErr(&out)
+			collectionValidateCmd.SetOut(&out)
+			collectionValidateCmd.SetErr(&out)
 
-			err := cmd.Execute()
+			err := runRegistryValidate(collectionValidateCmd, []string{collectionDir})
 			if err == nil {
 				t.Fatalf("Expected error for invalid collection, got nil\nOutput: %s", out.String())
 			}
@@ -380,14 +366,11 @@ func TestCollectionValidate_InvalidCollection(t *testing.T) {
 func TestValidate_NoManifestOrRegistry(t *testing.T) {
 	emptyDir := t.TempDir()
 
-	cmd := registryValidateCmd
-	cmd.SetArgs([]string{emptyDir})
-
 	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	registryValidateCmd.SetOut(&out)
+	registryValidateCmd.SetErr(&out)
 
-	err := cmd.Execute()
+	err := runRegistryValidate(registryValidateCmd, []string{emptyDir})
 	if err == nil {
 		t.Fatal("Expected error when no registry.json or manifest.json found")
 	}
@@ -432,14 +415,11 @@ func TestRegistryValidate_MissingCollectionManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := registryValidateCmd
-	cmd.SetArgs([]string{registryDir})
-
 	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	registryValidateCmd.SetOut(&out)
+	registryValidateCmd.SetErr(&out)
 
-	err := cmd.Execute()
+	err := runRegistryValidate(registryValidateCmd, []string{registryDir})
 	if err == nil {
 		t.Fatal("Expected error for missing manifest with strict=true")
 	}
