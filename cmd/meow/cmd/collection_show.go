@@ -49,7 +49,7 @@ var collectionShowCmd = &cobra.Command{
 
 		// List workflows in collection
 		fmt.Fprintf(cmd.OutOrStdout(), "\nWorkflows:\n")
-		filepath.Walk(c.Path, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(c.Path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
