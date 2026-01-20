@@ -1028,3 +1028,62 @@ func TestLoader_LoadWorkflow_Collection(t *testing.T) {
 		t.Errorf("Description = %s, want 'sprint workflow'", result.Workflow.Description)
 	}
 }
+
+func TestLoader_ResolveWorkflow_EmptyReference(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	loader := NewLoader(projectDir)
+
+	testCases := []struct {
+		name string
+		ref  string
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   "},
+		{"tab only", "\t"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loader.ResolveWorkflow(tc.ref)
+			if err == nil {
+				t.Fatal("Expected error for empty reference")
+			}
+			if !strings.Contains(err.Error(), "empty") {
+				t.Errorf("Error should mention 'empty': %s", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoader_ResolveWorkflow_InvalidReferences(t *testing.T) {
+	projectDir := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	loader := NewLoader(projectDir)
+
+	testCases := []struct {
+		name        string
+		ref         string
+		errContains string
+	}{
+		{"section only", "#section", "missing file path"},
+		{"colon only", ":", "missing file path"},
+		{"empty section", "sprint#", "missing workflow name"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loader.ResolveWorkflow(tc.ref)
+			if err == nil {
+				t.Fatalf("Expected error for invalid reference %q", tc.ref)
+			}
+			if !strings.Contains(err.Error(), tc.errContains) {
+				t.Errorf("Error should contain %q: %s", tc.errContains, err.Error())
+			}
+		})
+	}
+}

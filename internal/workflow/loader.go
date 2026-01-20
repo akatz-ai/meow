@@ -121,8 +121,21 @@ func (l *Loader) LoadWorkflow(ref string) (*LoadedWorkflow, error) {
 //   - "sprint#section" - resolves to collection entrypoint, specific section
 //   - "sprint:lib/foo#section" - combination of both
 func (l *Loader) ResolveWorkflow(ref string) (*WorkflowLocation, error) {
+	// Validate reference is not empty
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("workflow reference is empty")
+	}
+
 	// Parse as collection reference first
 	collectionRef, workflowPath, workflowName := parseCollectionRef(ref)
+
+	// Validate parsed components
+	if collectionRef == "" && workflowPath == "" {
+		return nil, fmt.Errorf("workflow reference missing file path: %q", ref)
+	}
+	if workflowName == "" {
+		return nil, fmt.Errorf("workflow reference missing workflow name: %q", ref)
+	}
 
 	// Try to resolve as collection (collections have precedence over standalone files)
 	if location := l.resolveAsCollection(collectionRef, workflowPath, workflowName); location != nil {
