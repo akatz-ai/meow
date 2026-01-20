@@ -1,0 +1,212 @@
+# E2E Spec: Typed Variables
+# ==========================
+#
+# Purpose: Verify structured data (maps, arrays) flow through workflows
+# Reference: internal/types/step.go (Variables map[string]any)
+#
+# Variables in MEOW can be strings, numbers, booleans, or structured
+# data (maps, arrays). This is critical for foreach over objects.
+
+version: "1.0"
+feature: typed-variables
+description: |
+  Tests that structured data (JSON objects, arrays) can flow through
+  MEOW workflows without being stringified or corrupted.
+
+  This matters because:
+  - foreach items can be objects with fields
+  - expand variables can pass objects to sub-templates
+  - Multiple levels of expansion must preserve types
+  - YAML persistence must preserve types for crash recovery
+
+beads:
+  epic: meow-uc85         # Epic: Typed Variables Refactor
+  data-model: meow-ek02   # Typed Variables: Change data model to map[string]any
+  parser: meow-m8g8       # Typed Variables: Update parser for typed parsing
+  var-context: meow-n16t  # Typed Variables: Implement Eval/Render split
+  foreach: meow-xr4k      # Typed Variables: Update foreach to store items typed
+  expand: meow-dklq       # Typed Variables: Update expansion API signatures
+  baker: meow-c8uh        # Typed Variables: Update baker to accept map[string]any
+  e2e-test: meow-qeyp     # Typed Variables: E2E test for foreach->expand->field
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Foreach with Object Items
+  # ===========================================================================
+  - id: foreach-objects
+    description: Foreach over array of objects preserves field access
+    beads: [meow-xr4k, meow-qeyp]
+
+    tests:
+      - id: foreach-direct-field-access
+        name: Foreach item_var allows direct field access
+        command: meow run <workflow>
+        setup:
+          - Shell outputs JSON array: [{id: "task-1", priority: 1}, ...]
+          - Foreach with item_var = "item"
+          - Template uses {{item.id}} and {{item.priority}}
+        expect:
+          exit_code: 0
+          no_errors:
+            - "cannot access field"
+            - "non-map"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Basic use case: iterate over objects and access their fields.
+          If items get stringified to JSON, field access fails.
+
+      - id: foreach-expand-chain
+        name: Foreach → expand → expand preserves types through levels
+        command: meow run <workflow>
+        setup:
+          - Foreach over [{name: "critical", task_ids: "bf-xxx"}, ...]
+          - Foreach expands to level1 template
+          - level1 passes task = "{{task}}" to level2
+          - level2 accesses {{task.task_ids}}
+        expect:
+          exit_code: 0
+          no_errors:
+            - "cannot access field"
+            - "non-map"
+          all_iterations_complete: true
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          THIS IS THE CRITICAL TEST. Multi-level expansion with typed
+          variables is the pattern used by sprint workflows. Each
+          level of expansion must pass objects, not JSON strings.
+
+  # ===========================================================================
+  # Scenario 2: Expand Variable Pass-Through
+  # ===========================================================================
+  - id: expand-pass-through
+    description: Expand passes typed variables to sub-templates
+    beads: [meow-dklq, meow-c8uh]
+
+    tests:
+      - id: expand-preserves-objects
+        name: Object variable survives expand
+        command: meow run <workflow>
+        setup:
+          - Shell outputs JSON object {name: "test", data: {nested: "value"}}
+          - Expand with variables.config = "{{init.outputs.config}}"
+          - Sub-template uses {{config.name}} and {{config.data.nested}}
+        expect:
+          exit_code: 0
+          no_errors:
+            - "cannot access field"
+            - "non-map"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Expand is the primary composition mechanism. Objects passed
+          through variables must remain objects in the sub-template.
+
+      - id: nested-expand-preserves-types
+        name: Multiple expand levels maintain object types
+        command: meow run <workflow>
+        setup:
+          - main → level1 (passes object) → level2 (accesses fields)
+        expect:
+          exit_code: 0
+          no_errors:
+            - "cannot access field"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Library templates often expand other templates. Type
+          preservation must work at arbitrary nesting depths.
+
+  # ===========================================================================
+  # Scenario 3: YAML Persistence
+  # ===========================================================================
+  - id: yaml-persistence
+    description: Typed variables survive YAML round-trip
+    beads: [meow-ek02]
+
+    tests:
+      - id: workflow-variables-roundtrip
+        name: Workflow.Variables survives save/load
+        test_type: unit  # This is tested via harness, not meow run
+        setup:
+          - Create Run with Variables = {task: {name: "test", ids: "abc"}}
+          - Save to YAML
+          - Load from YAML
+        expect:
+          Variables["task"]: is map[string]any, not string
+          Variables["task"]["name"]: "test"
+        why: |
+          Crash recovery reloads workflow state from YAML. If typed
+          variables become strings, recovered workflows will fail.
+
+      - id: step-variables-roundtrip
+        name: Step.Expand.Variables survives save/load
+        test_type: unit
+        setup:
+          - Create Run with Step.Expand.Variables = {config: {...}}
+          - Save and load
+        expect:
+          Step.Expand.Variables["config"]: is map[string]any
+        why: |
+          Expand steps store their variables. These must also survive
+          YAML serialization for recovery to work.
+
+      - id: nested-structures-roundtrip
+        name: Deeply nested structures preserved
+        test_type: unit
+        setup:
+          - Variables with nested maps and arrays
+          - {task: {metadata: {tags: ["a", "b"]}}}
+        expect:
+          Full structure preserved after round-trip
+        why: |
+          Real-world data can be deeply nested. YAML must handle
+          arbitrary nesting without flattening or stringifying.
+
+  # ===========================================================================
+  # Scenario 4: Shell Output Types
+  # ===========================================================================
+  - id: shell-output-types
+    description: Shell outputs with type=json produce maps
+    beads: [meow-c8uh]
+
+    tests:
+      - id: json-output-is-map
+        name: shell_outputs with type=json produces map, not string
+        command: meow run <workflow>
+        setup:
+          - Shell outputs JSON object
+          - shell_outputs.result = {source = "stdout", type = "json"}
+          - Next step uses {{step.outputs.result.field}}
+        expect:
+          exit_code: 0
+          behavior:
+            - Field access works on the output
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The type=json annotation tells the baker to parse the output.
+          Without this, the JSON would be a string and field access fails.
+
+      - id: json-array-output
+        name: JSON array output used by foreach
+        command: meow run <workflow>
+        setup:
+          - Shell outputs JSON array of objects
+          - Foreach over {{step.outputs.items}}
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Foreach commonly iterates over dynamic arrays from shell
+          outputs. The array must be a real slice, not a string.
+
+# Notes for test implementation:
+#
+# 1. Most tests should assert "no field access errors" in output
+# 2. YAML round-trip tests use harness.SaveWorkflow/LoadWorkflow
+# 3. These tests catch regressions in the type preservation pipeline
+# 4. The "foreach-expand-chain" test is the integration test for the epic
+# 5. Shell output type tests verify the baker's JSON parsing

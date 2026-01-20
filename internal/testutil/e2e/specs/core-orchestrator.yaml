@@ -1,0 +1,493 @@
+# E2E Spec: Core Orchestrator - The 7 Executors
+# ===============================================
+#
+# Purpose: Verify the fundamental orchestration primitives
+# Reference: docs/ARCHITECTURE.md (The 7 Executors section)
+#
+# The orchestrator knows how to execute exactly 7 executor types.
+# These tests verify the basic happy-path behavior of each.
+
+version: "1.0"
+feature: core-orchestrator
+description: |
+  Tests the 7 executor types that form MEOW's orchestration foundation.
+  These are the primitives that all workflows are built from.
+
+  Orchestrator Executors (run internally, fast):
+  - shell: Run a shell command
+  - spawn: Start an agent in tmux
+  - kill: Stop an agent's tmux session
+  - expand: Inline another template
+  - branch: Conditional execution
+  - foreach: Iterate over a list
+
+  External Executors (wait for external signal):
+  - agent: Assign work to an agent
+
+beads:
+  shell: meow-402      # Implement shell executor handler
+  spawn: meow-403      # Implement spawn executor handler
+  kill: meow-404       # Implement kill executor handler
+  expand: meow-405     # Implement expand executor handler
+  branch: meow-406     # Implement branch executor handler
+  agent: meow-407      # Implement agent executor handler
+  # Note: foreach was added later, no specific bead ID
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Shell Executor
+  # ===========================================================================
+  - id: shell-executor
+    description: Shell executor runs commands and captures outputs
+    beads: [meow-402]
+
+    tests:
+      - id: single-shell-step
+        name: Single shell step runs and completes
+        command: meow run <workflow>
+        setup:
+          - Workflow with one shell step that echoes
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The most basic test - proves the orchestrator can dispatch a shell
+          step, wait for completion, and mark the workflow done. Foundation
+          for all other tests.
+
+      - id: multiple-shell-steps
+        name: Sequential shell steps with dependencies
+        command: meow run <workflow>
+        setup:
+          - step1 echoes
+          - step2 needs step1
+          - step3 needs step2
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Verifies the dependency system works - steps execute in order
+          based on needs declarations.
+
+      - id: parallel-shell-steps
+        name: Shell steps without dependencies run in parallel
+        command: meow run <workflow>
+        setup:
+          - parallel-1, parallel-2, parallel-3 (no needs, each sleeps 0.1s)
+          - join step needs all three
+        expect:
+          exit_code: 0
+          duration_under: 1500ms  # Would be ~300ms if sequential
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Verifies parallel execution - steps without dependencies start
+          concurrently. This is critical for performance in multi-agent
+          workflows.
+
+      - id: shell-output-capture
+        name: Shell outputs captured and available to dependent steps
+        command: meow run <workflow>
+        setup:
+          - produce step echoes "captured-value" with shell_outputs.result
+          - consume step uses {{produce.outputs.result}}
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Verifies output capture pipeline - shell stdout/stderr can be
+          captured and substituted into later steps. This is how data
+          flows through workflows.
+
+      - id: shell-output-chain
+        name: Multiple steps pass outputs through chain
+        command: meow run <workflow>
+        setup:
+          - step1 outputs value
+          - step2 uses step1.outputs, outputs new value
+          - step3 uses step2.outputs
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Complex output chains must work correctly. Ensures variable
+          substitution works at each link in the chain.
+
+  # ===========================================================================
+  # Scenario 2: Expand Executor
+  # ===========================================================================
+  - id: expand-executor
+    description: Expand executor inlines template steps into the running workflow
+    beads: [meow-405]
+
+    tests:
+      - id: simple-expand
+        name: Basic expand inlines sub-workflow steps
+        command: meow run <workflow>
+        setup:
+          - before step
+          - expand step referencing .sub-workflow
+          - after step needs expand
+          - sub-workflow has step-a and step-b
+        expect:
+          exit_code: 0
+          steps_created:
+            - "do-work.step-a"
+            - "do-work.step-b"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Expand is the composition primitive. It allows building large
+          workflows from reusable parts. Steps get prefixed with the
+          expand step's ID.
+
+      - id: expand-with-variables
+        name: Expand passes variables to sub-workflow
+        command: meow run <workflow>
+        setup:
+          - setup step captures output
+          - expand step passes {{setup.outputs.value}} as param
+          - sub-workflow declares param as required
+          - sub-workflow uses {{param}} in shell command
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Variables let you parameterize expanded templates. This is how
+          you pass runtime values (like agent names, paths, config) into
+          reusable templates.
+
+      - id: nested-expand
+        name: Expand within expand (multi-level)
+        command: meow run <workflow>
+        setup:
+          - main expands first-level
+          - first-level expands second-level
+          - second-level has shell step
+        expect:
+          exit_code: 0
+          steps_created:
+            - "level1.level2.deepest"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Library templates often expand other library templates. This
+          pattern must work correctly with proper step ID prefixing at
+          each level.
+
+  # ===========================================================================
+  # Scenario 3: Branch Executor
+  # ===========================================================================
+  - id: branch-executor
+    description: Branch executor evaluates conditions and expands true/false paths
+    beads: [meow-406]
+
+    tests:
+      - id: branch-true-condition
+        name: Branch with true condition expands on_true
+        command: meow run <workflow>
+        setup:
+          - branch step with condition = "true"
+          - on_true expands .success-path
+          - on_false expands .failure-path
+        expect:
+          exit_code: 0
+          steps_created:
+            - "check.success"
+          steps_not_created:
+            - "check.failure"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Basic conditional execution. The condition command exit code
+          determines which branch is taken. Exit 0 = true.
+
+      - id: branch-false-condition
+        name: Branch with false condition expands on_false
+        command: meow run <workflow>
+        setup:
+          - branch step with condition = "false"
+          - on_true and on_false templates
+        expect:
+          exit_code: 0
+          steps_created:
+            - "check.failure"
+          steps_not_created:
+            - "check.success"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Non-zero exit code takes the false branch. This is the error
+          handling path.
+
+      - id: branch-with-inline-steps
+        name: Branch using inline steps instead of template
+        command: meow run <workflow>
+        setup:
+          - branch with on_true.inline = [{shell steps}]
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Inline steps avoid creating separate templates for simple
+          conditionals. Useful for one-off error handlers.
+
+      - id: branch-empty-on-true
+        name: Branch with empty inline (just continue)
+        command: meow run <workflow>
+        setup:
+          - branch with on_true.inline = []
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Empty inline is valid - means "do nothing and continue".
+          Used when you only need to handle one branch.
+
+      - id: branch-with-shell-condition
+        name: Branch condition uses real shell test
+        command: meow run <workflow>
+        setup:
+          - condition = "test -d /tmp"
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Real shell conditions (file tests, grep, etc.) drive
+          workflow logic. This is how you make data-dependent decisions.
+
+      - id: branch-with-variable-condition
+        name: Branch condition uses step output in test
+        command: meow run <workflow>
+        setup:
+          - step outputs "yes"
+          - condition = "test '{{step.outputs.answer}}' = 'yes'"
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Combining outputs with conditions enables dynamic workflows.
+          This pattern is used for "check if agent succeeded" logic.
+
+      - id: parallel-branch-steps
+        name: Multiple branch steps evaluate in parallel
+        command: meow run <workflow>
+        setup:
+          - branch-1, branch-2, branch-3 all start at once
+          - each uses async condition command
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Branch conditions run asynchronously in goroutines. Multiple
+          branches can evaluate concurrently, enabling parallel
+          conditional logic patterns.
+
+  # ===========================================================================
+  # Scenario 4: Foreach Executor
+  # ===========================================================================
+  - id: foreach-executor
+    description: Foreach iterates over lists, creating one expansion per item
+    beads: []  # Added later, no specific bead
+
+    tests:
+      - id: foreach-basic-array
+        name: Foreach iterates over JSON array
+        command: meow run <workflow>
+        setup:
+          - shell step outputs ["a", "b", "c"]
+          - foreach over {{step.outputs.items}}
+          - template uses {{item}} and {{index}}
+        expect:
+          exit_code: 0
+          steps_created:
+            - "process.0.*"
+            - "process.1.*"
+            - "process.2.*"
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Foreach enables dynamic parallelism. The number of iterations
+          is determined at runtime from a previous step's output.
+
+      - id: foreach-nested-objects
+        name: Foreach over array of objects with field access
+        command: meow run <workflow>
+        setup:
+          - outputs [{id: "a", name: "foo"}, ...]
+          - template uses {{item.id}} and {{item.name}}
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Iterating over objects (not just strings) is common. The item
+          variable must preserve object structure for field access.
+
+      - id: foreach-empty-array
+        name: Foreach with empty array completes immediately
+        command: meow run <workflow>
+        setup:
+          - outputs []
+          - foreach creates no iterations
+        expect:
+          exit_code: 0
+          steps_created: []  # No iteration steps
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Empty arrays shouldn't break the workflow. Foreach should
+          complete immediately with no iterations, allowing dependent
+          steps to proceed.
+
+      - id: foreach-large-array
+        name: Foreach handles many iterations
+        command: meow run <workflow>
+        setup:
+          - outputs array with 20+ items
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Stress test for the expansion system. Many iterations should
+          complete without deadlock or excessive memory use.
+
+  # ===========================================================================
+  # Scenario 5: Agent Executor (with Simulator)
+  # ===========================================================================
+  - id: agent-executor
+    description: Agent executor dispatches work to tmux-based agents
+    beads: [meow-407, meow-403, meow-404]
+
+    tests:
+      - id: single-agent-step
+        name: Spawn → agent work → kill lifecycle
+        command: meow run <workflow>
+        setup:
+          - Simulator adapter configured
+          - spawn-agent step
+          - work step (agent executor)
+          - kill-agent step
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "spawning agent"
+            - "workflow completed"
+        why: |
+          The basic agent lifecycle. Spawn creates tmux session, agent
+          step injects prompt and waits for meow done, kill terminates.
+
+      - id: agent-with-outputs
+        name: Agent produces outputs via meow done --output
+        command: meow run <workflow>
+        setup:
+          - Simulator configured to produce outputs
+          - Agent step expects outputs
+        expect:
+          exit_code: 0
+          outputs_captured:
+            - result
+            - count
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Agents communicate results via meow done --output key=value.
+          These outputs flow to dependent steps like shell outputs.
+
+      - id: parallel-agents
+        name: Multiple agents work concurrently
+        command: meow run <workflow>
+        setup:
+          - spawn-1, spawn-2 (parallel)
+          - work-1, work-2 (parallel)
+          - join step needs both
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Multi-agent workflows are the core use case. Multiple agents
+          must be able to work concurrently in their own tmux sessions.
+
+  # ===========================================================================
+  # Scenario 6: Dependency Graph
+  # ===========================================================================
+  - id: dependency-graph
+    description: Verify complex dependency patterns execute correctly
+    beads: [meow-401, meow-411]
+
+    tests:
+      - id: diamond-dependency
+        name: Diamond pattern (A→B,C→D) executes correctly
+        command: meow run <workflow>
+        setup:
+          - A runs first
+          - B and C need A (parallel)
+          - D needs B and C (waits for both)
+        expect:
+          exit_code: 0
+          execution_order:
+            - A before B
+            - A before C
+            - B before D
+            - C before D
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The diamond pattern is a common DAG shape. Ensures the join
+          waits for ALL dependencies, not just the first to complete.
+
+  # ===========================================================================
+  # Scenario 7: Error Handling
+  # ===========================================================================
+  - id: error-handling
+    description: Verify step failure and on_error behavior
+    beads: [meow-402]
+
+    tests:
+      - id: shell-step-failure
+        name: Shell step failure marks workflow failed
+        command: meow run <workflow>
+        setup:
+          - step with command = "exit 1"
+        expect:
+          exit_code: 1
+          stderr_contains:
+            - "failed"
+        why: |
+          Default behavior: step failure fails the workflow. This is
+          the expected behavior when on_error is not set.
+
+      - id: shell-step-failure-on-error-continue
+        name: on_error=continue allows workflow to proceed
+        command: meow run <workflow>
+        setup:
+          - fail-step with command = "exit 1" and on_error = "continue"
+          - after-fail step needs fail-step
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          on_error=continue is critical for optional steps or cleanup
+          that shouldn't block the workflow. The step is marked failed
+          but dependents still run.
+
+# Notes for test implementation:
+#
+# 1. Tests in e2e_test.go should include: // Spec: <scenario-id>.<test-id>
+# 2. The simulator is used for agent tests (meow-agent-sim)
+# 3. Tests use the harness for isolation (temp dirs, tmux sockets)
+# 4. Shell tests don't need the simulator
+# 5. The "why" field helps future maintainers decide fix vs update

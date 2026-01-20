@@ -1,0 +1,204 @@
+# E2E Spec: Crash Recovery
+# =========================
+#
+# Purpose: Verify the orchestrator can resume workflows after crash
+# Reference: docs/ARCHITECTURE.md (Persistent State, Best-Effort Resume)
+#
+# MEOW persists workflow state to YAML files. On crash:
+# 1. Reload workflow state
+# 2. Check which agents are still alive
+# 3. Reset interrupted orchestrator steps to pending
+# 4. Resume from where orchestration left off
+
+version: "1.0"
+feature: crash-recovery
+description: |
+  Tests the workflow recovery system that allows MEOW to resume after
+  an orchestrator crash. This is NOT durable execution - it's best-effort
+  resume with the understanding that interrupted work may need re-running.
+
+  Key principle: Orchestrator steps can be re-run safely. Agent steps
+  that were in-progress when we crashed need special handling.
+
+beads:
+  workflow-store: meow-202      # Implement YAMLWorkflowStore
+  orchestrator: meow-401        # Refactor orchestrator for WorkflowStore
+  # Related open work:
+  # meow-9a9y: Epic: Robust Crash Recovery & Session Resumption
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Pending Steps Recovery
+  # ===========================================================================
+  - id: pending-steps
+    description: Recovery when crash occurred before steps started
+    beads: [meow-202]
+
+    tests:
+      - id: recover-pending-steps
+        name: Workflow with pending steps resumes correctly
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - step1: pending
+            - step2: pending (needs step1)
+        expect:
+          exit_code: 0
+          steps_completed:
+            - step1
+            - step2
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Simplest recovery case. If we crashed before starting anything,
+          recovery should start from the beginning and complete normally.
+
+  # ===========================================================================
+  # Scenario 2: Running Shell Step Recovery
+  # ===========================================================================
+  - id: running-shell
+    description: Recovery when shell step was in-progress
+    beads: [meow-202, meow-402]
+
+    tests:
+      - id: recover-running-shell-step
+        name: Running shell step is reset to pending and re-run
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - step1: running (shell executor)
+            - step2: pending (needs step1)
+        expect:
+          exit_code: 0
+          steps_completed:
+            - step1
+            - step2
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Shell steps have no persistent state beyond the workflow file.
+          If we crashed mid-execution, we reset to pending and re-run.
+          This assumes shell commands are idempotent or tolerate re-runs.
+
+  # ===========================================================================
+  # Scenario 3: Running Agent Step with Dead Session
+  # ===========================================================================
+  - id: running-agent-dead
+    description: Recovery when agent step was running but session is gone
+    beads: [meow-202, meow-407]
+
+    tests:
+      - id: recover-agent-dead-session
+        name: Running agent with dead session is respawned
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - spawn-step: done, agent info stored
+            - work-step: running (agent executor)
+            - tmux session does NOT exist
+        expect:
+          exit_code: 0  # or appropriate handling
+          behavior:
+            - Agent is respawned
+            - Work step resumes or restarts
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          If the machine rebooted or tmux died, the session is gone.
+          Recovery needs to respawn the agent and restart the work.
+          This is the "crash restart" case.
+
+  # ===========================================================================
+  # Scenario 4: Completing Step Recovery
+  # ===========================================================================
+  - id: completing-step
+    description: Recovery when step was in the "completing" state
+    beads: [meow-202]
+
+    tests:
+      - id: recover-completing-step
+        name: Step in completing state finishes correctly
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - step1: completing (shell executor)
+            - step2: pending (needs step1)
+        expect:
+          exit_code: 0
+          steps_completed:
+            - step1
+            - step2
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The "completing" state exists to prevent race conditions during
+          step transitions. If we crash during completion, recovery should
+          either re-run the step or recognize it's done (depending on
+          whether the state file was updated).
+
+  # ===========================================================================
+  # Scenario 5: Partial Expansion Recovery
+  # ===========================================================================
+  - id: partial-expansion
+    description: Recovery when expand was partially completed
+    beads: [meow-202, meow-405]
+
+    tests:
+      - id: recover-partial-expansion
+        name: Expand with some expanded steps done resumes correctly
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - expand-step: done, ExpandedInto = ["expand.child1", "expand.child2"]
+            - expand.child1: done
+            - expand.child2: pending
+            - final-step: pending (needs expand-step)
+        expect:
+          exit_code: 0
+          steps_completed:
+            - "expand.child2"
+            - "final-step"
+          steps_not_rerun:
+            - "expand.child1"  # Already done, skip
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Expand creates child steps. If we crash mid-expansion or mid-
+          execution of expanded steps, recovery should:
+          1. Not re-expand (expand-step is done)
+          2. Not re-run completed children
+          3. Resume pending children
+
+  # ===========================================================================
+  # Scenario 6: Completed Workflow Recovery
+  # ===========================================================================
+  - id: completed-workflow
+    description: Recovery of already-completed workflow
+    beads: [meow-202]
+
+    tests:
+      - id: recover-completed-workflow
+        name: Resuming completed workflow is a no-op
+        command: meow resume <workflow-id>
+        setup:
+          - Create workflow file with:
+            - All steps: done
+            - Workflow status: completed
+        expect:
+          exit_code: 0
+          behavior:
+            - Workflow recognized as already complete
+            - No steps re-run
+          stdout_contains:
+            - "already completed"
+        why: |
+          Attempting to resume a completed workflow should be safe -
+          it should recognize there's nothing to do and exit cleanly.
+
+# Notes for test implementation:
+#
+# 1. These tests require manually creating workflow YAML files
+# 2. Use the harness to create isolated runs directories
+# 3. The "completing" state tests may need to manipulate state carefully
+# 4. Agent tests need the simulator and may need to control tmux state
+# 5. Recovery tests verify idempotence of the orchestrator

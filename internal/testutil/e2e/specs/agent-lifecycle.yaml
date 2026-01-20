@@ -1,0 +1,244 @@
+# E2E Spec: Agent Lifecycle
+# ==========================
+#
+# Purpose: Verify agent spawn, work, timeout, crash, and kill behavior
+# Reference: docs/ARCHITECTURE.md (The Propulsion Principle)
+#
+# Agents are processes in tmux sessions. The orchestrator injects prompts
+# and waits for them to signal completion with `meow done`.
+
+version: "1.0"
+feature: agent-lifecycle
+description: |
+  Tests the complete lifecycle of AI agents in MEOW:
+  - Spawning agents in tmux sessions
+  - Injecting prompts and waiting for completion
+  - Handling timeouts when agents take too long
+  - Detecting and handling agent crashes
+  - Graceful and forceful termination
+
+  Key principle: The orchestrator drives agents forward. Agents don't poll.
+
+beads:
+  spawn: meow-403         # Implement spawn executor handler
+  kill: meow-404          # Implement kill executor handler
+  agent: meow-407         # Implement agent executor handler
+  parallel: meow-411      # Implement parallel step dispatch
+  concurrency: meow-aga   # Epic: Concurrency Model Overhaul
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Basic Lifecycle
+  # ===========================================================================
+  - id: basic-lifecycle
+    description: Normal spawn → work → kill cycle
+    beads: [meow-403, meow-404, meow-407]
+
+    tests:
+      - id: spawn-work-kill
+        name: Complete lifecycle with simulator
+        command: meow run <workflow>
+        setup:
+          - Simulator configured to complete immediately
+          - spawn → agent (work) → kill steps
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "spawning agent"
+            - "workflow completed"
+        why: |
+          The fundamental agent pattern. Every agent workflow follows
+          this basic structure. Tests the core tmux integration.
+
+      - id: agent-session-control
+        name: Session control commands work correctly
+        command: meow run <workflow>
+        setup:
+          - Simulator adapter
+          - spawn, multiple agent steps, kill
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Verifies that multiple agent steps can use the same session,
+          and that the session persists between prompts until killed.
+
+  # ===========================================================================
+  # Scenario 2: Agent Timeout Handling
+  # ===========================================================================
+  - id: timeout-handling
+    description: Agent takes too long to respond
+    beads: [meow-407]
+
+    tests:
+      - id: timeout-sends-signal
+        name: Timeout sends C-c signal to agent
+        command: meow run <workflow>
+        setup:
+          - Simulator configured to hang forever
+          - Agent step with timeout = "2s"
+        expect:
+          exit_code: 1  # or depends on on_error
+          behavior:
+            - C-c sent to tmux session
+            - Wait period before marking failed
+          stderr_contains:
+            - "timeout"
+        why: |
+          When agents hang, we need a way to interrupt them. Sending
+          C-c gives them a chance to clean up before being killed.
+          This prevents stuck workflows.
+
+      - id: timeout-on-error-continue
+        name: Timeout with on_error=continue proceeds to next step
+        command: meow run <workflow>
+        setup:
+          - Agent step times out but has on_error = "continue"
+          - Next step depends on the timed-out step
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "timeout"
+            - "workflow completed"
+        why: |
+          Some agent work is optional. Timeouts shouldn't block the
+          entire workflow when on_error=continue is set.
+
+      - id: timeout-on-error-fail
+        name: Timeout with on_error=fail stops workflow
+        command: meow run <workflow>
+        setup:
+          - Agent step times out with on_error = "fail"
+        expect:
+          exit_code: 1
+          workflow_status: failed
+          stderr_contains:
+            - "timeout"
+            - "failed"
+        why: |
+          Default behavior: timeout is a failure. The workflow should
+          stop and report the timeout clearly.
+
+      - id: timeout-recovery-template
+        name: Timeout triggers recovery template via branch
+        command: meow run <workflow>
+        setup:
+          - Agent step with timeout
+          - Branch step checks if previous step failed
+          - on_false expands recovery template
+        expect:
+          exit_code: 0
+          steps_created:
+            - recovery steps
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Advanced pattern: use branch to detect timeout failures and
+          expand a recovery workflow. Enables retry patterns.
+
+  # ===========================================================================
+  # Scenario 3: Agent Crash Handling
+  # ===========================================================================
+  - id: crash-handling
+    description: Agent process dies unexpectedly
+    beads: [meow-407]
+
+    tests:
+      - id: crash-session-dies
+        name: Agent crash detected when session disappears
+        command: meow run <workflow>
+        setup:
+          - Simulator configured to crash after startup
+          - Agent step waiting for completion
+        expect:
+          exit_code: 1
+          behavior:
+            - Session disappearance detected
+            - Step marked failed
+        why: |
+          If the agent process dies (tmux session gone), we need to
+          detect this and handle it rather than waiting forever.
+
+      - id: crash-on-error-continue
+        name: Agent crash with on_error=continue proceeds
+        command: meow run <workflow>
+        setup:
+          - Crashing agent with on_error = "continue"
+          - Next step depends on crashed step
+        expect:
+          exit_code: 0
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Like timeout, crashes can be made non-fatal. Useful for
+          optional agent work.
+
+      - id: crash-stop-hook-not-called
+        name: Crash doesn't trigger stop hook (session gone)
+        command: meow run <workflow>
+        setup:
+          - Agent with stop hook that emits event
+          - Agent crashes (doesn't exit cleanly)
+        expect:
+          behavior:
+            - Stop hook NOT called (session gone too fast)
+            - agent-stopped event NOT emitted
+        why: |
+          Unlike graceful exit, a crash kills the session before the
+          stop hook can run. This affects Ralph Wiggum patterns -
+          the monitor won't get an event, it will time out.
+
+      - id: crash-detection-latency
+        name: Crash detected within reasonable time
+        command: meow run <workflow>
+        setup:
+          - Simulator configured to crash immediately
+          - Measure time to detect crash
+        expect:
+          detection_time: < 5s
+          behavior:
+            - Crash detected promptly
+            - Not waiting for timeout
+        why: |
+          Crash detection should be reasonably quick. We poll tmux
+          session existence periodically.
+
+  # ===========================================================================
+  # Scenario 4: Ralph Wiggum (Agent Persistence)
+  # ===========================================================================
+  - id: ralph-wiggum
+    description: Agent persistence pattern keeps agent working
+    beads: [meow-407]  # Uses events, see event-system.yaml for those beads
+
+    tests:
+      - id: ralph-wiggum-nudge
+        name: Stopped agent receives nudge and continues
+        command: meow run <workflow>
+        setup:
+          - Agent that stops (emits agent-stopped event)
+          - Persistence monitor template running in parallel
+          - Monitor nudges agent when stopped
+          - Agent completes after nudge
+        expect:
+          exit_code: 0
+          events_emitted:
+            - "agent-stopped"
+          behavior:
+            - Nudge prompt injected
+            - Agent continues to completion
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The Ralph Wiggum pattern is MEOW's solution to agents that
+          stop unexpectedly (Claude Code hitting context limits, user
+          interruption, etc.). It's implemented in templates, not the
+          orchestrator - testing it verifies the event system works.
+
+# Notes for test implementation:
+#
+# 1. These tests require the simulator (meow-agent-sim)
+# 2. Crash tests need simulator "crash" behavior
+# 3. Timeout tests need simulator "hang" behavior
+# 4. Ralph Wiggum tests need simulator event emission support
+# 5. Detection latency tests should use timing assertions

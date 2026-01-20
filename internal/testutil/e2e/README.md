@@ -166,11 +166,16 @@ func TestE2E_MyFeature(t *testing.T) {
 
 ### 3. Test Categories
 
-| File | Tests |
-|------|-------|
-| `e2e_test.go` | Core workflow execution (shell, expand, branch, etc.) |
-| `registry_e2e_test.go` | Collection validation and direct execution |
-| `registry_lifecycle_test.go` | Full registry CLI lifecycle |
+| File | Tests | Spec |
+|------|-------|------|
+| `e2e_test.go` | Core workflow execution (shell, expand, branch, etc.) | `core-orchestrator.yaml` |
+| `e2e_test.go` | Crash recovery scenarios | `crash-recovery.yaml` |
+| `e2e_test.go` | Agent timeout and crash handling | `agent-lifecycle.yaml` |
+| `e2e_test.go` | Event routing and gates | `event-system.yaml` |
+| `e2e_test.go` | Output validation and retry | `output-validation.yaml` |
+| `typed_vars_test.go` | Typed variable preservation | `typed-variables.yaml` |
+| `registry_e2e_test.go` | Collection validation and direct execution | `registry-distribution.yaml` |
+| `registry_lifecycle_test.go` | Full registry CLI lifecycle | `registry-distribution.yaml` |
 
 ## Best Practices
 
@@ -203,18 +208,37 @@ t.Logf("TempDir: %s", h.TempDir)
 go test -v -run 'TestE2E_RegistryLifecycle/add-registry-local' ./internal/testutil/e2e/...
 ```
 
+## Spec Files
+
+| Spec | Coverage | Key Beads |
+|------|----------|-----------|
+| `core-orchestrator.yaml` | 7 executors (shell, spawn, kill, expand, branch, foreach, agent) | meow-402 to meow-407 |
+| `crash-recovery.yaml` | Resume after crash (pending, running, completing states) | meow-202, meow-401 |
+| `agent-lifecycle.yaml` | Spawn, timeout, crash detection, Ralph Wiggum | meow-403, meow-404, meow-407 |
+| `event-system.yaml` | Event routing, gates, agent-stopped events | meow-507, meow-410 |
+| `typed-variables.yaml` | Object/array preservation through expand/foreach | meow-uc85 epic |
+| `output-validation.yaml` | Required outputs, type checking, retry | meow-e7.4, meow-icif |
+| `registry-distribution.yaml` | Registry add/list/show, install, collections | meow-5zaf to meow-uwt6 |
+
 ## Files
 
 ```
 internal/testutil/e2e/
 ├── README.md                    # This file
 ├── specs/
+│   ├── core-orchestrator.yaml   # 7 executors spec
+│   ├── crash-recovery.yaml      # Crash recovery spec
+│   ├── agent-lifecycle.yaml     # Agent timeout/crash spec
+│   ├── event-system.yaml        # Event routing spec
+│   ├── typed-variables.yaml     # Typed variables spec
+│   ├── output-validation.yaml   # Output validation spec
 │   └── registry-distribution.yaml  # Registry feature spec
 ├── harness.go                   # Test harness
 ├── registry_helpers.go          # Registry test utilities
 ├── sim_types.go                 # Simulator types
 ├── workflow_run.go              # Workflow run helpers
 ├── e2e_test.go                  # Core workflow tests
+├── typed_vars_test.go           # Typed variable tests
 ├── registry_e2e_test.go         # Collection execution tests
 └── registry_lifecycle_test.go   # Registry CLI lifecycle tests
 ```

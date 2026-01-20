@@ -1,0 +1,218 @@
+# E2E Spec: Event System
+# =======================
+#
+# Purpose: Verify event emission and routing between steps
+# Reference: docs/ARCHITECTURE.md (Events, Not Hooks)
+#
+# The orchestrator routes events between producers and consumers.
+# Agent-specific hook systems translate to generic events.
+
+version: "1.0"
+feature: event-system
+description: |
+  Tests the event routing infrastructure that enables loose coupling
+  between workflow components. Events are the mechanism for:
+  - Agent stop hooks signaling the orchestrator
+  - Human approval gates
+  - Inter-step communication without direct dependencies
+
+  Key principle: The orchestrator routes events. Templates decide
+  what events mean and how to respond.
+
+beads:
+  await-approval: meow-507   # Implement meow await-approval command
+  ipc: meow-410              # Implement IPC server
+  ipc-types: meow-106        # Define IPC message types
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Basic Event Routing
+  # ===========================================================================
+  - id: basic-routing
+    description: Events flow from emitter to waiter
+    beads: [meow-410, meow-106]
+
+    tests:
+      - id: event-emission-and-receipt
+        name: Shell emits event, branch receives it
+        command: meow run <workflow>
+        setup:
+          - Shell step runs "meow event test-event"
+          - Branch step uses condition = "meow await-event test-event --timeout 5s"
+          - Branch runs in parallel with emitter
+        expect:
+          exit_code: 0
+          behavior:
+            - Event emitted by shell step
+            - Event received by await-event
+            - Branch takes true path
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          The fundamental event pattern. Events decouple producers
+          from consumers - the emitter doesn't need to know who's
+          listening.
+
+      - id: event-routing-with-data
+        name: Events can carry payload data
+        command: meow run <workflow>
+        setup:
+          - Shell emits event with data: meow event data-event --data '{"key":"value"}'
+          - Waiter receives event and can access data
+        expect:
+          exit_code: 0
+          behavior:
+            - Event data available to receiver
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Events with payloads enable richer communication. Useful
+          for passing status codes, error messages, etc.
+
+  # ===========================================================================
+  # Scenario 2: Agent-Stopped Events
+  # ===========================================================================
+  - id: agent-stopped
+    description: Agent stop hooks emit events for monitoring
+    beads: [meow-407, meow-410]
+
+    tests:
+      - id: agent-stopped-event
+        name: Agent stop emits agent-stopped event
+        command: meow run <workflow>
+        setup:
+          - Agent configured with stop hook that runs "meow event agent-stopped"
+          - Monitor template waiting for agent-stopped events
+          - Agent completes normally (stop hook fires)
+        expect:
+          exit_code: 0
+          events_emitted:
+            - "agent-stopped"
+          behavior:
+            - Stop hook executed on agent exit
+            - Event received by monitor
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          This is how Ralph Wiggum works. The agent's stop hook emits
+          an event, and a monitor template responds by nudging if
+          the main work isn't done yet.
+
+      - id: agent-stopped-timeout
+        name: Await-event times out when no event arrives
+        command: meow run <workflow>
+        setup:
+          - Branch with condition = "meow await-event never-happens --timeout 1s"
+        expect:
+          exit_code: 0
+          behavior:
+            - Await-event times out
+            - Branch takes false path (timeout = failure)
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Timeouts prevent workflows from hanging forever waiting
+          for events that may never come. Essential for robustness.
+
+  # ===========================================================================
+  # Scenario 3: Gate Approval Events
+  # ===========================================================================
+  - id: gate-approval
+    description: Human approval gates using events
+    beads: [meow-507]
+
+    tests:
+      - id: approve-gate
+        name: meow approve emits gate-approved event
+        command: |
+          # In parallel:
+          meow run <workflow> &
+          sleep 1
+          meow approve review-gate --workflow <id>
+        setup:
+          - Workflow with branch using "meow await-approval review-gate"
+        expect:
+          exit_code: 0
+          events_emitted:
+            - "gate-approved"
+          behavior:
+            - Branch takes true (approved) path
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Human-in-the-loop workflows need approval gates. The
+          meow approve command is syntactic sugar for emitting
+          a gate-approved event.
+
+      - id: reject-gate
+        name: meow reject emits gate-rejected event
+        command: |
+          meow run <workflow> &
+          sleep 1
+          meow reject review-gate --workflow <id> --reason "not ready"
+        setup:
+          - Workflow with branch using "meow await-approval review-gate"
+        expect:
+          exit_code: 0
+          events_emitted:
+            - "gate-rejected"
+          behavior:
+            - Branch takes false (rejected) path
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Rejection is as important as approval. The reason is logged
+          for audit trails.
+
+      - id: approval-timeout
+        name: Gate times out without approval
+        command: meow run <workflow>
+        setup:
+          - Branch with "meow await-approval timeout-gate --timeout 2s"
+          - No one approves within 2 seconds
+        expect:
+          exit_code: 0
+          behavior:
+            - Await-approval times out
+            - Branch takes false path
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Approval gates shouldn't block forever. Timeout lets the
+          workflow handle the "no response" case (escalation, retry,
+          etc.).
+
+  # ===========================================================================
+  # Scenario 4: Event Scoping
+  # ===========================================================================
+  - id: event-scoping
+    description: Events are scoped to workflows
+    beads: [meow-410]
+
+    tests:
+      - id: events-isolated-between-workflows
+        name: Events in one workflow don't affect another
+        command: |
+          # Run two workflows in parallel
+          meow run workflow-a &
+          meow run workflow-b &
+          wait
+        setup:
+          - workflow-a emits "shared-event-name"
+          - workflow-b waits for "shared-event-name"
+          - Events should NOT cross workflow boundaries
+        expect:
+          behavior:
+            - workflow-a completes
+            - workflow-b times out waiting
+        why: |
+          Event isolation prevents interference between concurrent
+          workflows. Each workflow has its own event namespace.
+
+# Notes for test implementation:
+#
+# 1. Event tests may need timing coordination (parallel steps, sleeps)
+# 2. Gate tests need external commands (meow approve) during workflow run
+# 3. The simulator can emit events for agent-stopped tests
+# 4. Timeout values should be short but allow for CI variability
+# 5. Scoping tests need to run multiple workflows concurrently

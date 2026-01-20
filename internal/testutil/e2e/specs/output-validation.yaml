@@ -1,0 +1,223 @@
+# E2E Spec: Output Validation
+# ============================
+#
+# Purpose: Verify output validation and retry behavior
+# Reference: docs/ARCHITECTURE.md (Agent step outputs)
+#
+# Agent steps can declare expected outputs. The orchestrator validates
+# these and can retry if validation fails.
+
+version: "1.0"
+feature: output-validation
+description: |
+  Tests the output validation system for agent steps. When an agent
+  completes work with `meow done --output key=value`, the orchestrator
+  validates the outputs against the step's declared schema.
+
+  This enables:
+  - Required outputs that must be provided
+  - Type checking (string, number, boolean, json)
+  - Retry when outputs are missing or wrong type
+
+beads:
+  outputs-storage: meow-e7.2    # Implement output storage on beads
+  outputs-validation: meow-e7.4 # Implement output type validators
+  done-command: meow-501        # Implement meow done command
+  type-coercion: meow-icif      # Fix meow done --output type coercion
+
+scenarios:
+  # ===========================================================================
+  # Scenario 1: Missing Required Outputs
+  # ===========================================================================
+  - id: missing-required
+    description: Agent fails to provide required outputs
+    beads: [meow-e7.4]
+
+    tests:
+      - id: validation-missing-required
+        name: Missing required output triggers retry
+        command: meow run <workflow>
+        setup:
+          - Agent step declares outputs.result = {required = true}
+          - Simulator completes without providing 'result'
+          - Simulator provides 'result' on retry
+        expect:
+          exit_code: 0
+          behavior:
+            - First completion rejected
+            - Retry prompt sent
+            - Second completion accepted
+          stderr_contains:
+            - "missing required output"
+            - "workflow completed"
+        why: |
+          Agents may forget to call meow done --output correctly.
+          Validation ensures the contract is met before proceeding.
+
+      - id: all-required-outputs-missing
+        name: All required outputs missing triggers clear error
+        command: meow run <workflow>
+        setup:
+          - Multiple required outputs declared
+          - Agent provides none of them
+        expect:
+          behavior:
+            - Error lists all missing outputs
+            - Clear message to agent
+        why: |
+          Good error messages help agents (and their operators) fix
+          the issue. List all missing fields, not just the first.
+
+  # ===========================================================================
+  # Scenario 2: Wrong Type Outputs
+  # ===========================================================================
+  - id: wrong-type
+    description: Agent provides output with wrong type
+    beads: [meow-e7.4, meow-icif]
+
+    tests:
+      - id: validation-wrong-type
+        name: Wrong type output triggers retry
+        command: meow run <workflow>
+        setup:
+          - Step declares outputs.count = {type = "number"}
+          - Simulator provides count = "not-a-number"
+          - Simulator provides count = 42 on retry
+        expect:
+          exit_code: 0
+          behavior:
+            - Type validation fails
+            - Retry prompt sent
+            - Correct type accepted
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Type validation catches mistakes early. Better to retry
+          than to have a string where a number is expected downstream.
+
+      - id: boolean-type-coercion
+        name: Boolean outputs coerced correctly
+        command: meow run <workflow>
+        setup:
+          - Step declares outputs.flag = {type = "boolean"}
+          - Agent provides flag = "true" (string)
+        expect:
+          exit_code: 0
+          behavior:
+            - "true"/"false" strings coerced to boolean
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Shell commands naturally produce strings. Common boolean
+          representations ("true", "false", "yes", "no") should be
+          coerced to actual booleans.
+
+      - id: json-type-parsing
+        name: JSON type outputs parsed correctly
+        command: meow run <workflow>
+        setup:
+          - Step declares outputs.data = {type = "json"}
+          - Agent provides data = '{"key":"value"}'
+        expect:
+          exit_code: 0
+          behavior:
+            - JSON string parsed to object
+            - Field access works on output
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          JSON outputs are common for structured data. The parser
+          must produce a map[string]any, not a string.
+
+  # ===========================================================================
+  # Scenario 3: Retry Behavior
+  # ===========================================================================
+  - id: retry-behavior
+    description: Validation retries with clear prompts
+    beads: [meow-e7.4]
+
+    tests:
+      - id: multiple-retries
+        name: Validation retries multiple times before giving up
+        command: meow run <workflow>
+        setup:
+          - Agent step with required output
+          - Simulator fails validation multiple times
+          - Eventually succeeds
+        expect:
+          exit_code: 0
+          retries: >= 2
+          behavior:
+            - Each retry gets clear error message
+            - Eventually succeeds
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Some outputs take multiple attempts to get right. The
+          retry system should be persistent but not infinite.
+
+      - id: eventual-timeout
+        name: Validation eventually times out after max retries
+        command: meow run <workflow>
+        setup:
+          - Agent step with required output
+          - Simulator never provides correct output
+          - Step has timeout or max_retries
+        expect:
+          exit_code: 1
+          behavior:
+            - Multiple retries attempted
+            - Eventually times out
+            - Clear failure message
+        why: |
+          Infinite retries would hang the workflow. There must be
+          a limit (timeout or max_retries) after which we fail.
+
+  # ===========================================================================
+  # Scenario 4: Optional Outputs
+  # ===========================================================================
+  - id: optional-outputs
+    description: Optional outputs don't trigger validation failure
+    beads: [meow-e7.4]
+
+    tests:
+      - id: optional-output-missing
+        name: Missing optional output doesn't fail
+        command: meow run <workflow>
+        setup:
+          - Step declares outputs.optional = {required = false}
+          - Agent completes without providing it
+        expect:
+          exit_code: 0
+          behavior:
+            - Validation passes
+            - Output not available (or has default)
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Optional outputs let agents provide additional context
+          when relevant without forcing them when not needed.
+
+      - id: optional-with-default
+        name: Optional output has default value when missing
+        command: meow run <workflow>
+        setup:
+          - outputs.mode = {required = false, default = "normal"}
+          - Agent doesn't provide mode
+        expect:
+          exit_code: 0
+          behavior:
+            - Default value used in dependent steps
+          stderr_contains:
+            - "workflow completed"
+        why: |
+          Defaults reduce agent burden - they only need to specify
+          outputs when the value differs from the default.
+
+# Notes for test implementation:
+#
+# 1. These tests use the simulator with specific completion behaviors
+# 2. Retry tests need simulator that changes behavior over attempts
+# 3. Type tests should verify downstream steps can use the output
+# 4. Timeout tests need appropriate timeout/max_retries configuration
+# 5. The meow-icif bead fixed type coercion - include tests for it
