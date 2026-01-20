@@ -50,11 +50,12 @@ type WorkflowLocation struct {
 
 // LoadedWorkflow contains a resolved workflow and its module.
 type LoadedWorkflow struct {
-	Module   *Module
-	Workflow *Workflow
-	Path     string
-	Source   string
-	Name     string
+	Module        *Module
+	Workflow      *Workflow
+	Path          string
+	Source        string
+	Name          string
+	CollectionDir string // Root of collection for collection-relative resolution (empty for standalone files)
 }
 
 // NewLoader creates a new workflow loader.
@@ -101,11 +102,12 @@ func (l *Loader) LoadWorkflow(ref string) (*LoadedWorkflow, error) {
 	}
 
 	return &LoadedWorkflow{
-		Module:   module,
-		Workflow: wf,
-		Path:     location.Path,
-		Source:   location.Source,
-		Name:     location.Name,
+		Module:        module,
+		Workflow:      wf,
+		Path:          location.Path,
+		Source:        location.Source,
+		Name:          location.Name,
+		CollectionDir: location.CollectionDir,
 	}, nil
 }
 

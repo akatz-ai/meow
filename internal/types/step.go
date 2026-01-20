@@ -268,9 +268,10 @@ type Step struct {
 	Needs []string `yaml:"needs,omitempty"`
 
 	// Expansion tracking (for crash recovery)
-	ExpandedFrom string   `yaml:"expanded_from,omitempty"` // Parent expand step ID
-	ExpandedInto []string `yaml:"expanded_into,omitempty"` // Child step IDs (on expand steps)
-	SourceModule string   `yaml:"source_module,omitempty"` // Template file this step came from (for local refs)
+	ExpandedFrom  string   `yaml:"expanded_from,omitempty"`  // Parent expand step ID
+	ExpandedInto  []string `yaml:"expanded_into,omitempty"`  // Child step IDs (on expand steps)
+	SourceModule  string   `yaml:"source_module,omitempty"`  // Template file this step came from (for local refs)
+	CollectionDir string   `yaml:"collection_dir,omitempty"` // Collection root for collection-relative resolution (empty for non-collection)
 
 	// Data
 	Outputs map[string]any `yaml:"outputs,omitempty"`

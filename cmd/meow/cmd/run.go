@@ -131,6 +131,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	var module *workflow.Module
 	var templatePath string
 	var resolvedScope workflow.Scope
+	var collectionDir string // Collection root for collection-relative resolution (empty for non-collection)
 	isExplicitPath := filepath.IsAbs(fileRef) || strings.HasPrefix(fileRef, ".") || strings.HasSuffix(fileRef, ".toml")
 
 	if isExplicitPath {
@@ -171,6 +172,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		}
 		templatePath = loaded.Path
 		module = loaded.Module
+		collectionDir = loaded.CollectionDir // Capture collection context for expand resolution
 		if !cmd.Flags().Changed("workflow") {
 			workflowName = loaded.Name
 		}
@@ -252,6 +254,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create a Workflow object
 	wf := types.NewRun(workflowID, templatePath, vars)
 	wf.Scope = string(resolvedScope)
+	wf.CollectionDir = collectionDir // Propagate collection context for expand resolution
 	if wf.DefaultAdapter == "" && cfg.Agent.DefaultAdapter != "" {
 		wf.DefaultAdapter = cfg.Agent.DefaultAdapter
 	}

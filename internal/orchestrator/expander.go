@@ -16,6 +16,11 @@ func isExplicitWorkflowPath(ref string) bool {
 	return filepath.IsAbs(ref) || strings.HasPrefix(ref, ".") || strings.HasSuffix(ref, ".toml")
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func resolveWorkflowPath(baseDir, ref string) (string, error) {
 	path := ref
 	if !filepath.IsAbs(path) {
@@ -57,6 +62,11 @@ type FileTemplateExpander struct {
 	// Scope restricts template resolution to a specific search hierarchy.
 	// See workflow.Scope for documentation.
 	Scope workflow.Scope
+
+	// CollectionDir is the root of the current collection, if any.
+	// When set, template references are resolved relative to this directory first,
+	// falling back to global resolution if not found.
+	CollectionDir string
 }
 
 // NewFileTemplateExpander creates a new FileTemplateExpander.
@@ -158,13 +168,32 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 			}
 			resolvedModulePath = modulePath
 		} else {
-			loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
-			loaded, err := loader.LoadWorkflow(templateRef)
-			if err != nil {
-				return nil, err
+			// Try collection-relative resolution first if in a collection
+			if e.CollectionDir != "" {
+				collectionPath := filepath.Join(e.CollectionDir, fileRef+".meow.toml")
+				if fileExists(collectionPath) {
+					module, err := workflow.ParseModuleFile(collectionPath)
+					if err == nil {
+						wf = module.GetWorkflow(workflowName)
+						if wf != nil {
+							resolvedModulePath = collectionPath
+						}
+					}
+				}
 			}
-			wf = loaded.Workflow
-			resolvedModulePath = loaded.Path
+			// Fall back to global resolution if not found in collection
+			if wf == nil {
+				loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
+				loaded, err := loader.LoadWorkflow(templateRef)
+				if err != nil {
+					if e.CollectionDir != "" {
+						return nil, fmt.Errorf("template %q not found in collection %s or globally: %w", templateRef, e.CollectionDir, err)
+					}
+					return nil, err
+				}
+				wf = loaded.Workflow
+				resolvedModulePath = loaded.Path
+			}
 		}
 	} else if isExplicitWorkflowPath(templateRef) {
 		modulePath, err := resolveWorkflowPath(e.BaseDir, templateRef)
@@ -187,13 +216,32 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 		}
 		resolvedModulePath = modulePath
 	} else {
-		loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
-		loaded, err := loader.LoadWorkflow(templateRef)
-		if err != nil {
-			return nil, err
+		// Try collection-relative resolution first if in a collection
+		if e.CollectionDir != "" {
+			collectionPath := filepath.Join(e.CollectionDir, templateRef+".meow.toml")
+			if fileExists(collectionPath) {
+				module, err := workflow.ParseModuleFile(collectionPath)
+				if err == nil {
+					wf = module.GetWorkflow("main")
+					if wf != nil {
+						resolvedModulePath = collectionPath
+					}
+				}
+			}
 		}
-		wf = loaded.Workflow
-		resolvedModulePath = loaded.Path
+		// Fall back to global resolution if not found in collection
+		if wf == nil {
+			loader := workflow.NewLoaderWithScope(e.BaseDir, e.Scope)
+			loaded, err := loader.LoadWorkflow(templateRef)
+			if err != nil {
+				if e.CollectionDir != "" {
+					return nil, fmt.Errorf("template %q not found in collection %s or globally: %w", templateRef, e.CollectionDir, err)
+				}
+				return nil, err
+			}
+			wf = loaded.Workflow
+			resolvedModulePath = loaded.Path
+		}
 	}
 
 	// Create the baker
@@ -222,6 +270,9 @@ func (e *FileTemplateExpander) ExpandWithOptions(ctx context.Context, config *ty
 
 		// Set the source module for local reference resolution in nested templates
 		step.SourceModule = resolvedModulePath
+
+		// Propagate collection context to nested steps for collection-relative resolution
+		step.CollectionDir = e.CollectionDir
 
 		// Steps with no dependencies should depend on parent completing
 		// (This will be handled by the orchestrator when inserting)
@@ -311,6 +362,15 @@ func (a *TemplateExpanderAdapter) Expand(ctx context.Context, wf *types.Run, ste
 	if sourceModule == "" {
 		sourceModule = wf.Template
 	}
+
+	// Determine collection context: step's CollectionDir (for nested expansions) or workflow's CollectionDir
+	collectionDir := step.CollectionDir
+	if collectionDir == "" {
+		collectionDir = wf.CollectionDir
+	}
+
+	// Set collection context on the expander for collection-relative resolution
+	a.Expander.CollectionDir = collectionDir
 
 	// Resolve any step output references in variables at runtime
 	// This is needed because references like "{{init.outputs.config}}" are deferred at bake time

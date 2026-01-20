@@ -45,9 +45,10 @@ type AgentInfo struct {
 // Run represents a running workflow instance.
 type Run struct {
 	// Identity
-	ID       string `yaml:"id"`       // Unique identifier (e.g., "run-abc123")
-	Template string `yaml:"template"` // Source template path
-	Scope    string `yaml:"scope,omitempty"` // Resolution scope: "project", "user", or "embedded"
+	ID            string `yaml:"id"`                       // Unique identifier (e.g., "run-abc123")
+	Template      string `yaml:"template"`                 // Source template path
+	Scope         string `yaml:"scope,omitempty"`          // Resolution scope: "project", "user", or "embedded"
+	CollectionDir string `yaml:"collection_dir,omitempty"` // Collection root for collection-relative resolution (empty for non-collection)
 
 	// Lifecycle
 	Status    RunStatus  `yaml:"status"`
