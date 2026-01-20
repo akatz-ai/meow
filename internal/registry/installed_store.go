@@ -15,7 +15,7 @@ type InstalledStore struct {
 	path string
 }
 
-// NewInstalledStore creates a store at the default location
+// NewInstalledStore creates a store at the default location (~/.meow/installed.json)
 func NewInstalledStore() (*InstalledStore, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -25,6 +25,11 @@ func NewInstalledStore() (*InstalledStore, error) {
 	return &InstalledStore{
 		path: filepath.Join(home, ".meow", InstalledFileName),
 	}, nil
+}
+
+// NewInstalledStoreWithPath creates a store at a custom path (for testing)
+func NewInstalledStoreWithPath(path string) *InstalledStore {
+	return &InstalledStore{path: path}
 }
 
 // Load reads the installed file, returning empty struct if not exists

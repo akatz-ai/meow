@@ -12,12 +12,11 @@ import (
 )
 
 func TestRegistryList_Empty(t *testing.T) {
-	// Create temporary directory for registries store
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
-
-	// Create empty store
-	_ = registry.NewRegistriesStoreWithPath(storePath)
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
 	// Run registry list command
 	cmd := registryListCmd
@@ -39,11 +38,17 @@ func TestRegistryList_Empty(t *testing.T) {
 }
 
 func TestRegistryList_WithRegistries(t *testing.T) {
-	// Create temporary directory and populate registries
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
-	store := registry.NewRegistriesStoreWithPath(storePath)
+	// Create registries store and add registries
+	store, err := registry.NewRegistriesStore()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	if err := store.Add("test-reg", "github.com/test/reg", "1.0.0"); err != nil {
 		t.Fatalf("failed to add test registry: %v", err)
 	}
@@ -56,7 +61,7 @@ func TestRegistryList_WithRegistries(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	err := runRegistryList(cmd, []string{})
+	err = runRegistryList(cmd, []string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,10 +79,21 @@ func TestRegistryList_WithRegistries(t *testing.T) {
 }
 
 func TestRegistryShow_Success(t *testing.T) {
-	// Create temporary registry with collections
-	tmpDir := t.TempDir()
-	registryDir := filepath.Join(tmpDir, "test-reg")
-	meowDir := filepath.Join(registryDir, ".meow")
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
+
+	// Override cache directory
+	oldCache := os.Getenv("XDG_CACHE_HOME")
+	cacheDir := filepath.Join(home, ".cache")
+	os.Setenv("XDG_CACHE_HOME", cacheDir)
+	defer os.Setenv("XDG_CACHE_HOME", oldCache)
+
+	// Create registry structure in cache
+	cachedRegDir := filepath.Join(cacheDir, "meow", "registries", "test-reg")
+	meowDir := filepath.Join(cachedRegDir, ".meow")
 	if err := os.MkdirAll(meowDir, 0755); err != nil {
 		t.Fatalf("failed to create meow dir: %v", err)
 	}
@@ -115,18 +131,17 @@ func TestRegistryShow_Success(t *testing.T) {
 		t.Fatalf("failed to write registry.json: %v", err)
 	}
 
-	// Create cache and registries store
-	cacheDir := filepath.Join(tmpDir, "cache")
-	cachedRegDir := filepath.Join(cacheDir, "test-reg")
-	if err := os.MkdirAll(cachedRegDir, 0755); err != nil {
-		t.Fatalf("failed to create cache dir: %v", err)
-	}
-	if err := os.Symlink(registryDir, filepath.Join(cachedRegDir, ".meow")); err != nil {
-		t.Fatalf("failed to create symlink: %v", err)
+	// Create .git directory to mark it as fresh
+	gitDir := filepath.Join(cachedRegDir, ".git")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("failed to create git dir: %v", err)
 	}
 
-	storePath := filepath.Join(tmpDir, "registries.json")
-	store := registry.NewRegistriesStoreWithPath(storePath)
+	// Add to registries store
+	store, err := registry.NewRegistriesStore()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	if err := store.Add("test-reg", "github.com/test/reg", "1.0.0"); err != nil {
 		t.Fatalf("failed to add registry: %v", err)
 	}
@@ -155,10 +170,11 @@ func TestRegistryShow_Success(t *testing.T) {
 }
 
 func TestRegistryShow_NotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
-
-	_ = registry.NewRegistriesStoreWithPath(storePath)
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
 	cmd := registryShowCmd
 	var buf bytes.Buffer
@@ -233,10 +249,16 @@ func TestRegistryUpdate_Success(t *testing.T) {
 }
 
 func TestRegistryUpdate_All(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
-	store := registry.NewRegistriesStoreWithPath(storePath)
+	store, err := registry.NewRegistriesStore()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	if err := store.Add("reg1", "github.com/test/reg1", "1.0.0"); err != nil {
 		t.Fatalf("failed to add reg1: %v", err)
 	}
@@ -252,16 +274,21 @@ func TestRegistryUpdate_All(t *testing.T) {
 	if err := cmd.Flags().Set("all", "true"); err != nil {
 		t.Fatalf("failed to set all flag: %v", err)
 	}
+	defer cmd.Flags().Set("all", "false") // Reset for other tests
 
 	_ = runRegistryUpdate(cmd, []string{})
 	// For now, just check the command exists
 }
 
 func TestRegistryUpdate_NotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
-	_ = registry.NewRegistriesStoreWithPath(storePath)
+	// Reset the --all flag
+	registryUpdateAll = false
 
 	cmd := registryUpdateCmd
 	var buf bytes.Buffer
@@ -278,17 +305,17 @@ func TestRegistryUpdate_NotFound(t *testing.T) {
 }
 
 func TestRegistryRemove_Success(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
-
-	// Create cache directory
-	cacheDir := filepath.Join(tmpDir, "cache", "test-reg")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		t.Fatalf("failed to create cache dir: %v", err)
-	}
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
 	// Create registries store with a registry
-	store := registry.NewRegistriesStoreWithPath(storePath)
+	store, err := registry.NewRegistriesStore()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	if err := store.Add("test-reg", "github.com/test/reg", "1.0.0"); err != nil {
 		t.Fatalf("failed to add registry: %v", err)
 	}
@@ -297,7 +324,7 @@ func TestRegistryRemove_Success(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	err := runRegistryRemove(cmd, []string{"test-reg"})
+	err = runRegistryRemove(cmd, []string{"test-reg"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -318,10 +345,11 @@ func TestRegistryRemove_Success(t *testing.T) {
 }
 
 func TestRegistryRemove_NotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
-
-	_ = registry.NewRegistriesStoreWithPath(storePath)
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
 	cmd := registryRemoveCmd
 	var buf bytes.Buffer
@@ -338,12 +366,17 @@ func TestRegistryRemove_NotFound(t *testing.T) {
 }
 
 func TestRegistryRemove_WithInstalledCollections(t *testing.T) {
-	tmpDir := t.TempDir()
-	storePath := filepath.Join(tmpDir, "registries.json")
-	installedPath := filepath.Join(tmpDir, "installed.json")
+	// Create temporary home directory
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", oldHome)
 
 	// Create installed collections
-	installedStore := registry.NewInstalledStoreWithPath(installedPath)
+	installedStore, err := registry.NewInstalledStore()
+	if err != nil {
+		t.Fatalf("failed to create installed store: %v", err)
+	}
 	if err := installedStore.Add("collection1", registry.InstalledCollection{
 		Registry:        "test-reg",
 		RegistryVersion: "1.0.0",
@@ -354,7 +387,10 @@ func TestRegistryRemove_WithInstalledCollections(t *testing.T) {
 	}
 
 	// Create registries store
-	store := registry.NewRegistriesStoreWithPath(storePath)
+	store, err := registry.NewRegistriesStore()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	if err := store.Add("test-reg", "github.com/test/reg", "1.0.0"); err != nil {
 		t.Fatalf("failed to add registry: %v", err)
 	}
@@ -363,7 +399,7 @@ func TestRegistryRemove_WithInstalledCollections(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	err := runRegistryRemove(cmd, []string{"test-reg"})
+	err = runRegistryRemove(cmd, []string{"test-reg"})
 
 	// Should warn about installed collections
 	output := buf.String()
