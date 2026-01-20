@@ -3,7 +3,9 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,13 +60,52 @@ func createTestRegistry(t *testing.T, dir string) *registry.Registry {
 		t.Fatalf("failed to write registry.json: %v", err)
 	}
 
-	// Create a fake .git directory (so it looks like a git repo)
-	gitDir := filepath.Join(dir, ".git")
-	if err := os.MkdirAll(gitDir, 0755); err != nil {
-		t.Fatalf("failed to create .git dir: %v", err)
+	// Initialize as a git repository for cloning
+	if err := initGitRepo(t, dir); err != nil {
+		t.Fatalf("failed to initialize git repo: %v", err)
 	}
 
 	return reg
+}
+
+// initGitRepo initializes a directory as a git repository.
+func initGitRepo(t *testing.T, dir string) error {
+	t.Helper()
+
+	// Run git init
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git init failed: %w\n%s", err, output)
+	}
+
+	// Configure git user for the repo
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config email failed: %w\n%s", err, output)
+	}
+
+	cmd = exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config name failed: %w\n%s", err, output)
+	}
+
+	// Add and commit all files
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %w\n%s", err, output)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Initial commit")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit failed: %w\n%s", err, output)
+	}
+
+	return nil
 }
 
 // TestRegistryAddSuccess tests successful registry addition.
@@ -196,6 +237,11 @@ func TestRegistryAddInvalidRegistryJSON(t *testing.T) {
 	// Invalid JSON
 	os.WriteFile(filepath.Join(meowDir, "registry.json"), []byte("{ invalid json }"), 0644)
 
+	// Initialize as git repo
+	if err := initGitRepo(t, registryDir); err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
 	var buf bytes.Buffer
 	registryAddCmd.SetOut(&buf)
 	registryAddCmd.SetErr(&buf)
@@ -219,6 +265,14 @@ func TestRegistryAddMissingRegistryJSON(t *testing.T) {
 
 	// Create an empty directory
 	registryDir := t.TempDir()
+
+	// Create a dummy file so git has something to commit
+	os.WriteFile(filepath.Join(registryDir, "README.md"), []byte("test"), 0644)
+
+	// Initialize as git repo
+	if err := initGitRepo(t, registryDir); err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
 
 	var buf bytes.Buffer
 	registryAddCmd.SetOut(&buf)
@@ -257,6 +311,11 @@ func TestRegistryAddValidationError(t *testing.T) {
 
 	data, _ := json.Marshal(invalidReg)
 	os.WriteFile(filepath.Join(meowDir, "registry.json"), data, 0644)
+
+	// Initialize as git repo
+	if err := initGitRepo(t, registryDir); err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
 
 	var buf bytes.Buffer
 	registryAddCmd.SetOut(&buf)
@@ -354,6 +413,11 @@ func TestRegistryAddCleansUpOnError(t *testing.T) {
 
 	data, _ := json.Marshal(invalidReg)
 	os.WriteFile(filepath.Join(meowDir, "registry.json"), data, 0644)
+
+	// Initialize as git repo
+	if err := initGitRepo(t, registryDir); err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
 
 	var buf bytes.Buffer
 	registryAddCmd.SetOut(&buf)
