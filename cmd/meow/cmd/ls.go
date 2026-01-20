@@ -128,6 +128,25 @@ func collectWorkflowEntries(workflowsDir, prefix string, recursive bool, source 
 				return err
 			}
 			if d.IsDir() {
+				// Check if this directory is a collection
+				if registry.HasManifest(path) {
+					// This is a collection - load it and skip descending
+					manifest, err := registry.LoadManifest(path)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+						return filepath.SkipDir
+					}
+					collEntry := workflowEntry{
+						Name:         manifest.Name,
+						Description:  manifest.Description,
+						Source:       source,
+						Path:         path,
+						IsCollection: true,
+						Entrypoint:   manifest.Entrypoint,
+					}
+					entries = append(entries, collEntry)
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			entry, err := buildWorkflowEntry(baseDir, path, source)

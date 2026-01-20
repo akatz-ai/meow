@@ -529,3 +529,68 @@ command = "echo hello"
 		t.Fatalf("Should not show dir name 'dir-name' in output: %s", output)
 	}
 }
+
+func TestLsAllWithCollections(t *testing.T) {
+	tmpDir := t.TempDir()
+	userHome := t.TempDir()
+
+	t.Setenv("HOME", userHome)
+
+	// Create a standalone workflow
+	writeWorkflowFile(t, tmpDir, "standalone", "Standalone workflow")
+
+	// Create a collection
+	writeCollection(t, tmpDir, "my-collection", "My collection", "main.meow.toml")
+
+	// Create a workflow inside the collection
+	collectionDir := filepath.Join(tmpDir, ".meow", "workflows", "my-collection")
+	workflowPath := filepath.Join(collectionDir, "sub-workflow.meow.toml")
+	content := `
+[main]
+name = "main"
+description = "Sub workflow"
+
+[[main.steps]]
+id = "step1"
+executor = "shell"
+command = "echo hello"
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write sub-workflow: %v", err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origWd)
+	defer resetLsFlags()
+
+	lsAll = true
+
+	output, err := captureOutput(t, func() error {
+		return runLs(lsCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runLs failed: %v", err)
+	}
+
+	// Should show standalone workflow
+	if !strings.Contains(output, "standalone") {
+		t.Fatalf("Expected standalone workflow in output: %s", output)
+	}
+
+	// Should show the collection
+	if !strings.Contains(output, "my-collection") {
+		t.Fatalf("Expected collection in output: %s", output)
+	}
+	if !strings.Contains(output, "(collection)") {
+		t.Fatalf("Expected (collection) suffix for collection: %s", output)
+	}
+
+	// Should NOT show workflows inside collections in basic ls -a
+	// (Collections are opaque - you run the entrypoint, not individual workflows inside)
+	if strings.Contains(output, "sub-workflow") {
+		t.Fatalf("Should not show workflows inside collection: %s", output)
+	}
+}
