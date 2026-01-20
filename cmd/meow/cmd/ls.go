@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/akatz-ai/meow/internal/registry"
 	"github.com/akatz-ai/meow/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -20,11 +21,13 @@ var (
 )
 
 type workflowEntry struct {
-	Name        string
-	Description string
-	Source      string
-	Path        string
-	Conflict    bool // True if same name exists in another scope
+	Name         string
+	Description  string
+	Source       string
+	Path         string
+	Conflict     bool   // True if same name exists in another scope
+	IsCollection bool   // True if this is a collection
+	Entrypoint   string // For collections: the main workflow file
 }
 
 var lsCmd = &cobra.Command{
@@ -125,6 +128,25 @@ func collectWorkflowEntries(workflowsDir, prefix string, recursive bool, source 
 				return err
 			}
 			if d.IsDir() {
+				// Check if this directory is a collection
+				if registry.HasManifest(path) {
+					// This is a collection - load it and skip descending
+					manifest, err := registry.LoadManifest(path)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+						return filepath.SkipDir
+					}
+					collEntry := workflowEntry{
+						Name:         manifest.Name,
+						Description:  manifest.Description,
+						Source:       source,
+						Path:         path,
+						IsCollection: true,
+						Entrypoint:   manifest.Entrypoint,
+					}
+					entries = append(entries, collEntry)
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			entry, err := buildWorkflowEntry(baseDir, path, source)
@@ -147,6 +169,16 @@ func collectWorkflowEntries(workflowsDir, prefix string, recursive bool, source 
 		}
 		for _, entry := range dirEntries {
 			if entry.IsDir() {
+				// Check if this is a collection (has .meow/manifest.json)
+				manifestPath := filepath.Join(targetDir, entry.Name(), ".meow", "manifest.json")
+				if _, err := os.Stat(manifestPath); err == nil {
+					collEntry, err := buildCollectionEntry(targetDir, entry.Name(), source)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+						continue
+					}
+					entries = append(entries, collEntry)
+				}
 				continue
 			}
 			fullPath := filepath.Join(targetDir, entry.Name())
@@ -191,6 +223,26 @@ func buildWorkflowEntry(baseDir, path, source string) (workflowEntry, error) {
 		Description: description,
 		Source:      source,
 		Path:        path,
+	}, nil
+}
+
+// buildCollectionEntry creates a workflowEntry for a collection directory
+func buildCollectionEntry(baseDir, dirName, source string) (workflowEntry, error) {
+	collectionPath := filepath.Join(baseDir, dirName)
+
+	// Load the manifest
+	manifest, err := registry.LoadManifest(collectionPath)
+	if err != nil {
+		return workflowEntry{}, fmt.Errorf("loading manifest for %s: %w", dirName, err)
+	}
+
+	return workflowEntry{
+		Name:         manifest.Name,
+		Description:  manifest.Description,
+		Source:       source,
+		Path:         collectionPath,
+		IsCollection: true,
+		Entrypoint:   manifest.Entrypoint,
 	}, nil
 }
 
@@ -260,7 +312,11 @@ func printWorkflowsTable(entries []workflowEntry) error {
 		if entry.Conflict {
 			source += " *" // Mark conflicts with asterisk
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, entry.Description, source)
+		description := entry.Description
+		if entry.IsCollection {
+			description += " (collection)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, description, source)
 	}
 
 	// Print legend if there are conflicts
@@ -283,21 +339,25 @@ func printWorkflowsTable(entries []workflowEntry) error {
 
 func printWorkflowsJSON(entries []workflowEntry) error {
 	type workflowJSON struct {
-		Workflow    string `json:"workflow"`
-		Description string `json:"description,omitempty"`
-		Source      string `json:"source"`
-		Path        string `json:"path"`
-		Conflict    bool   `json:"conflict,omitempty"`
+		Workflow     string `json:"workflow"`
+		Description  string `json:"description,omitempty"`
+		Source       string `json:"source"`
+		Path         string `json:"path"`
+		Conflict     bool   `json:"conflict,omitempty"`
+		IsCollection bool   `json:"isCollection,omitempty"`
+		Entrypoint   string `json:"entrypoint,omitempty"`
 	}
 
 	out := make([]workflowJSON, len(entries))
 	for i, entry := range entries {
 		out[i] = workflowJSON{
-			Workflow:    entry.Name,
-			Description: entry.Description,
-			Source:      entry.Source,
-			Path:        entry.Path,
-			Conflict:    entry.Conflict,
+			Workflow:     entry.Name,
+			Description:  entry.Description,
+			Source:       entry.Source,
+			Path:         entry.Path,
+			Conflict:     entry.Conflict,
+			IsCollection: entry.IsCollection,
+			Entrypoint:   entry.Entrypoint,
 		}
 	}
 
