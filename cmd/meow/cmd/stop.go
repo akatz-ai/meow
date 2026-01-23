@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/akatz-ai/meow/internal/orchestrator"
+	"github.com/akatz-ai/meow/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -51,15 +53,38 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workflow %s is already %s", workflowID, wf.Status)
 	}
 
+	// Check if workflow is orphaned (no PID or process gone)
+	isOrphaned := false
+	var orphanReason string
+
 	if wf.OrchestratorPID == 0 {
-		return fmt.Errorf("workflow %s has no orchestrator PID (not running or crashed)", workflowID)
+		isOrphaned = true
+		orphanReason = "no orchestrator PID recorded"
+	} else if err := validateMeowProcess(wf.OrchestratorPID); err != nil {
+		isOrphaned = true
+		orphanReason = err.Error()
 	}
 
-	// CRITICAL: Validate this PID is actually our meow process
-	if err := validateMeowProcess(wf.OrchestratorPID); err != nil {
-		return fmt.Errorf("orchestrator not running: %w", err)
+	// Handle orphaned workflow: mark as stopped directly
+	if isOrphaned {
+		fmt.Printf("Workflow %s is orphaned (%s)\n", workflowID, orphanReason)
+		fmt.Println("Marking workflow as stopped...")
+
+		wf.Status = types.RunStatusStopped
+		now := time.Now()
+		wf.DoneAt = &now
+		wf.OrchestratorPID = 0
+
+		if err := store.Save(ctx, wf); err != nil {
+			return fmt.Errorf("saving workflow state: %w", err)
+		}
+
+		fmt.Printf("✓ Workflow %s marked as stopped\n", workflowID)
+		fmt.Println("Run 'meow cleanup' to clean up any remaining resources (tmux sessions, worktrees)")
+		return nil
 	}
 
+	// Normal case: send SIGTERM to running orchestrator
 	process, err := os.FindProcess(wf.OrchestratorPID)
 	if err != nil {
 		return fmt.Errorf("finding process %d: %w", wf.OrchestratorPID, err)
@@ -67,7 +92,22 @@ func runStop(cmd *cobra.Command, args []string) error {
 
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		if err == syscall.ESRCH {
-			return fmt.Errorf("orchestrator process %d no longer exists", wf.OrchestratorPID)
+			// Process gone - treat as orphaned
+			fmt.Printf("Orchestrator process %d no longer exists\n", wf.OrchestratorPID)
+			fmt.Println("Marking workflow as stopped...")
+
+			wf.Status = types.RunStatusStopped
+			now := time.Now()
+			wf.DoneAt = &now
+			wf.OrchestratorPID = 0
+
+			if err := store.Save(ctx, wf); err != nil {
+				return fmt.Errorf("saving workflow state: %w", err)
+			}
+
+			fmt.Printf("✓ Workflow %s marked as stopped\n", workflowID)
+			fmt.Println("Run 'meow cleanup' to clean up any remaining resources (tmux sessions, worktrees)")
+			return nil
 		}
 		if err == syscall.EPERM {
 			return fmt.Errorf("permission denied to stop orchestrator (PID %d)", wf.OrchestratorPID)

@@ -47,6 +47,7 @@ var (
 	runDetach        bool
 	runDetachedChild bool   // internal flag for child process
 	runWorkflowID    string // internal: workflow ID for detached child
+	runCollectionDir string // internal: collection directory for detached child
 	runVars          []string
 	runVarsJSON      []string
 	runWorkflow      string
@@ -58,8 +59,10 @@ func init() {
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "run in background (detached mode)")
 	runCmd.Flags().BoolVar(&runDetachedChild, "_detached-child", false, "internal: running as detached child")
 	runCmd.Flags().StringVar(&runWorkflowID, "_workflow-id", "", "internal: workflow ID for detached child")
+	runCmd.Flags().StringVar(&runCollectionDir, "_collection-dir", "", "internal: collection directory for detached child")
 	runCmd.Flags().MarkHidden("_detached-child")
 	runCmd.Flags().MarkHidden("_workflow-id")
+	runCmd.Flags().MarkHidden("_collection-dir")
 	runCmd.Flags().StringArrayVar(&runVars, "var", nil, "variable values (format: name=value)")
 	runCmd.Flags().StringArrayVar(&runVarsJSON, "var-json", nil, "variable with JSON value (format: name={...} or name=[...])")
 	runCmd.Flags().StringVar(&runWorkflow, "workflow", "main", "workflow name to run (default: main)")
@@ -158,6 +161,10 @@ func runRun(cmd *cobra.Command, args []string) error {
 		}
 		// Determine scope from path location
 		resolvedScope = scopeFromPath(dir, templatePath)
+		// Use collection directory passed from parent (detached mode)
+		if runCollectionDir != "" {
+			collectionDir = runCollectionDir
+		}
 	} else {
 		// Use scoped loader if explicit scope provided
 		var loader *workflow.Loader
@@ -248,7 +255,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Handle detached mode: spawn child process and exit
 	if runDetach && !runDetachedChild {
-		return spawnDetachedOrchestrator(cfg, dir, templatePath, workflowID, workflowName)
+		return spawnDetachedOrchestrator(cfg, dir, templatePath, workflowID, workflowName, collectionDir)
 	}
 
 	// Create a Workflow object
@@ -405,9 +412,12 @@ func runRun(cmd *cobra.Command, args []string) error {
 }
 
 // spawnDetachedOrchestrator spawns a child process to run the workflow in background
-func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID, workflowName string) error {
+func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID, workflowName, collectionDir string) error {
 	// Build command args for the child process
 	args := []string{"run", templatePath, "--_detached-child", "--_workflow-id", workflowID, "--workflow", workflowName}
+	if collectionDir != "" {
+		args = append(args, "--_collection-dir", collectionDir)
+	}
 	for _, v := range runVars {
 		args = append(args, "--var", v)
 	}
