@@ -131,7 +131,7 @@ func (m *mockAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 	return m.running[agentID], nil
 }
 
-func (m *mockAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string) error {
+func (m *mockAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string, opts InjectPromptOpts) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.injectedPrompts = append(m.injectedPrompts, agentID+":"+prompt)

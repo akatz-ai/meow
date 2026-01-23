@@ -41,8 +41,9 @@ type AgentManager interface {
 	// IsRunning checks if an agent is currently running.
 	IsRunning(ctx context.Context, agentID string) (bool, error)
 
-	// InjectPrompt sends ESC + prompt to agent's tmux session.
-	InjectPrompt(ctx context.Context, agentID string, prompt string) error
+	// InjectPrompt sends a prompt to an agent's tmux session.
+	// If opts.Stabilize is true, runs the stabilization sequence before injection.
+	InjectPrompt(ctx context.Context, agentID string, prompt string, opts InjectPromptOpts) error
 
 	// Interrupt sends C-c to an agent's tmux session for graceful cancellation.
 	Interrupt(ctx context.Context, agentID string) error
@@ -1902,8 +1903,16 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *typ
 		return fmt.Errorf("building agent prompt: %s", stepErr.Message)
 	}
 
+	// Determine if this is a subsequent prompt (agent has completed previous steps)
+	// Subsequent prompts need stabilization to ensure the agent is idle.
+	// First prompt after spawn and fire_forget mode do NOT need stabilization.
+	isSubsequent := wf.AgentHasCompletedSteps(step.Agent.Agent)
+	stabilize := isSubsequent && !IsFireForget(step.Agent)
+
 	// Inject prompt to agent's tmux session
-	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, result.Prompt); err != nil {
+	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, result.Prompt, InjectPromptOpts{
+		Stabilize: stabilize,
+	}); err != nil {
 		return fmt.Errorf("injecting prompt: %w", err)
 	}
 

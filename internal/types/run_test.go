@@ -402,6 +402,57 @@ steps: {}
 	})
 }
 
+func TestRunAgentHasCompletedSteps(t *testing.T) {
+	run := NewRun("run-1", "test.meow.toml", nil)
+
+	// Add steps for different agents with different statuses
+	run.Steps["step1"] = &Step{
+		ID:       "step1",
+		Executor: ExecutorAgent,
+		Status:   StepStatusPending,
+		Agent:    &AgentConfig{Agent: "claude-1", Prompt: "test"},
+	}
+	run.Steps["step2"] = &Step{
+		ID:       "step2",
+		Executor: ExecutorAgent,
+		Status:   StepStatusRunning,
+		Agent:    &AgentConfig{Agent: "claude-1", Prompt: "test"},
+	}
+	run.Steps["step3"] = &Step{
+		ID:       "step3",
+		Executor: ExecutorAgent,
+		Status:   StepStatusDone,
+		Agent:    &AgentConfig{Agent: "claude-2", Prompt: "test"},
+	}
+	run.Steps["step4"] = &Step{
+		ID:       "step4",
+		Executor: ExecutorShell, // Not an agent step
+		Status:   StepStatusDone,
+		Shell:    &ShellConfig{Command: "echo"},
+	}
+
+	// claude-1 has pending and running steps, but none completed
+	if run.AgentHasCompletedSteps("claude-1") {
+		t.Error("claude-1 should NOT have completed steps (only pending/running)")
+	}
+
+	// claude-2 has a completed step
+	if !run.AgentHasCompletedSteps("claude-2") {
+		t.Error("claude-2 SHOULD have completed steps")
+	}
+
+	// Nonexistent agent should return false
+	if run.AgentHasCompletedSteps("nonexistent") {
+		t.Error("nonexistent agent should NOT have completed steps")
+	}
+
+	// Now mark one of claude-1's steps as done
+	run.Steps["step1"].Status = StepStatusDone
+	if !run.AgentHasCompletedSteps("claude-1") {
+		t.Error("claude-1 SHOULD have completed steps after step1 done")
+	}
+}
+
 // contains is a helper to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsAt(s, substr))

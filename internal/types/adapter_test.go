@@ -239,3 +239,99 @@ func TestDuration_String(t *testing.T) {
 		t.Errorf("expected '100ms', got %q", d.String())
 	}
 }
+
+func TestAdapterConfig_StabilizeSequence(t *testing.T) {
+	configTOML := `
+[adapter]
+name = "claude-stabilize"
+description = "Claude with stabilization"
+
+[spawn]
+command = "claude --dangerously-skip-permissions"
+
+[prompt_injection]
+# Stabilization sequence for subsequent prompts
+pre_stabilize_delay = "1s"
+stabilize_sequence = [
+    { key = "Escape", delay = "5s" },
+    { key = "Escape", delay = "3s" }
+]
+
+# Standard injection (after stabilization)
+pre_keys = []
+pre_delay = "0s"
+method = "literal"
+post_keys = ["Enter"]
+post_delay = "500ms"
+`
+
+	var config AdapterConfig
+	_, err := toml.Decode(configTOML, &config)
+	if err != nil {
+		t.Fatalf("failed to parse TOML: %v", err)
+	}
+
+	// Check stabilization config
+	if config.PromptInjection.PreStabilizeDelay.Duration() != 1*time.Second {
+		t.Errorf("expected pre_stabilize_delay = 1s, got %v", config.PromptInjection.PreStabilizeDelay)
+	}
+
+	if len(config.PromptInjection.StabilizeSequence) != 2 {
+		t.Fatalf("expected 2 stabilize steps, got %d", len(config.PromptInjection.StabilizeSequence))
+	}
+
+	// Check first step
+	step0 := config.PromptInjection.StabilizeSequence[0]
+	if step0.Key != "Escape" {
+		t.Errorf("expected step[0].key = 'Escape', got %q", step0.Key)
+	}
+	if step0.Delay.Duration() != 5*time.Second {
+		t.Errorf("expected step[0].delay = 5s, got %v", step0.Delay)
+	}
+
+	// Check second step
+	step1 := config.PromptInjection.StabilizeSequence[1]
+	if step1.Key != "Escape" {
+		t.Errorf("expected step[1].key = 'Escape', got %q", step1.Key)
+	}
+	if step1.Delay.Duration() != 3*time.Second {
+		t.Errorf("expected step[1].delay = 3s, got %v", step1.Delay)
+	}
+
+	// Check that standard injection still works
+	if len(config.PromptInjection.PreKeys) != 0 {
+		t.Errorf("expected pre_keys = [], got %v", config.PromptInjection.PreKeys)
+	}
+	if len(config.PromptInjection.PostKeys) != 1 || config.PromptInjection.PostKeys[0] != "Enter" {
+		t.Errorf("expected post_keys = [Enter], got %v", config.PromptInjection.PostKeys)
+	}
+}
+
+func TestAdapterConfig_StabilizeSequenceEmpty(t *testing.T) {
+	// Config without stabilization sequence should parse fine
+	configTOML := `
+[adapter]
+name = "claude-no-stabilize"
+
+[spawn]
+command = "claude"
+
+[prompt_injection]
+pre_keys = ["Escape"]
+method = "literal"
+post_keys = ["Enter"]
+`
+
+	var config AdapterConfig
+	_, err := toml.Decode(configTOML, &config)
+	if err != nil {
+		t.Fatalf("failed to parse TOML: %v", err)
+	}
+
+	if config.PromptInjection.PreStabilizeDelay != 0 {
+		t.Errorf("expected pre_stabilize_delay = 0, got %v", config.PromptInjection.PreStabilizeDelay)
+	}
+	if len(config.PromptInjection.StabilizeSequence) != 0 {
+		t.Errorf("expected empty stabilize_sequence, got %d steps", len(config.PromptInjection.StabilizeSequence))
+	}
+}

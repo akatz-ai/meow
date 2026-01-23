@@ -50,8 +50,27 @@ type AdapterSpawnConfig struct {
 	StartupDelay Duration `toml:"startup_delay"`
 }
 
+// StabilizeStep defines a single key + delay in the stabilization sequence.
+// Used to ensure the agent is in a clean, idle state before prompt injection.
+type StabilizeStep struct {
+	Key   string   `toml:"key"`
+	Delay Duration `toml:"delay"`
+}
+
 // PromptInjectionConfig defines how to inject prompts into an agent's tmux session.
 type PromptInjectionConfig struct {
+	// Stabilization sequence (for subsequent prompts, not first prompt after spawn)
+	// This helps ensure the agent is fully idle before injecting a new prompt.
+
+	// PreStabilizeDelay is an initial wait before running the stabilization sequence
+	PreStabilizeDelay Duration `toml:"pre_stabilize_delay"`
+
+	// StabilizeSequence is a sequence of key presses with delays to stabilize the agent
+	// Example: [{ key = "Escape", delay = "5s" }, { key = "Escape", delay = "3s" }]
+	StabilizeSequence []StabilizeStep `toml:"stabilize_sequence"`
+
+	// Standard injection (runs after stabilization)
+
 	// PreKeys are keys to send before the prompt (e.g., ["Escape"] to exit copy mode)
 	PreKeys []string `toml:"pre_keys"`
 

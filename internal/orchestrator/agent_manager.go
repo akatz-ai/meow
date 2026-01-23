@@ -282,9 +282,18 @@ func (m *TmuxAgentManager) IsRunning(ctx context.Context, agentID string) (bool,
 	return m.tmux.SessionExists(ctx, state.tmuxSession), nil
 }
 
+// InjectPromptOpts controls prompt injection behavior.
+type InjectPromptOpts struct {
+	// Stabilize indicates whether to run the stabilization sequence before injection.
+	// Set to true for subsequent prompts (after the agent has completed at least one step).
+	// Set to false for the first prompt after spawn and for fire_forget mode.
+	Stabilize bool
+}
+
 // InjectPrompt sends a prompt to an agent's tmux session using the configured adapter.
 // The adapter determines the injection method, pre/post keys, and timing.
-func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string) error {
+// If opts.Stabilize is true, runs the stabilization sequence before injection.
+func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, prompt string, opts InjectPromptOpts) error {
 	m.mu.RLock()
 	state, ok := m.agents[agentID]
 	m.mu.RUnlock()
@@ -294,7 +303,7 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	}
 
 	sessionName := state.tmuxSession
-	m.logger.Info("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt))
+	m.logger.Info("injecting prompt", "agent", agentID, "session", sessionName, "promptLen", len(prompt), "stabilize", opts.Stabilize)
 
 	// Load adapter config for prompt injection settings
 	adapterCfg, err := m.registry.Load(state.adapterName)
@@ -303,6 +312,30 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	}
 
 	injection := adapterCfg.PromptInjection
+
+	// Stabilization sequence (for subsequent prompts, not first prompt after spawn)
+	// This ensures the agent is fully idle before injecting the next prompt
+	if opts.Stabilize && len(injection.StabilizeSequence) > 0 {
+		m.logger.Debug("running stabilization sequence", "agent", agentID, "steps", len(injection.StabilizeSequence))
+
+		// Pre-stabilize delay
+		if injection.PreStabilizeDelay > 0 {
+			m.logger.Debug("pre-stabilize delay", "delay", injection.PreStabilizeDelay)
+			time.Sleep(injection.PreStabilizeDelay.Duration())
+		}
+
+		// Run stabilization sequence
+		for i, step := range injection.StabilizeSequence {
+			m.logger.Debug("stabilize step", "index", i, "key", step.Key, "delay", step.Delay)
+			if err := m.tmux.SendKeysSpecial(ctx, sessionName, step.Key); err != nil {
+				m.logger.Debug("stabilize key failed", "key", step.Key, "error", err)
+				// Continue anyway - stabilization is best-effort
+			}
+			if step.Delay > 0 {
+				time.Sleep(step.Delay.Duration())
+			}
+		}
+	}
 
 	// Send pre-keys (e.g., Escape to exit copy mode)
 	for _, key := range injection.PreKeys {

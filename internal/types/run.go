@@ -314,3 +314,18 @@ func (r *Run) HasCleanup(reason RunStatus) bool {
 func (r *Run) HasAnyCleanup() bool {
 	return r.CleanupOnSuccess != "" || r.CleanupOnFailure != "" || r.CleanupOnStop != ""
 }
+
+// AgentHasCompletedSteps returns true if the agent has completed any steps in this workflow.
+// Used to determine if stabilization sequence should be used (subsequent prompts need it,
+// but the first prompt after spawn does not).
+func (r *Run) AgentHasCompletedSteps(agentID string) bool {
+	for _, step := range r.Steps {
+		if step.Executor == ExecutorAgent &&
+			step.Agent != nil &&
+			step.Agent.Agent == agentID &&
+			step.Status == StepStatusDone {
+			return true
+		}
+	}
+	return false
+}
