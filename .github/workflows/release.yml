@@ -1,6 +1,11 @@
 name: Release
 
 on:
+  # Trigger on version tags pushed manually (e.g., git tag v0.2.1 && git push origin v0.2.1)
+  push:
+    tags:
+      - 'v*'
+  # Also allow manual trigger from GitHub UI
   workflow_dispatch:
     inputs:
       version:
@@ -33,7 +38,10 @@ jobs:
       - name: Run tests
         run: go test -short ./...
 
+      # Only create tag when triggered manually (workflow_dispatch)
+      # Skip when triggered by tag push since tag already exists
       - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
