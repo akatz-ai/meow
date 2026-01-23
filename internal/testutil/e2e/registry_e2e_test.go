@@ -168,6 +168,84 @@ func TestE2E_CollectionExpandRelative(t *testing.T) {
 	}
 }
 
+// TestE2E_CollectionExpandRelativeDetached tests that expand steps within a collection
+// resolve templates relative to the collection root even in detached mode (-d).
+// This is a regression test for the bug where detached mode passed absolute paths
+// to the child process, causing it to lose collection context.
+func TestE2E_CollectionExpandRelativeDetached(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	h := e2e.NewHarness(t)
+
+	// Install collection with expand step that references collection-local template
+	collectionName := "detached-expand-collection"
+	collectionDir := filepath.Join(h.TemplateDir, collectionName)
+	createCollectionWithExpand(t, collectionDir, collectionName)
+
+	// Run the collection in detached mode (-d)
+	stdout, stderr, err := runMeow(h, "run", collectionName, "-d")
+	if err != nil {
+		t.Fatalf("meow run -d collection failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Extract workflow ID from output
+	// Output format: "Started workflow in background\n  ID:  run-xxx\n..."
+	var workflowID string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID:") {
+			workflowID = strings.TrimSpace(strings.TrimPrefix(line, "ID:"))
+			break
+		}
+	}
+	if workflowID == "" {
+		t.Fatalf("could not extract workflow ID from output:\n%s", stdout)
+	}
+
+	// Wait for workflow to complete (poll status)
+	var finalStatus string
+	for i := 0; i < 30; i++ { // max 30 seconds
+		time.Sleep(1 * time.Second)
+
+		statusOut, statusErr, err := runMeow(h, "status", workflowID)
+		if err != nil {
+			// Status command may fail if workflow is still initializing
+			continue
+		}
+
+		combined := statusOut + statusErr
+		if strings.Contains(combined, "Status:") {
+			// Parse status from output
+			for _, line := range strings.Split(combined, "\n") {
+				if strings.Contains(line, "Status:") {
+					if strings.Contains(line, "done") {
+						finalStatus = "done"
+						break
+					} else if strings.Contains(line, "failed") {
+						finalStatus = "failed"
+						break
+					} else if strings.Contains(line, "stopped") {
+						finalStatus = "stopped"
+						break
+					}
+				}
+			}
+			if finalStatus != "" {
+				break
+			}
+		}
+	}
+
+	if finalStatus != "done" {
+		// Get detailed status for debugging
+		statusOut, statusErr, _ := runMeow(h, "status", workflowID)
+		t.Fatalf("workflow did not complete successfully, status=%s\nstdout: %s\nstderr: %s",
+			finalStatus, statusOut, statusErr)
+	}
+}
+
 // TestE2E_CollectionLsShowsCollections tests that meow ls shows installed collections.
 func TestE2E_CollectionLsShowsCollections(t *testing.T) {
 	if testing.Short() {
