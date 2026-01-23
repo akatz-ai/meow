@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -378,5 +379,95 @@ func TestTmuxWrapper_Integration_CapturePaneWithOptions(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("CapturePaneWithOptions() error = %v", err)
+	}
+}
+
+func TestTmuxWrapper_PipePaneToFile_EmptySession(t *testing.T) {
+	w := NewTmuxWrapper()
+	err := w.PipePaneToFile(context.Background(), "", "/tmp/test.log")
+	if err == nil || !strings.Contains(err.Error(), "session name is required") {
+		t.Errorf("Expected 'session name is required' error, got: %v", err)
+	}
+}
+
+func TestTmuxWrapper_PipePaneToFile_EmptyLogPath(t *testing.T) {
+	w := NewTmuxWrapper()
+	err := w.PipePaneToFile(context.Background(), "test-session", "")
+	if err == nil || !strings.Contains(err.Error(), "log path is required") {
+		t.Errorf("Expected 'log path is required' error, got: %v", err)
+	}
+}
+
+func TestTmuxWrapper_StopPipePane_EmptySession(t *testing.T) {
+	w := NewTmuxWrapper()
+	err := w.StopPipePane(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "session name is required") {
+		t.Errorf("Expected 'session name is required' error, got: %v", err)
+	}
+}
+
+func TestTmuxWrapper_Integration_PipePaneToFile(t *testing.T) {
+	if !tmuxWrapperAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	w := NewTmuxWrapper()
+	ctx := context.Background()
+	sessionName := "test-pipepane-" + time.Now().Format("150405")
+
+	// Create temp file for logging
+	logFile, err := os.CreateTemp("", "tmux-log-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	logPath := logFile.Name()
+	logFile.Close()
+	defer os.Remove(logPath)
+
+	// Ensure cleanup
+	defer func() {
+		_ = w.KillSession(ctx, sessionName)
+	}()
+
+	// Create session
+	err = w.NewSession(ctx, SessionOptions{Name: sessionName})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	// Set up pipe-pane logging
+	err = w.PipePaneToFile(ctx, sessionName, logPath)
+	if err != nil {
+		t.Fatalf("PipePaneToFile() error = %v", err)
+	}
+
+	// Send some commands
+	_ = w.SendKeys(ctx, sessionName, "echo MARKER_START")
+	_ = w.SendKeys(ctx, sessionName, "echo Hello from pipe-pane test")
+	_ = w.SendKeys(ctx, sessionName, "echo MARKER_END")
+	time.Sleep(500 * time.Millisecond)
+
+	// Read log file
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read log file: %v", err)
+	}
+
+	// Verify output was captured
+	logContent := string(content)
+	if !strings.Contains(logContent, "MARKER_START") {
+		t.Error("Log file should contain MARKER_START")
+	}
+	if !strings.Contains(logContent, "Hello from pipe-pane test") {
+		t.Error("Log file should contain test message")
+	}
+	if !strings.Contains(logContent, "MARKER_END") {
+		t.Error("Log file should contain MARKER_END")
+	}
+
+	// Stop pipe-pane
+	err = w.StopPipePane(ctx, sessionName)
+	if err != nil {
+		t.Errorf("StopPipePane() error = %v", err)
 	}
 }

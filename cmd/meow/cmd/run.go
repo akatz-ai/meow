@@ -337,9 +337,18 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create shell runner
 	shellRunner := orchestrator.NewDefaultShellRunner()
 
-	// Create agent manager for tmux sessions
+	// Create per-run log directory for agent logs
+	runLogDir := filepath.Join(cfg.LogsDir(dir), workflowID)
+	if err := os.MkdirAll(runLogDir, 0755); err != nil {
+		return fmt.Errorf("creating run log dir: %w", err)
+	}
+
+	// Create agent manager for tmux sessions with logging config
 	// Passing nil registry uses the default (project + global adapters)
-	agentManager := orchestrator.NewTmuxAgentManager(dir, nil, logger)
+	agentManager := orchestrator.NewTmuxAgentManagerWithOptions(dir, nil, logger, orchestrator.AgentManagerOptions{
+		LoggingEnabled: cfg.Agent.IsLoggingEnabled(),
+		LogDir:         runLogDir,
+	})
 
 	// Create template expander with scope awareness
 	expander := orchestrator.NewTemplateExpanderAdapterWithScope(dir, resolvedScope)
@@ -434,12 +443,12 @@ func spawnDetachedOrchestrator(cfg *config.Config, dir, templatePath, workflowID
 		return fmt.Errorf("finding executable: %w", err)
 	}
 
-	// Create log file for output
-	logDir := cfg.LogsDir(dir)
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("creating log dir: %w", err)
+	// Create per-run log directory for orchestrator and agent logs
+	runLogDir := filepath.Join(cfg.LogsDir(dir), workflowID)
+	if err := os.MkdirAll(runLogDir, 0755); err != nil {
+		return fmt.Errorf("creating run log dir: %w", err)
 	}
-	logPath := filepath.Join(logDir, workflowID+".log")
+	logPath := filepath.Join(runLogDir, "orchestrator.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return fmt.Errorf("creating log file: %w", err)

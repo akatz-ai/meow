@@ -32,6 +32,19 @@ type AgentConfig struct {
 	// DefaultAdapter specifies the default adapter to use when spawning agents.
 	// Resolution order: step-level > workflow-level > project-level > global-level.
 	DefaultAdapter string `toml:"default_adapter"`
+
+	// Logging enables per-agent output logging. When enabled, each agent's terminal
+	// output is captured to a log file in .meow/logs/<run_id>/<agent_id>.log.
+	// Default: true
+	Logging *bool `toml:"logging"`
+}
+
+// IsLoggingEnabled returns whether agent logging is enabled (default: true).
+func (c *AgentConfig) IsLoggingEnabled() bool {
+	if c.Logging == nil {
+		return true // Default enabled
+	}
+	return *c.Logging
 }
 
 // PathsConfig holds path configuration.

@@ -28,6 +28,10 @@ type TmuxAgentManager struct {
 	tmuxSocket string                 // Custom tmux socket path (empty = default)
 	tmux       *agent.TmuxWrapper     // TmuxWrapper for session management
 	registry   *adapter.Registry      // Adapter registry for agent configs
+
+	// Logging configuration (abstracted from backend details)
+	loggingEnabled bool   // Whether to capture agent output to log files
+	logDir         string // Directory for agent log files (e.g., .meow/logs/<run_id>)
 }
 
 type agentState struct {
@@ -38,10 +42,26 @@ type agentState struct {
 	adapterName   string // Which adapter this agent uses (for stop/inject)
 }
 
+// AgentManagerOptions configures the TmuxAgentManager.
+type AgentManagerOptions struct {
+	// LoggingEnabled enables per-agent output logging. Default: true.
+	LoggingEnabled bool
+	// LogDir is the directory for agent log files (e.g., .meow/logs/<run_id>).
+	// Required if LoggingEnabled is true.
+	LogDir string
+}
+
 // NewTmuxAgentManager creates a new TmuxAgentManager.
 // If MEOW_TMUX_SOCKET environment variable is set, uses that socket path.
 // The registry parameter provides adapter configs; if nil, a default registry is created.
 func NewTmuxAgentManager(workdir string, registry *adapter.Registry, logger *slog.Logger) *TmuxAgentManager {
+	return NewTmuxAgentManagerWithOptions(workdir, registry, logger, AgentManagerOptions{
+		LoggingEnabled: true, // Default enabled
+	})
+}
+
+// NewTmuxAgentManagerWithOptions creates a new TmuxAgentManager with explicit options.
+func NewTmuxAgentManagerWithOptions(workdir string, registry *adapter.Registry, logger *slog.Logger, opts AgentManagerOptions) *TmuxAgentManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -65,12 +85,14 @@ func NewTmuxAgentManager(workdir string, registry *adapter.Registry, logger *slo
 	tmuxWrapper := agent.NewTmuxWrapper(tmuxOpts...)
 
 	return &TmuxAgentManager{
-		logger:     logger.With("component", "agent-manager"),
-		agents:     make(map[string]*agentState),
-		workdir:    workdir,
-		tmuxSocket: tmuxSocket,
-		tmux:       tmuxWrapper,
-		registry:   registry,
+		logger:         logger.With("component", "agent-manager"),
+		agents:         make(map[string]*agentState),
+		workdir:        workdir,
+		tmuxSocket:     tmuxSocket,
+		tmux:           tmuxWrapper,
+		registry:       registry,
+		loggingEnabled: opts.LoggingEnabled,
+		logDir:         opts.LogDir,
 	}
 }
 
@@ -158,6 +180,17 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Run, step *types
 			Command: "bash",
 		}); err != nil {
 			return fmt.Errorf("creating tmux session: %w", err)
+		}
+
+		// Set up agent output logging (if enabled)
+		if m.loggingEnabled && m.logDir != "" {
+			logPath := filepath.Join(m.logDir, agentID+".log")
+			if err := m.tmux.PipePaneToFile(ctx, sessionName, logPath); err != nil {
+				m.logger.Warn("failed to enable agent logging", "agent", agentID, "error", err)
+				// Continue anyway - logging is non-critical
+			} else {
+				m.logger.Info("agent logging enabled", "agent", agentID, "logPath", logPath)
+			}
 		}
 
 		// Build agent command from adapter config

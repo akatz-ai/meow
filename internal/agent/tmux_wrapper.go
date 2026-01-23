@@ -347,3 +347,43 @@ func (w *TmuxWrapper) hasSession(ctx context.Context, name string) bool {
 	cmd := exec.CommandContext(ctx, "tmux", fullArgs...)
 	return cmd.Run() == nil
 }
+
+// PipePaneToFile sets up continuous logging of a pane's output to a file.
+// All terminal output (including escape sequences) is streamed to the file in real-time.
+// This captures everything the agent sees and outputs, useful for debugging.
+// The logging continues until the session is killed.
+func (w *TmuxWrapper) PipePaneToFile(ctx context.Context, session, logPath string) error {
+	if session == "" {
+		return fmt.Errorf("session name is required")
+	}
+	if logPath == "" {
+		return fmt.Errorf("log path is required")
+	}
+
+	// Use pipe-pane to stream output to a file via cat
+	// The shell command runs in the background within tmux
+	pipeCmd := fmt.Sprintf("cat >> %s", logPath)
+	output, err := w.runCmd(ctx, "pipe-pane", "-t", session, pipeCmd)
+	if err != nil {
+		return fmt.Errorf("pipe-pane: %w: %s", err, output)
+	}
+
+	return nil
+}
+
+// StopPipePane stops any active pipe-pane on a session.
+// This is called automatically when the session is killed, but can be called
+// explicitly to stop logging while keeping the session alive.
+func (w *TmuxWrapper) StopPipePane(ctx context.Context, session string) error {
+	if session == "" {
+		return fmt.Errorf("session name is required")
+	}
+
+	// Calling pipe-pane with no command stops the current pipe
+	output, err := w.runCmd(ctx, "pipe-pane", "-t", session)
+	if err != nil {
+		return fmt.Errorf("stopping pipe-pane: %w: %s", err, output)
+	}
+
+	return nil
+}
