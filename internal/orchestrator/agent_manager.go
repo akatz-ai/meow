@@ -12,6 +12,7 @@ import (
 
 	"github.com/akatz-ai/meow/internal/adapter"
 	"github.com/akatz-ai/meow/internal/agent"
+	"github.com/akatz-ai/meow/internal/ipc"
 	"github.com/akatz-ai/meow/internal/types"
 )
 
@@ -141,7 +142,12 @@ func (m *TmuxAgentManager) Start(ctx context.Context, wf *types.Run, step *types
 		// Orchestrator-injected vars (reserved, always override)
 		env["MEOW_AGENT"] = agentID
 		env["MEOW_WORKFLOW"] = wf.ID
-		env["MEOW_ORCH_SOCK"] = fmt.Sprintf("/tmp/meow-%s.sock", wf.ID)
+		env["MEOW_ORCH_SOCK"] = ipc.SocketPath(wf.ID)
+
+		// Pass through simulator config for E2E testing (if set)
+		if simConfig := os.Getenv("MEOW_SIM_CONFIG"); simConfig != "" {
+			env["MEOW_SIM_CONFIG"] = simConfig
+		}
 
 		// Create tmux session with bash - we'll start agent via send-keys
 		// This ensures the session stays alive and we can inject prompts
