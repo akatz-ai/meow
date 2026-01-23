@@ -4,20 +4,30 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/akatz-ai/meow/internal/ipc"
 )
+
+// AgentStoppedGracePeriod is the time after a step completion during which
+// agent-stopped events are filtered (not routed to waiters). This prevents
+// false nudges when the Claude Code Stop hook fires after meow done.
+const AgentStoppedGracePeriod = 10 * time.Second
 
 // IPCHandler implements ipc.Handler for the orchestrator.
 // It delegates all state-mutating operations to the Orchestrator to ensure
 // proper mutex coordination and avoid race conditions.
 type IPCHandler struct {
 	orch        *Orchestrator     // Reference to orchestrator for state mutations
-	store       RunStore     // Read-only access for queries
+	store       RunStore          // Read-only access for queries
 	agents      *TmuxAgentManager // For agent workdir lookups
 	eventRouter *EventRouter
 	logger      *slog.Logger
+
+	// Track recent step completions for filtering expected agent-stopped events.
+	// Key: agentID (string), Value: completion time (time.Time)
+	recentCompletions sync.Map
 }
 
 // NewIPCHandler creates a new IPC handler.
@@ -54,6 +64,20 @@ func (h *IPCHandler) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMessag
 			Type:    ipc.MsgError,
 			Message: err.Error(),
 		}
+	}
+
+	// Record completion time for agent-stopped filtering.
+	// This allows HandleEvent to suppress expected agent-stopped events
+	// that occur right after step completion (from Claude's Stop hook).
+	if msg.Agent != "" {
+		h.recentCompletions.Store(msg.Agent, time.Now())
+
+		// Schedule cleanup after grace period to prevent memory leak.
+		// Fire-and-forget: if orchestrator shuts down, goroutine terminates.
+		go func(agent string) {
+			time.Sleep(AgentStoppedGracePeriod + time.Second)
+			h.recentCompletions.Delete(agent)
+		}(msg.Agent)
 	}
 
 	return &ipc.AckMessage{
@@ -93,6 +117,21 @@ func (h *IPCHandler) HandleGetSessionID(ctx context.Context, msg *ipc.GetSession
 // HandleEvent processes an event emitted by an agent.
 func (h *IPCHandler) HandleEvent(ctx context.Context, msg *ipc.EventMessage) any {
 	h.logger.Info("handling event", "event_type", msg.EventType, "agent", msg.Agent)
+
+	// Filter expected agent-stopped events that occur right after step completion.
+	// This prevents false nudges when the Claude Code Stop hook fires after meow done.
+	if msg.EventType == "agent-stopped" && msg.Agent != "" {
+		if completedAt, ok := h.recentCompletions.Load(msg.Agent); ok {
+			elapsed := time.Since(completedAt.(time.Time))
+			if elapsed < AgentStoppedGracePeriod {
+				h.logger.Info("filtering expected agent-stopped",
+					"agent", msg.Agent,
+					"elapsed", elapsed,
+					"grace_period", AgentStoppedGracePeriod)
+				return &ipc.AckMessage{Type: ipc.MsgAck, Success: true}
+			}
+		}
+	}
 
 	// Add metadata
 	msg.Timestamp = time.Now().Unix()
