@@ -186,3 +186,177 @@ func TestHandleEvent_NoFilterWhenAgentEmpty(t *testing.T) {
 		t.Error("event with empty agent should be routed")
 	}
 }
+
+// ===========================================================================
+// HandleStepStart Tests
+// ===========================================================================
+
+// TestHandleStepStart_RecordsAcknowledgment verifies that HandleStepStart
+// records the acknowledgment time for the agent.
+func TestHandleStepStart_RecordsAcknowledgment(t *testing.T) {
+	handler := &IPCHandler{
+		eventRouter: NewEventRouter(nil),
+		logger:      testLogger(),
+	}
+
+	// Send step start
+	result := handler.HandleStepStart(context.Background(), &ipc.StepStartMessage{
+		Type:     ipc.MsgStepStart,
+		Workflow: "run-test",
+		Agent:    "worker-1",
+		Step:     "impl.write-tests",
+	})
+
+	// Should return success
+	ack, ok := result.(*ipc.AckMessage)
+	if !ok {
+		t.Fatalf("expected AckMessage, got %T", result)
+	}
+	if !ack.Success {
+		t.Error("expected success=true")
+	}
+
+	// Verify acknowledgment was recorded
+	_, ok = handler.stepAcknowledgments.Load("worker-1")
+	if !ok {
+		t.Error("expected stepAcknowledgments to have entry for worker-1")
+	}
+}
+
+// TestHandleStepStart_ClearsRecentCompletions verifies that HandleStepStart
+// clears any stale recentCompletions entry for the agent.
+func TestHandleStepStart_ClearsRecentCompletions(t *testing.T) {
+	handler := &IPCHandler{
+		eventRouter: NewEventRouter(nil),
+		logger:      testLogger(),
+	}
+
+	// Pre-populate recentCompletions
+	handler.recentCompletions.Store("worker-1", time.Now())
+
+	// Send step start
+	handler.HandleStepStart(context.Background(), &ipc.StepStartMessage{
+		Type:     ipc.MsgStepStart,
+		Workflow: "run-test",
+		Agent:    "worker-1",
+		Step:     "impl.write-tests",
+	})
+
+	// Verify recentCompletions was cleared
+	_, ok := handler.recentCompletions.Load("worker-1")
+	if ok {
+		t.Error("expected recentCompletions to be cleared for worker-1")
+	}
+
+	// Verify stepAcknowledgments was set
+	_, ok = handler.stepAcknowledgments.Load("worker-1")
+	if !ok {
+		t.Error("expected stepAcknowledgments to have entry for worker-1")
+	}
+}
+
+// TestHandleEvent_FiltersWithStepAcknowledgment verifies that agent-stopped events
+// are filtered when they occur within the grace period after meow start.
+func TestHandleEvent_FiltersWithStepAcknowledgment(t *testing.T) {
+	handler := &IPCHandler{
+		eventRouter: NewEventRouter(nil),
+		logger:      testLogger(),
+	}
+
+	// Register a waiter for agent-stopped events
+	waiterCh := handler.eventRouter.RegisterWaiter("agent-stopped", nil, 5*time.Second)
+
+	// Simulate what HandleStepStart does: record acknowledgment
+	handler.stepAcknowledgments.Store("worker-1", time.Now())
+
+	// Immediately send an agent-stopped event
+	result := handler.HandleEvent(context.Background(), &ipc.EventMessage{
+		Type:      ipc.MsgEvent,
+		EventType: "agent-stopped",
+		Agent:     "worker-1",
+		Data:      map[string]any{"reason": "normal"},
+	})
+
+	// Should return success (ack)
+	ack, ok := result.(*ipc.AckMessage)
+	if !ok {
+		t.Fatalf("expected AckMessage, got %T", result)
+	}
+	if !ack.Success {
+		t.Error("expected success=true")
+	}
+
+	// Verify the event was NOT routed to the waiter (filtered)
+	select {
+	case <-waiterCh:
+		t.Error("event should have been filtered, but was routed to waiter")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: event was filtered
+	}
+}
+
+// TestHandleEvent_StepAcknowledgmentTakesPrecedence verifies that stepAcknowledgments
+// takes precedence over recentCompletions for filtering.
+func TestHandleEvent_StepAcknowledgmentTakesPrecedence(t *testing.T) {
+	handler := &IPCHandler{
+		eventRouter: NewEventRouter(nil),
+		logger:      testLogger(),
+	}
+
+	// Register a waiter
+	waiterCh := handler.eventRouter.RegisterWaiter("agent-stopped", nil, 5*time.Second)
+
+	// Set up conflicting times:
+	// - recentCompletions is old (beyond grace period) - would NOT filter
+	// - stepAcknowledgments is recent - SHOULD filter
+	pastTime := time.Now().Add(-AgentStoppedGracePeriod - time.Second)
+	handler.recentCompletions.Store("worker-1", pastTime)
+	handler.stepAcknowledgments.Store("worker-1", time.Now())
+
+	// Send agent-stopped event
+	handler.HandleEvent(context.Background(), &ipc.EventMessage{
+		Type:      ipc.MsgEvent,
+		EventType: "agent-stopped",
+		Agent:     "worker-1",
+		Data:      map[string]any{"reason": "normal"},
+	})
+
+	// Verify the event was filtered (stepAcknowledgments took precedence)
+	select {
+	case <-waiterCh:
+		t.Error("event should have been filtered by stepAcknowledgments")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: event was filtered
+	}
+}
+
+// TestHandleEvent_FallsBackToRecentCompletions verifies that when stepAcknowledgments
+// is not present, the handler falls back to recentCompletions for filtering.
+func TestHandleEvent_FallsBackToRecentCompletions(t *testing.T) {
+	handler := &IPCHandler{
+		eventRouter: NewEventRouter(nil),
+		logger:      testLogger(),
+	}
+
+	// Register a waiter
+	waiterCh := handler.eventRouter.RegisterWaiter("agent-stopped", nil, 5*time.Second)
+
+	// Only set recentCompletions (no stepAcknowledgments)
+	handler.recentCompletions.Store("worker-1", time.Now())
+
+	// Send agent-stopped event
+	handler.HandleEvent(context.Background(), &ipc.EventMessage{
+		Type:      ipc.MsgEvent,
+		EventType: "agent-stopped",
+		Agent:     "worker-1",
+		Data:      map[string]any{"reason": "normal"},
+	})
+
+	// Verify the event was filtered (fallback to recentCompletions)
+	select {
+	case <-waiterCh:
+		t.Error("event should have been filtered by recentCompletions fallback")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: event was filtered
+	}
+}

@@ -13,6 +13,7 @@ import (
 type mockHandler struct {
 	mu sync.Mutex
 
+	stepStartCalls     []*StepStartMessage
 	stepDoneCalls      []*StepDoneMessage
 	getSessionIDCalls  []*GetSessionIDMessage
 	eventCalls         []*EventMessage
@@ -20,6 +21,7 @@ type mockHandler struct {
 	getStepStatusCalls []*GetStepStatusMessage
 
 	// Configurable responses
+	stepStartResponse     any
 	stepDoneResponse      any
 	getSessionIDResponse  any
 	eventResponse         any
@@ -29,12 +31,20 @@ type mockHandler struct {
 
 func newMockHandler() *mockHandler {
 	return &mockHandler{
+		stepStartResponse:     &AckMessage{Type: MsgAck, Success: true},
 		stepDoneResponse:      &AckMessage{Type: MsgAck, Success: true},
 		getSessionIDResponse:  &SessionIDMessage{Type: MsgSessionID, SessionID: "test-session-123"},
 		eventResponse:         &AckMessage{Type: MsgAck, Success: true},
 		awaitEventResponse:    &EventMatchMessage{Type: MsgEventMatch, EventType: "test", Data: nil, Timestamp: 0},
 		getStepStatusResponse: &StepStatusMessage{Type: MsgStepStatus, StepID: "step-1", Status: "done"},
 	}
+}
+
+func (h *mockHandler) HandleStepStart(ctx context.Context, msg *StepStartMessage) any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.stepStartCalls = append(h.stepStartCalls, msg)
+	return h.stepStartResponse
 }
 
 func (h *mockHandler) HandleStepDone(ctx context.Context, msg *StepDoneMessage) any {

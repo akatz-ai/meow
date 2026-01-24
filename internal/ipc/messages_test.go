@@ -11,6 +11,7 @@ func TestMessageType_Valid(t *testing.T) {
 		mt   MessageType
 		want bool
 	}{
+		{MsgStepStart, true},
 		{MsgStepDone, true},
 		{MsgGetSessionID, true},
 		{MsgEvent, true},
@@ -33,7 +34,7 @@ func TestMessageType_Valid(t *testing.T) {
 }
 
 func TestMessageType_IsRequest(t *testing.T) {
-	requests := []MessageType{MsgStepDone, MsgGetSessionID, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
+	requests := []MessageType{MsgStepStart, MsgStepDone, MsgGetSessionID, MsgEvent, MsgAwaitEvent, MsgGetStepStatus}
 	responses := []MessageType{MsgAck, MsgError, MsgSessionID, MsgEventMatch, MsgStepStatus}
 
 	for _, mt := range requests {
@@ -52,6 +53,75 @@ func TestMessageType_IsRequest(t *testing.T) {
 		if !mt.IsResponse() {
 			t.Errorf("MessageType(%q).IsResponse() = false, want true", mt)
 		}
+	}
+}
+
+func TestStepStartMessage_Marshal(t *testing.T) {
+	msg := StepStartMessage{
+		Type:     MsgStepStart,
+		Workflow: "run-abc123",
+		Agent:    "worker-1",
+		Step:     "impl.write-tests",
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	// Verify single-line output
+	if strings.Count(string(data), "\n") > 0 {
+		t.Errorf("Marshal() produced multi-line output: %s", data)
+	}
+
+	// Verify round-trip
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*StepStartMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *StepStartMessage", parsed)
+	}
+
+	if got.Workflow != msg.Workflow {
+		t.Errorf("Workflow = %q, want %q", got.Workflow, msg.Workflow)
+	}
+	if got.Agent != msg.Agent {
+		t.Errorf("Agent = %q, want %q", got.Agent, msg.Agent)
+	}
+	if got.Step != msg.Step {
+		t.Errorf("Step = %q, want %q", got.Step, msg.Step)
+	}
+}
+
+func TestStepStartMessage_OptionalStep(t *testing.T) {
+	// Step is optional - test that it can be empty
+	msg := StepStartMessage{
+		Type:     MsgStepStart,
+		Workflow: "run-abc123",
+		Agent:    "worker-1",
+		Step:     "", // Empty step
+	}
+
+	data, err := Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	parsed, err := ParseMessage(data)
+	if err != nil {
+		t.Fatalf("ParseMessage() error = %v", err)
+	}
+
+	got, ok := parsed.(*StepStartMessage)
+	if !ok {
+		t.Fatalf("ParseMessage() returned %T, want *StepStartMessage", parsed)
+	}
+
+	if got.Step != "" {
+		t.Errorf("Step = %q, want empty", got.Step)
 	}
 }
 

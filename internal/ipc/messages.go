@@ -14,6 +14,7 @@ type MessageType string
 
 const (
 	// Request types (agent → orchestrator)
+	MsgStepStart     MessageType = "step_start"
 	MsgStepDone      MessageType = "step_done"
 	MsgGetSessionID  MessageType = "get_session_id"
 	MsgEvent         MessageType = "event"
@@ -31,7 +32,7 @@ const (
 // Valid returns true if this is a recognized message type.
 func (t MessageType) Valid() bool {
 	switch t {
-	case MsgStepDone, MsgGetSessionID,
+	case MsgStepStart, MsgStepDone, MsgGetSessionID,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus,
 		MsgAck, MsgError, MsgSessionID,
 		MsgEventMatch, MsgStepStatus:
@@ -43,7 +44,7 @@ func (t MessageType) Valid() bool {
 // IsRequest returns true if this message type is sent from agent to orchestrator.
 func (t MessageType) IsRequest() bool {
 	switch t {
-	case MsgStepDone, MsgGetSessionID,
+	case MsgStepStart, MsgStepDone, MsgGetSessionID,
 		MsgEvent, MsgAwaitEvent, MsgGetStepStatus:
 		return true
 	}
@@ -61,6 +62,19 @@ func (t MessageType) IsResponse() bool {
 }
 
 // --- Request Messages (agent → orchestrator) ---
+
+// StepStartMessage signals step acknowledgment from an agent.
+// Sent by: meow start
+//
+// When an agent receives a new task prompt, it calls `meow start` to signal
+// that it has received and understood the task. This creates an explicit
+// acknowledgment that the agent is actively working.
+type StepStartMessage struct {
+	Type     MessageType `json:"type"` // Always "step_start"
+	Workflow string      `json:"workflow"`
+	Agent    string      `json:"agent"`
+	Step     string      `json:"step,omitempty"`
+}
 
 // StepDoneMessage signals step completion from an agent.
 // Sent by: meow done
@@ -158,6 +172,7 @@ type Message interface {
 
 // Implement Message interface for all message types
 
+func (m *StepStartMessage) MessageType() MessageType     { return MsgStepStart }
 func (m *StepDoneMessage) MessageType() MessageType      { return MsgStepDone }
 func (m *GetSessionIDMessage) MessageType() MessageType  { return MsgGetSessionID }
 func (m *EventMessage) MessageType() MessageType         { return MsgEvent }
@@ -186,6 +201,8 @@ func ParseMessage(data []byte) (Message, error) {
 
 	var msg Message
 	switch raw.Type {
+	case MsgStepStart:
+		msg = &StepStartMessage{}
 	case MsgStepDone:
 		msg = &StepDoneMessage{}
 	case MsgGetSessionID:

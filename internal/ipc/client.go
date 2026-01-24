@@ -75,6 +75,19 @@ func (c *Client) Send(msg any) (any, error) {
 	return response, nil
 }
 
+// SendStepStart sends a step acknowledgment message.
+// Called by agents when they receive and understand a new task.
+// Returns the parsed response (AckMessage or ErrorMessage).
+func (c *Client) SendStepStart(workflow, agent, step string) (any, error) {
+	msg := &StepStartMessage{
+		Type:     MsgStepStart,
+		Workflow: workflow,
+		Agent:    agent,
+		Step:     step,
+	}
+	return c.Send(msg)
+}
+
 // SendStepDone sends a step completion message.
 // Returns the parsed response (AckMessage or ErrorMessage).
 func (c *Client) SendStepDone(workflow, agent, step string, outputs map[string]any, notes string) (any, error) {

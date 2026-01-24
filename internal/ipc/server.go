@@ -22,6 +22,11 @@ func SocketPath(workflowID string) string {
 // Handler processes IPC messages and returns responses.
 // Implementations should be safe for concurrent use.
 type Handler interface {
+	// HandleStepStart processes a step acknowledgment signal.
+	// Called when an agent signals it has received and understood its task.
+	// Returns an AckMessage or ErrorMessage.
+	HandleStepStart(ctx context.Context, msg *StepStartMessage) any
+
 	// HandleStepDone processes a step completion signal.
 	// Returns an AckMessage or ErrorMessage.
 	HandleStepDone(ctx context.Context, msg *StepDoneMessage) any
@@ -241,6 +246,10 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) any {
 	}
 
 	switch m := msg.(type) {
+	case *StepStartMessage:
+		s.logger.Debug("handling step_start", "workflow", m.Workflow, "agent", m.Agent, "step", m.Step)
+		return s.handler.HandleStepStart(ctx, m)
+
 	case *StepDoneMessage:
 		s.logger.Debug("handling step_done", "workflow", m.Workflow, "agent", m.Agent, "step", m.Step)
 		return s.handler.HandleStepDone(ctx, m)
