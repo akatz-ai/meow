@@ -92,6 +92,13 @@ func (m *mockRunStore) GetByAgent(ctx context.Context, agentID string) ([]*types
 }
 
 // mockAgentManager implements AgentManager for testing.
+// injectedPromptRecord captures details of an InjectPrompt call.
+type injectedPromptRecord struct {
+	AgentID   string
+	Prompt    string
+	Stabilize bool
+}
+
 type mockAgentManager struct {
 	mu              sync.Mutex
 	running         map[string]bool
@@ -99,6 +106,8 @@ type mockAgentManager struct {
 	stopped         []string
 	interrupted     []string
 	injectedPrompts []string
+	// injections tracks all InjectPrompt calls with their options
+	injections []injectedPromptRecord
 }
 
 func newMockAgentManager() *mockAgentManager {
@@ -135,7 +144,21 @@ func (m *mockAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.injectedPrompts = append(m.injectedPrompts, agentID+":"+prompt)
+	m.injections = append(m.injections, injectedPromptRecord{
+		AgentID:   agentID,
+		Prompt:    prompt,
+		Stabilize: opts.Stabilize,
+	})
 	return nil
+}
+
+// GetInjections returns a copy of all injection records.
+func (m *mockAgentManager) GetInjections() []injectedPromptRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]injectedPromptRecord, len(m.injections))
+	copy(result, m.injections)
+	return result
 }
 
 func (m *mockAgentManager) Interrupt(ctx context.Context, agentID string) error {
@@ -3435,5 +3458,163 @@ func TestOrchestrator_WaitForPromptAcknowledgment_ContextCancelled(t *testing.T)
 		// Success - returned after cancel
 	case <-time.After(500 * time.Millisecond):
 		t.Error("waitForPromptAcknowledgment did not return after context cancel")
+	}
+}
+
+// ===========================================================================
+// Prompt Recovery Tests
+// Spec: agent-lifecycle (prompt recovery mechanism)
+// ===========================================================================
+
+// TestOrchestrator_PromptRecovery_Success tests that recovery succeeds when
+// the prompt-received event is emitted after re-injection.
+// Spec: agent-lifecycle.prompt-recovery-success
+func TestOrchestrator_PromptRecovery_Success(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create and set event router
+	router := NewEventRouter(logger)
+	orch.SetEventRouter(router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Track completion
+	done := make(chan bool, 1)
+
+	// Start waiting for acknowledgment with recovery enabled
+	// Initial timeout will expire (no event), triggering recovery
+	// Recovery will re-inject and second event will be emitted
+	go func() {
+		orch.waitForPromptAcknowledgmentWithRecovery(ctx, "test-agent", "step-1", "test prompt", 100*time.Millisecond)
+		done <- true
+	}()
+
+	// Give time for initial timeout to occur
+	time.Sleep(150 * time.Millisecond)
+
+	// Now emit the event (simulating successful recovery)
+	event := &ipc.EventMessage{
+		EventType: "prompt-received",
+		Agent:     "test-agent",
+	}
+	router.Route(event)
+
+	// Wait for completion
+	select {
+	case <-done:
+		// Success - recovery completed
+	case <-time.After(3 * time.Second):
+		t.Error("recovery did not complete after event was routed")
+	}
+
+	// Verify that prompt was re-injected (at least once for recovery)
+	injections := agents.GetInjections()
+	if len(injections) < 1 {
+		t.Errorf("expected at least 1 recovery injection, got %d", len(injections))
+	}
+
+	// The recovery injection should have Stabilize=true
+	for _, inj := range injections {
+		if inj.AgentID == "test-agent" && inj.Stabilize {
+			// Found recovery injection with stabilization
+			return
+		}
+	}
+	t.Error("expected recovery injection with Stabilize=true")
+}
+
+// TestOrchestrator_PromptRecovery_Escalate tests that prompt-swallowed event
+// is emitted after max retries fail.
+// Spec: agent-lifecycle.prompt-recovery-escalate
+func TestOrchestrator_PromptRecovery_Escalate(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create and set event router
+	router := NewEventRouter(logger)
+	orch.SetEventRouter(router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Register a waiter for the prompt-swallowed event to verify it gets emitted
+	swallowedCh := router.RegisterWaiter("prompt-swallowed", map[string]string{"agent": "test-agent"}, 5*time.Second)
+
+	// Track completion
+	done := make(chan bool, 1)
+
+	// Start waiting for acknowledgment with recovery enabled
+	// All attempts will timeout (no events emitted), triggering escalation
+	go func() {
+		orch.waitForPromptAcknowledgmentWithRecovery(ctx, "test-agent", "step-1", "test prompt", 100*time.Millisecond)
+		done <- true
+	}()
+
+	// Wait for completion (should timeout after all retries)
+	select {
+	case <-done:
+		// Recovery exhausted
+	case <-time.After(5 * time.Second):
+		t.Error("recovery did not complete after all retries")
+	}
+
+	// Verify that prompt-swallowed event was emitted
+	select {
+	case event := <-swallowedCh:
+		if event == nil {
+			t.Error("received nil event from swallowedCh")
+		} else if event.Agent != "test-agent" {
+			t.Errorf("expected agent 'test-agent', got %q", event.Agent)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("prompt-swallowed event was not emitted after recovery exhausted")
+	}
+
+	// Verify that multiple injection attempts were made
+	injections := agents.GetInjections()
+	if len(injections) < 1 {
+		t.Errorf("expected at least 1 recovery injection, got %d", len(injections))
+	}
+}
+
+// TestOrchestrator_PromptRecovery_NoRouter tests that recovery handles nil router gracefully.
+// Spec: agent-lifecycle.prompt-recovery-no-router
+func TestOrchestrator_PromptRecovery_NoRouter(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Do NOT set event router - leave it nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Track how long it takes
+	start := time.Now()
+
+	// Should return immediately without panic
+	orch.waitForPromptAcknowledgmentWithRecovery(ctx, "test-agent", "step-1", "test prompt", 5*time.Second)
+
+	elapsed := time.Since(start)
+
+	// Should complete almost immediately (no blocking)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("waitForPromptAcknowledgmentWithRecovery with nil router took too long: %v", elapsed)
 	}
 }
