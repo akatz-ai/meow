@@ -3258,3 +3258,182 @@ func TestResolveOutputRefs_WithScopeWalk(t *testing.T) {
 		t.Errorf("resolved = %q, want %q", resolved, "test true == true")
 	}
 }
+
+// ===========================================================================
+// Prompt Acknowledgment Tests
+// Spec: agent-lifecycle (prompt acknowledgment tracking)
+// ===========================================================================
+
+// TestOrchestrator_SetEventRouter tests that SetEventRouter correctly sets the router.
+func TestOrchestrator_SetEventRouter(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create an event router
+	router := NewEventRouter(logger)
+
+	// Set it on the orchestrator
+	orch.SetEventRouter(router)
+
+	// Verify it was set (by using it indirectly via waitForPromptAcknowledgment)
+	// This test will fail until SetEventRouter is implemented
+	if orch.eventRouter == nil {
+		t.Error("eventRouter should be set after SetEventRouter()")
+	}
+}
+
+// TestOrchestrator_WaitForPromptAcknowledgment_Success tests that acknowledgment
+// is received when prompt-received event is emitted.
+func TestOrchestrator_WaitForPromptAcknowledgment_Success(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create and set event router
+	router := NewEventRouter(logger)
+	orch.SetEventRouter(router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Track if acknowledgment completed
+	done := make(chan bool, 1)
+
+	// Start waiting for acknowledgment in goroutine
+	go func() {
+		orch.waitForPromptAcknowledgment(ctx, "test-agent", "step-1", 2*time.Second)
+		done <- true
+	}()
+
+	// Give time for waiter to register
+	time.Sleep(50 * time.Millisecond)
+
+	// Emit the prompt-received event
+	event := &ipc.EventMessage{
+		EventType: "prompt-received",
+		Agent:     "test-agent",
+	}
+	router.Route(event)
+
+	// Wait for acknowledgment to complete
+	select {
+	case <-done:
+		// Success - acknowledgment received
+	case <-time.After(1 * time.Second):
+		t.Error("waitForPromptAcknowledgment did not complete after event was routed")
+	}
+}
+
+// TestOrchestrator_WaitForPromptAcknowledgment_Timeout tests that timeout is
+// handled gracefully when no event is received.
+func TestOrchestrator_WaitForPromptAcknowledgment_Timeout(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create and set event router
+	router := NewEventRouter(logger)
+	orch.SetEventRouter(router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Track how long acknowledgment takes
+	start := time.Now()
+
+	// Wait for acknowledgment with short timeout (no event will be emitted)
+	orch.waitForPromptAcknowledgment(ctx, "test-agent", "step-1", 100*time.Millisecond)
+
+	elapsed := time.Since(start)
+
+	// Should complete around the timeout duration (with some tolerance)
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("waitForPromptAcknowledgment returned too quickly: %v", elapsed)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("waitForPromptAcknowledgment took too long: %v", elapsed)
+	}
+}
+
+// TestOrchestrator_WaitForPromptAcknowledgment_NoRouter tests that nil router
+// is handled gracefully (no-op).
+func TestOrchestrator_WaitForPromptAcknowledgment_NoRouter(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Do NOT set event router - leave it nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Track how long it takes
+	start := time.Now()
+
+	// Should return immediately without panic
+	orch.waitForPromptAcknowledgment(ctx, "test-agent", "step-1", 5*time.Second)
+
+	elapsed := time.Since(start)
+
+	// Should complete almost immediately (no blocking)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("waitForPromptAcknowledgment with nil router took too long: %v", elapsed)
+	}
+}
+
+// TestOrchestrator_WaitForPromptAcknowledgment_ContextCancelled tests that
+// context cancellation is handled gracefully.
+func TestOrchestrator_WaitForPromptAcknowledgment_ContextCancelled(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	// Create and set event router
+	router := NewEventRouter(logger)
+	orch.SetEventRouter(router)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Track completion
+	done := make(chan bool, 1)
+
+	go func() {
+		orch.waitForPromptAcknowledgment(ctx, "test-agent", "step-1", 5*time.Second)
+		done <- true
+	}()
+
+	// Give time for waiter to register
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context
+	cancel()
+
+	// Should complete quickly after cancel
+	select {
+	case <-done:
+		// Success - returned after cancel
+	case <-time.After(500 * time.Millisecond):
+		t.Error("waitForPromptAcknowledgment did not return after context cancel")
+	}
+}
