@@ -159,6 +159,109 @@ func (o *Orchestrator) waitForPromptAcknowledgment(ctx context.Context, agentID,
 	}
 }
 
+// waitForPromptAcknowledgmentWithRecovery waits for a prompt-received event and
+// attempts recovery if the prompt is not acknowledged within the timeout.
+// Recovery involves re-injecting the prompt with stabilization (Escape keys).
+// If recovery fails after 1 retry, emits a prompt-swallowed event.
+// This is best-effort monitoring; it does not block workflow execution.
+func (o *Orchestrator) waitForPromptAcknowledgmentWithRecovery(ctx context.Context, agentID, stepID, prompt string, timeout time.Duration) {
+	if o.eventRouter == nil {
+		return // No event router available
+	}
+
+	const maxRetries = 1
+	retryTimeout := timeout / 2 // Shorter timeout for retries
+	if retryTimeout < 50*time.Millisecond {
+		retryTimeout = 50 * time.Millisecond
+	}
+
+	// Helper to wait for acknowledgment
+	waitForAck := func(t time.Duration) bool {
+		filter := map[string]string{"agent": agentID}
+		ch := o.eventRouter.RegisterWaiter("prompt-received", filter, t)
+
+		timer := time.NewTimer(t)
+		defer timer.Stop()
+
+		select {
+		case event, ok := <-ch:
+			if ok && event != nil {
+				o.logger.Debug("prompt acknowledged by agent",
+					"agent", agentID,
+					"step", stepID,
+				)
+				return true
+			}
+			return false
+		case <-timer.C:
+			return false
+		case <-ctx.Done():
+			return true // Context cancelled, treat as success (no recovery needed)
+		}
+	}
+
+	// Initial wait
+	if waitForAck(timeout) {
+		return
+	}
+
+	o.logger.Warn("prompt-received event not received, attempting recovery",
+		"agent", agentID,
+		"step", stepID,
+		"timeout", timeout,
+	)
+
+	// Attempt recovery: re-inject with stabilization
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		o.logger.Info("recovery attempt: re-injecting prompt with stabilization",
+			"agent", agentID,
+			"step", stepID,
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+		)
+
+		// Re-inject with stabilization (this sends Escape keys first)
+		if err := o.agents.InjectPrompt(ctx, agentID, prompt, InjectPromptOpts{
+			Stabilize: true,
+		}); err != nil {
+			o.logger.Warn("recovery injection failed",
+				"agent", agentID,
+				"step", stepID,
+				"error", err,
+			)
+			continue
+		}
+
+		// Wait for acknowledgment with shorter timeout
+		if waitForAck(retryTimeout) {
+			o.logger.Info("recovery successful: prompt acknowledged after re-injection",
+				"agent", agentID,
+				"step", stepID,
+				"attempt", attempt+1,
+			)
+			return
+		}
+	}
+
+	// Recovery exhausted - emit prompt-swallowed event for RW monitor to handle
+	o.logger.Warn("recovery exhausted: emitting prompt-swallowed event",
+		"agent", agentID,
+		"step", stepID,
+		"retries", maxRetries,
+	)
+
+	// Emit prompt-swallowed event
+	swallowedEvent := &ipc.EventMessage{
+		EventType: "prompt-swallowed",
+		Agent:     agentID,
+		Data: map[string]any{
+			"step":    stepID,
+			"retries": maxRetries,
+		},
+	}
+	o.eventRouter.Route(swallowedEvent)
+}
+
 // Run starts the orchestrator main loop.
 // It blocks until the context is cancelled or all work is done.
 // IPC messages are handled by IPCHandler which delegates to Orchestrator methods
@@ -1964,9 +2067,9 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *typ
 		return fmt.Errorf("injecting prompt: %w", err)
 	}
 
-	// Start non-blocking prompt acknowledgment tracking
-	// This monitors for prompt-received events to detect "swallowed prompts"
-	go o.waitForPromptAcknowledgment(ctx, step.Agent.Agent, step.ID, 5*time.Second)
+	// Start non-blocking prompt acknowledgment tracking with recovery
+	// This monitors for prompt-received events and attempts recovery if the prompt is swallowed
+	go o.waitForPromptAcknowledgmentWithRecovery(ctx, step.Agent.Agent, step.ID, result.Prompt, 5*time.Second)
 
 	// Fire-and-forget mode: complete immediately after injection
 	if IsFireForget(step.Agent) {
