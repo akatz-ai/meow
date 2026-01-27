@@ -92,6 +92,9 @@ type Orchestrator struct {
 	// Shutdown coordination
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// Event router for prompt acknowledgment tracking
+	eventRouter *EventRouter
 }
 
 // New creates a new Orchestrator.
@@ -109,6 +112,51 @@ func New(cfg *config.Config, store RunStore, agents AgentManager, shell ShellRun
 // SetWorkflowID sets the active workflow ID for single-workflow mode.
 func (o *Orchestrator) SetWorkflowID(id string) {
 	o.workflowID = id
+}
+
+// SetEventRouter sets the event router for prompt acknowledgment tracking.
+func (o *Orchestrator) SetEventRouter(router *EventRouter) {
+	o.eventRouter = router
+}
+
+// waitForPromptAcknowledgment waits for a prompt-received event from the agent.
+// This is best-effort monitoring; it does not block workflow execution.
+// Logs DEBUG on success, WARN on timeout.
+func (o *Orchestrator) waitForPromptAcknowledgment(ctx context.Context, agentID, stepID string, timeout time.Duration) {
+	if o.eventRouter == nil {
+		return // No event router available
+	}
+
+	filter := map[string]string{"agent": agentID}
+	ch := o.eventRouter.RegisterWaiter("prompt-received", filter, timeout)
+
+	// Use a timer for active timeout handling
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case event, ok := <-ch:
+		if ok && event != nil {
+			o.logger.Debug("prompt acknowledged by agent",
+				"agent", agentID,
+				"step", stepID,
+			)
+		} else {
+			o.logger.Warn("prompt-received event not received (timeout)",
+				"agent", agentID,
+				"step", stepID,
+				"timeout", timeout,
+			)
+		}
+	case <-timer.C:
+		o.logger.Warn("prompt-received event not received (timeout)",
+			"agent", agentID,
+			"step", stepID,
+			"timeout", timeout,
+		)
+	case <-ctx.Done():
+		// Context cancelled, ignore
+	}
 }
 
 // Run starts the orchestrator main loop.
@@ -1915,6 +1963,10 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *typ
 	}); err != nil {
 		return fmt.Errorf("injecting prompt: %w", err)
 	}
+
+	// Start non-blocking prompt acknowledgment tracking
+	// This monitors for prompt-received events to detect "swallowed prompts"
+	go o.waitForPromptAcknowledgment(ctx, step.Agent.Agent, step.ID, 5*time.Second)
 
 	// Fire-and-forget mode: complete immediately after injection
 	if IsFireForget(step.Agent) {

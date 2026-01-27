@@ -372,6 +372,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Create IPC handler (with orchestrator reference for thread-safe state mutations)
 	ipcHandler := orchestrator.NewIPCHandler(orch, store, agentManager, logger)
 
+	// Wire up event router to orchestrator for prompt acknowledgment tracking
+	orch.SetEventRouter(ipcHandler.EventRouter())
+
 	// Start IPC server
 	ipcServer := ipc.NewServer(workflowID, ipcHandler, logger)
 	if err := ipcServer.StartAsync(ctx); err != nil {
