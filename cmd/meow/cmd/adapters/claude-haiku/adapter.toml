@@ -17,10 +17,16 @@ startup_delay = "3s"
 TMUX = ""
 
 [prompt_injection]
-# Keys to send before the prompt to ensure clean state
-pre_keys = ["Escape"]
-# Small delay after pre_keys for the state change to take effect
-pre_delay = "100ms"
+# Stabilization sequence for subsequent prompts (after first prompt).
+# This ensures Claude is fully idle before injecting the next prompt.
+pre_stabilize_delay = "3s"
+stabilize_sequence = [
+    { key = "Escape", delay = "2s" }
+]
+
+# Standard injection (after stabilization completes)
+pre_keys = []
+pre_delay = "0s"
 # How to send the prompt text:
 # - "literal": tmux send-keys -l (handles special chars and newlines)
 # - "keys": tmux send-keys without -l (interprets key names)
