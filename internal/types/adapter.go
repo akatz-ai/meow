@@ -85,6 +85,11 @@ type PromptInjectionConfig struct {
 
 	// PostDelay is how long to wait after sending prompt before sending post_keys
 	PostDelay Duration `toml:"post_delay"`
+
+	// SendKeysTimeout is the maximum time to wait for tmux send-keys commands.
+	// This includes sending the prompt text and post-keys (Enter).
+	// Default: 30 seconds. Increase for very large prompts or slow terminals.
+	SendKeysTimeout Duration `toml:"send_keys_timeout"`
 }
 
 // GracefulStopConfig defines how to gracefully stop an agent.
@@ -161,4 +166,12 @@ func (c *AdapterConfig) GetGracefulStopWait() time.Duration {
 		return 2 * time.Second
 	}
 	return c.GracefulStop.Wait.Duration()
+}
+
+// GetSendKeysTimeout returns the send-keys timeout, defaulting to 30 seconds.
+func (c *AdapterConfig) GetSendKeysTimeout() time.Duration {
+	if c.PromptInjection.SendKeysTimeout == 0 {
+		return 30 * time.Second
+	}
+	return c.PromptInjection.SendKeysTimeout.Duration()
 }

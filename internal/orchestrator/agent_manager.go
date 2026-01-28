@@ -22,12 +22,13 @@ import (
 type TmuxAgentManager struct {
 	logger *slog.Logger
 
-	mu         sync.RWMutex
-	agents     map[string]*agentState // agentID -> state
-	workdir    string                 // Base working directory
-	tmuxSocket string                 // Custom tmux socket path (empty = default)
-	tmux       *agent.TmuxWrapper     // TmuxWrapper for session management
-	registry   *adapter.Registry      // Adapter registry for agent configs
+	mu              sync.RWMutex
+	agents          map[string]*agentState // agentID -> state
+	workdir         string                 // Base working directory
+	tmuxSocket      string                 // Custom tmux socket path (empty = default)
+	sendKeysTimeout time.Duration          // Timeout for send-keys operations
+	tmux            *agent.TmuxWrapper     // TmuxWrapper for session management
+	registry        *adapter.Registry      // Adapter registry for agent configs
 
 	// Logging configuration (abstracted from backend details)
 	loggingEnabled bool   // Whether to capture agent output to log files
@@ -77,22 +78,36 @@ func NewTmuxAgentManagerWithOptions(workdir string, registry *adapter.Registry, 
 		}
 	}
 
-	// Create TmuxWrapper with socket path if configured
+	// Get send-keys timeout from default adapter (or use 30s default)
+	sendKeysTimeout := 30 * time.Second
+	if registry != nil {
+		defaultAdapter := os.Getenv("MEOW_DEFAULT_ADAPTER")
+		if defaultAdapter == "" {
+			defaultAdapter = "claude"
+		}
+		if cfg, err := registry.Load(defaultAdapter); err == nil {
+			sendKeysTimeout = cfg.GetSendKeysTimeout()
+		}
+	}
+
+	// Create TmuxWrapper with socket path and timeout if configured
 	var tmuxOpts []agent.TmuxOption
 	if tmuxSocket != "" {
 		tmuxOpts = append(tmuxOpts, agent.WithSocketPath(tmuxSocket))
 	}
+	tmuxOpts = append(tmuxOpts, agent.WithTimeout(sendKeysTimeout))
 	tmuxWrapper := agent.NewTmuxWrapper(tmuxOpts...)
 
 	return &TmuxAgentManager{
-		logger:         logger.With("component", "agent-manager"),
-		agents:         make(map[string]*agentState),
-		workdir:        workdir,
-		tmuxSocket:     tmuxSocket,
-		tmux:           tmuxWrapper,
-		registry:       registry,
-		loggingEnabled: opts.LoggingEnabled,
-		logDir:         opts.LogDir,
+		logger:          logger.With("component", "agent-manager"),
+		agents:          make(map[string]*agentState),
+		workdir:         workdir,
+		tmuxSocket:      tmuxSocket,
+		sendKeysTimeout: sendKeysTimeout,
+		tmux:            tmuxWrapper,
+		registry:        registry,
+		loggingEnabled:  opts.LoggingEnabled,
+		logDir:          opts.LogDir,
 	}
 }
 
@@ -100,10 +115,13 @@ func NewTmuxAgentManagerWithOptions(workdir string, registry *adapter.Registry, 
 // This is primarily for testing with isolated tmux servers.
 func (m *TmuxAgentManager) SetTmuxSocket(socket string) {
 	m.tmuxSocket = socket
-	// Recreate TmuxWrapper with new socket path
+	// Recreate TmuxWrapper with new socket path and preserved timeout
 	var opts []agent.TmuxOption
 	if socket != "" {
 		opts = append(opts, agent.WithSocketPath(socket))
+	}
+	if m.sendKeysTimeout > 0 {
+		opts = append(opts, agent.WithTimeout(m.sendKeysTimeout))
 	}
 	m.tmux = agent.NewTmuxWrapper(opts...)
 }
@@ -385,14 +403,17 @@ func (m *TmuxAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 
 	// Send prompt using the configured method
 	method := adapterCfg.GetPromptInjectionMethod()
+	start := time.Now()
+	var sendErr error
 	if method == "literal" {
-		if err := m.tmux.SendKeysLiteral(ctx, sessionName, prompt); err != nil {
-			return fmt.Errorf("sending prompt (literal): %w", err)
-		}
+		sendErr = m.tmux.SendKeysLiteral(ctx, sessionName, prompt)
 	} else {
-		if err := m.tmux.SendKeysSpecial(ctx, sessionName, prompt); err != nil {
-			return fmt.Errorf("sending prompt (keys): %w", err)
-		}
+		sendErr = m.tmux.SendKeysSpecial(ctx, sessionName, prompt)
+	}
+	elapsed := time.Since(start)
+	m.logger.Debug("send-keys completed", "agent", agentID, "method", method, "bytes", len(prompt), "elapsed", elapsed)
+	if sendErr != nil {
+		return fmt.Errorf("sending prompt (%s): %w (took %v)", method, sendErr, elapsed)
 	}
 
 	// Wait post-delay before sending post-keys

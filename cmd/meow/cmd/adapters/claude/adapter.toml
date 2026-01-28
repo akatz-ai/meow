@@ -29,6 +29,10 @@ method = "literal"
 post_keys = ["Enter"]
 # Time to wait between sending prompt and sending post_keys
 post_delay = "500ms"
+# Maximum time for send-keys commands (prompt + Enter).
+# Increase for very large prompts or slow terminals.
+# Default: 30s (uncomment to override)
+# send_keys_timeout = "30s"
 
 [graceful_stop]
 # Keys to send to initiate graceful shutdown

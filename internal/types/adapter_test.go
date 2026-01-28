@@ -30,6 +30,7 @@ pre_delay = "100ms"
 method = "literal"
 post_keys = ["Enter"]
 post_delay = "500ms"
+send_keys_timeout = "45s"
 
 [graceful_stop]
 keys = ["C-c"]
@@ -78,6 +79,9 @@ wait = "2s"
 	}
 	if len(config.PromptInjection.PostKeys) != 1 || config.PromptInjection.PostKeys[0] != "Enter" {
 		t.Errorf("expected post_keys = [Enter], got %v", config.PromptInjection.PostKeys)
+	}
+	if config.GetSendKeysTimeout() != 45*time.Second {
+		t.Errorf("expected send_keys_timeout = 45s, got %v", config.GetSendKeysTimeout())
 	}
 
 	// Check graceful stop
@@ -185,6 +189,25 @@ func TestAdapterConfig_Defaults(t *testing.T) {
 	// Test default graceful stop wait
 	if config.GetGracefulStopWait() != 2*time.Second {
 		t.Errorf("expected default graceful stop wait = 2s, got %v", config.GetGracefulStopWait())
+	}
+
+	// Test default send keys timeout
+	if config.GetSendKeysTimeout() != 30*time.Second {
+		t.Errorf("expected default send keys timeout = 30s, got %v", config.GetSendKeysTimeout())
+	}
+}
+
+func TestAdapterConfig_GetSendKeysTimeout(t *testing.T) {
+	// Test default (zero value)
+	cfg := &AdapterConfig{}
+	if cfg.GetSendKeysTimeout() != 30*time.Second {
+		t.Errorf("expected default 30s, got %v", cfg.GetSendKeysTimeout())
+	}
+
+	// Test configured value
+	cfg.PromptInjection.SendKeysTimeout = Duration(60 * time.Second)
+	if cfg.GetSendKeysTimeout() != 60*time.Second {
+		t.Errorf("expected 60s, got %v", cfg.GetSendKeysTimeout())
 	}
 }
 
