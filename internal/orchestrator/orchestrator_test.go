@@ -108,6 +108,8 @@ type mockAgentManager struct {
 	injectedPrompts []string
 	// injections tracks all InjectPrompt calls with their options
 	injections []injectedPromptRecord
+	// injectErr if set, InjectPrompt returns this error
+	injectErr error
 }
 
 func newMockAgentManager() *mockAgentManager {
@@ -149,6 +151,9 @@ func (m *mockAgentManager) InjectPrompt(ctx context.Context, agentID string, pro
 		Prompt:    prompt,
 		Stabilize: opts.Stabilize,
 	})
+	if m.injectErr != nil {
+		return m.injectErr
+	}
 	return nil
 }
 
@@ -3616,5 +3621,154 @@ func TestOrchestrator_PromptRecovery_NoRouter(t *testing.T) {
 	// Should complete almost immediately (no blocking)
 	if elapsed > 100*time.Millisecond {
 		t.Errorf("waitForPromptAcknowledgmentWithRecovery with nil router took too long: %v", elapsed)
+	}
+}
+
+// ===========================================================================
+// Agent Injection Failure Recovery Tests
+// ===========================================================================
+
+// TestOrchestrator_AgentInjectionFailure_SessionAlive tests that when InjectPrompt
+// fails but the agent session is still alive, the step is reset to pending for retry.
+func TestOrchestrator_AgentInjectionFailure_SessionAlive(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a pending agent step
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
+
+	wf.Steps["agent-step"] = &types.Step{
+		ID:       "agent-step",
+		Executor: types.ExecutorAgent,
+		Status:   types.StepStatusPending,
+		Agent:    &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent is running (alive), but InjectPrompt will fail
+	agents.running["test-agent"] = true
+	agents.injectErr = fmt.Errorf("send-keys: signal: killed: not in a mode (took 30.022291698s)")
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.processWorkflow(ctx, wf)
+	if err != nil {
+		t.Fatalf("processWorkflow error = %v", err)
+	}
+
+	// Step should be reset to pending (transient error, agent alive → retry)
+	step := wf.Steps["agent-step"]
+	if step.Status != types.StepStatusPending {
+		t.Errorf("Agent step status = %v, want %v (should reset to pending when agent alive)",
+			step.Status, types.StepStatusPending)
+	}
+
+	// StartedAt should be cleared (reset to pending clears it)
+	if step.StartedAt != nil {
+		t.Error("Agent step StartedAt should be nil after reset to pending")
+	}
+}
+
+// TestOrchestrator_AgentInjectionFailure_SessionDead tests that when InjectPrompt
+// fails and the agent session is dead, the step is marked as failed.
+func TestOrchestrator_AgentInjectionFailure_SessionDead(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a pending agent step
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
+
+	wf.Steps["agent-step"] = &types.Step{
+		ID:       "agent-step",
+		Executor: types.ExecutorAgent,
+		Status:   types.StepStatusPending,
+		Agent:    &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent is NOT running (dead), and InjectPrompt will fail
+	agents.running["test-agent"] = false
+	agents.injectErr = fmt.Errorf("send-keys: signal: killed: not in a mode (took 30.022291698s)")
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.processWorkflow(ctx, wf)
+	if err != nil {
+		t.Fatalf("processWorkflow error = %v", err)
+	}
+
+	// Step should be failed (agent session is dead, no recovery possible)
+	step := wf.Steps["agent-step"]
+	if step.Status != types.StepStatusFailed {
+		t.Errorf("Agent step status = %v, want %v (should fail when agent dead)",
+			step.Status, types.StepStatusFailed)
+	}
+
+	// Error should be recorded
+	if step.Error == nil {
+		t.Error("Agent step should have an error recorded")
+	}
+}
+
+// TestOrchestrator_AgentInjectionFailure_DispatchErrorFallback tests that if
+// handleAgent returns an error and the step is in running status, the dispatch
+// error handler in processWorkflow fails the step (defense-in-depth).
+func TestOrchestrator_AgentInjectionFailure_DispatchErrorFallback(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with a pending agent step
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
+
+	wf.Steps["agent-step"] = &types.Step{
+		ID:       "agent-step",
+		Executor: types.ExecutorAgent,
+		Status:   types.StepStatusPending,
+		Agent:    &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	// Agent is dead and InjectPrompt will fail
+	// This tests the dispatch error fallback in processWorkflow:
+	// when dispatch returns an error and the step is in running state,
+	// it should be failed regardless of executor type.
+	agents.running["test-agent"] = false
+	agents.injectErr = fmt.Errorf("injection failed")
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.processWorkflow(ctx, wf)
+	if err != nil {
+		t.Fatalf("processWorkflow error = %v", err)
+	}
+
+	// After dispatch error, the step that was transitioned to running by handleAgent
+	// should be failed by the dispatch error handler (defense-in-depth).
+	// Currently, processWorkflow only fails orchestrator executors on dispatch error.
+	// Agent steps are NOT orchestrator executors, so they get stuck in running.
+	step := wf.Steps["agent-step"]
+	if step.Status != types.StepStatusFailed {
+		t.Errorf("Agent step status = %v, want %v (dispatch error should fail running agent steps)",
+			step.Status, types.StepStatusFailed)
+	}
+
+	// Error should be recorded
+	if step.Error == nil {
+		t.Error("Agent step should have an error recorded after dispatch failure")
 	}
 }
