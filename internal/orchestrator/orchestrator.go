@@ -507,8 +507,9 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error
 
 		if err := o.dispatch(ctx, wf, step); err != nil {
 			o.logger.Error("dispatch error", "step", step.ID, "error", err)
-			// For orchestrator executors, mark step as failed
-			if step.Executor.IsOrchestrator() {
+			// Fail any step left in running state after a dispatch error (defense-in-depth).
+			// Steps reset to pending by the handler (e.g., transient injection failure) won't match.
+			if step.Status == types.StepStatusRunning {
 				step.Fail(&types.StepError{Message: err.Error()})
 			}
 		}
@@ -2064,7 +2065,19 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *typ
 	if err := o.agents.InjectPrompt(ctx, step.Agent.Agent, result.Prompt, InjectPromptOpts{
 		Stabilize: stabilize,
 	}); err != nil {
-		return fmt.Errorf("injecting prompt: %w", err)
+		// Check if agent session is still alive
+		alive, _ := o.agents.IsRunning(ctx, step.Agent.Agent)
+		if alive {
+			// Transient error (e.g., tmux 'not in a mode') — reset to pending for retry
+			o.logger.Warn("prompt injection failed, resetting step to pending for retry",
+				"step", step.ID, "agent", step.Agent.Agent, "error", err)
+			if resetErr := step.ResetToPending(); resetErr != nil {
+				return fmt.Errorf("resetting step after injection failure: %w", resetErr)
+			}
+			return nil // No error — step will be retried on next tick
+		}
+		// Agent session is dead — propagate error to fail the step
+		return fmt.Errorf("injecting prompt (agent session dead): %w", err)
 	}
 
 	// Start non-blocking prompt acknowledgment tracking with recovery
