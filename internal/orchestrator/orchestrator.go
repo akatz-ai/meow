@@ -85,7 +85,7 @@ type Orchestrator struct {
 	wfMu sync.Mutex
 
 	// Track pending async command executions (branch and shell-as-sugar)
-	// Key: stepID (string)
+	// Key: "workflowID:stepID" (string)
 	// Value: context.CancelFunc
 	pendingCommands sync.Map
 
@@ -429,7 +429,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error
 	blockedModified := o.checkBlockedSteps(wf)
 
 	// Check for foreach steps with implicit join that are ready to complete
-	o.checkForeachCompletion(wf)
+	foreachModified := o.checkForeachCompletion(wf)
 
 	// Check for branch steps waiting for their expanded children to complete
 	branchModified := o.checkBranchCompletion(wf)
@@ -468,7 +468,7 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error
 			return o.store.Save(ctx, wf)
 		}
 		// Save if timeout handling or blocked step detection modified state
-		if timeoutModified || blockedModified || branchModified {
+		if timeoutModified || blockedModified || foreachModified || branchModified {
 			return o.store.Save(ctx, wf)
 		}
 		return nil // Waiting for external completion
@@ -516,10 +516,10 @@ func (o *Orchestrator) processWorkflow(ctx context.Context, wf *types.Run) error
 		dispatchedSteps[step.ID] = step
 	}
 
-	// Save if we dispatched any steps.
+	// Save if we dispatched any steps or if state was modified by checks.
 	// Note: All state mutations (including IPC handler) go through wfMu mutex,
 	// so no merge logic is needed - we hold the lock for the entire operation.
-	if len(dispatchedSteps) > 0 {
+	if len(dispatchedSteps) > 0 || timeoutModified || blockedModified || foreachModified || branchModified {
 		return o.store.Save(ctx, wf)
 	}
 
@@ -764,6 +764,13 @@ func (o *Orchestrator) HandleStepDone(ctx context.Context, msg *ipc.StepDoneMess
 		return fmt.Errorf("getting workflow %s: %w", msg.Workflow, err)
 	}
 
+	// Guard: refuse mutations during/after cleanup
+	if wf.Status == types.RunStatusCleaningUp || wf.Status.IsTerminal() {
+		o.logger.Info("ignoring step-done during cleanup",
+			"step", msg.Step, "status", wf.Status)
+		return nil
+	}
+
 	var step *types.Step
 	var ok bool
 
@@ -960,7 +967,8 @@ func (o *Orchestrator) checkBlockedSteps(wf *types.Run) bool {
 
 // checkForeachCompletion checks for foreach steps with implicit join that are ready to complete.
 // When join=true (default) and all child steps are done, the foreach step is marked done.
-func (o *Orchestrator) checkForeachCompletion(wf *types.Run) {
+func (o *Orchestrator) checkForeachCompletion(wf *types.Run) bool {
+	modified := false
 	for _, step := range wf.Steps {
 		// Only check running foreach steps with join=true
 		if step.Status != types.StepStatusRunning {
@@ -975,6 +983,7 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Run) {
 
 		// Check if all children are complete
 		if IsForeachComplete(step, wf.Steps) {
+			modified = true
 			// Check if any children failed
 			if IsForeachFailed(step, wf.Steps) {
 				o.logger.Info("foreach step failed (child failed)",
@@ -998,6 +1007,7 @@ func (o *Orchestrator) checkForeachCompletion(wf *types.Run) {
 			}
 		}
 	}
+	return modified
 }
 
 // checkBranchCompletion checks for branch steps that are waiting for their expanded
@@ -1156,18 +1166,19 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Run, reason typ
 		"reason", reason,
 		"hasCleanupScript", cleanupScript != "")
 
-	// 1. Set status to cleaning_up
+	// 1-2. Set cleaning_up and persist UNDER LOCK (so HandleStepDone sees it)
+	o.wfMu.Lock()
 	if err := wf.StartCleanup(reason); err != nil {
+		o.wfMu.Unlock()
 		return fmt.Errorf("starting cleanup: %w", err)
 	}
-
-	// 2. Persist state (so cleanup survives crash)
 	if err := o.store.Save(ctx, wf); err != nil {
 		o.logger.Error("failed to save workflow cleanup state", "error", err)
 		// Continue with cleanup anyway
 	}
+	o.wfMu.Unlock()
 
-	// 3. Kill all agent tmux sessions
+	// 3. Kill all agent tmux sessions (long I/O, runs WITHOUT lock)
 	if o.agents != nil {
 		if err := o.agents.KillAll(ctx, wf); err != nil {
 			o.logger.Error("failed to kill agents during cleanup", "error", err)
@@ -1175,7 +1186,7 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Run, reason typ
 		}
 	}
 
-	// 4. Execute cleanup script (if defined for this trigger)
+	// 4. Execute cleanup script (if defined for this trigger, long I/O, runs WITHOUT lock)
 	if cleanupScript != "" {
 		if err := o.runCleanupScript(ctx, wf, cleanupScript); err != nil {
 			o.logger.Error("cleanup script failed", "error", err)
@@ -1183,17 +1194,24 @@ func (o *Orchestrator) RunCleanup(ctx context.Context, wf *types.Run, reason typ
 		}
 	}
 
-	// 5. Set final status
-	wf.FinishCleanup()
+	// 5-6. Finalize UNDER LOCK (re-read to avoid stale pointer)
+	o.wfMu.Lock()
+	freshWf, err := o.store.Get(ctx, wf.ID)
+	if err != nil {
+		o.wfMu.Unlock()
+		return fmt.Errorf("re-reading workflow for finalization: %w", err)
+	}
+	freshWf.FinishCleanup()
+	saveErr := o.store.Save(ctx, freshWf)
+	o.wfMu.Unlock()
 
-	// 6. Persist final state
-	if err := o.store.Save(ctx, wf); err != nil {
-		return fmt.Errorf("saving final workflow state: %w", err)
+	if saveErr != nil {
+		return fmt.Errorf("saving final workflow state: %w", saveErr)
 	}
 
 	o.logger.Info("workflow cleanup complete",
-		"workflow", wf.ID,
-		"finalStatus", wf.Status)
+		"workflow", freshWf.ID,
+		"finalStatus", freshWf.Status)
 
 	return nil
 }
@@ -1797,7 +1815,7 @@ func (o *Orchestrator) handleBranch(ctx context.Context, wf *types.Run, step *ty
 	}
 
 	// Track for cleanup (shared with shell-as-sugar)
-	o.pendingCommands.Store(stepID, cancel)
+	o.pendingCommands.Store(workflowID+":"+stepID, cancel)
 
 	// Launch async condition execution
 	o.wg.Add(1)
@@ -1821,7 +1839,7 @@ func (o *Orchestrator) executeBranchConditionAsync(
 	cfg *types.BranchConfig,
 ) {
 	// Clean up tracking regardless of outcome
-	defer o.pendingCommands.Delete(stepID)
+	defer o.pendingCommands.Delete(workflowID + ":" + stepID)
 
 	// Execute condition command (may block for seconds/minutes/hours)
 	// Pass IPC socket path so condition can use meow event/await-event
@@ -1897,7 +1915,7 @@ func (o *Orchestrator) executeBranchConditionAsync(
 func (o *Orchestrator) cancelPendingCommands() {
 	count := 0
 	o.pendingCommands.Range(func(key, value any) bool {
-		stepID, ok := key.(string)
+		cmdKey, ok := key.(string)
 		if !ok {
 			return true // skip invalid entry
 		}
@@ -1906,7 +1924,7 @@ func (o *Orchestrator) cancelPendingCommands() {
 			return true // skip invalid entry
 		}
 
-		o.logger.Info("cancelling pending command", "step", stepID)
+		o.logger.Info("cancelling pending command", "key", cmdKey)
 		cancel()
 		count++
 		return true // continue iteration
@@ -2082,7 +2100,11 @@ func (o *Orchestrator) handleAgent(ctx context.Context, wf *types.Run, step *typ
 
 	// Start non-blocking prompt acknowledgment tracking with recovery
 	// This monitors for prompt-received events and attempts recovery if the prompt is swallowed
-	go o.waitForPromptAcknowledgmentWithRecovery(ctx, step.Agent.Agent, step.ID, result.Prompt, 5*time.Second)
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		o.waitForPromptAcknowledgmentWithRecovery(ctx, step.Agent.Agent, step.ID, result.Prompt, 5*time.Second)
+	}()
 
 	// Fire-and-forget mode: complete immediately after injection
 	if IsFireForget(step.Agent) {

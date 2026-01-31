@@ -1798,8 +1798,8 @@ func TestHandleBranch_StepStaysRunning(t *testing.T) {
 		t.Error("Step StartedAt should be set")
 	}
 
-	// Clean up
-	if cancel, ok := orch.pendingCommands.Load("branch-step"); ok {
+	// Clean up (composite key: workflowID:stepID)
+	if cancel, ok := orch.pendingCommands.Load("test-wf:branch-step"); ok {
 		if cancelFunc, ok := cancel.(context.CancelFunc); ok {
 			cancelFunc()
 		}
@@ -1838,10 +1838,10 @@ func TestHandleBranch_TracksPendingCommand(t *testing.T) {
 		t.Fatalf("handleBranch error = %v", err)
 	}
 
-	// pendingCommands should contain the step ID
-	cancel, ok := orch.pendingCommands.Load("branch-step")
+	// pendingCommands should contain the composite key workflowID:stepID
+	cancel, ok := orch.pendingCommands.Load("test-wf:branch-step")
 	if !ok {
-		t.Fatal("pendingCommands does not contain branch-step")
+		t.Fatal("pendingCommands does not contain test-wf:branch-step")
 	}
 
 	// Value should be a cancel function
@@ -1924,9 +1924,9 @@ func TestParallelBranchSteps(t *testing.T) {
 		t.Errorf("branch-2 status = %v, want running", wf.Steps["branch-2"].Status)
 	}
 
-	// Both should be tracked in pendingCommands
-	_, ok1 := orch.pendingCommands.Load("branch-1")
-	_, ok2 := orch.pendingCommands.Load("branch-2")
+	// Both should be tracked in pendingCommands (composite key: workflowID:stepID)
+	_, ok1 := orch.pendingCommands.Load("test-wf:branch-1")
+	_, ok2 := orch.pendingCommands.Load("test-wf:branch-2")
 	if !ok1 {
 		t.Error("branch-1 not tracked in pendingCommands")
 	}
@@ -2356,8 +2356,8 @@ func TestConditionCancelledMidExecution(t *testing.T) {
 		t.Errorf("Step status = %v, want running", wf.Steps["branch-step"].Status)
 	}
 
-	// Verify there's a pending command being tracked
-	cancelFunc, hasPending := orch.pendingCommands.Load("branch-step")
+	// Verify there's a pending command being tracked (composite key: workflowID:stepID)
+	cancelFunc, hasPending := orch.pendingCommands.Load("test-wf:branch-step")
 	if !hasPending {
 		t.Fatal("Expected pending command to be tracked")
 	}
@@ -2420,7 +2420,7 @@ func TestSignalTriggersCleanShutdown(t *testing.T) {
 		t.Errorf("Step status = %v, want running", wf.Steps["branch-step"].Status)
 	}
 
-	_, hasPending := orch.pendingCommands.Load("branch-step")
+	_, hasPending := orch.pendingCommands.Load("test-wf:branch-step")
 	if !hasPending {
 		t.Error("Expected pending command to be tracked")
 	}
@@ -2441,7 +2441,7 @@ func TestSignalTriggersCleanShutdown(t *testing.T) {
 	}
 
 	// Verify cleanup happened (defer in executeBranchConditionAsync removes from map)
-	_, stillPending := orch.pendingCommands.Load("branch-step")
+	_, stillPending := orch.pendingCommands.Load("test-wf:branch-step")
 	if stillPending {
 		t.Error("pendingCommands should have been cleaned up after shutdown")
 	}
