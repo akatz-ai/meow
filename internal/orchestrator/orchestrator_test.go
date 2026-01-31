@@ -3723,6 +3723,315 @@ func TestOrchestrator_AgentInjectionFailure_SessionDead(t *testing.T) {
 // TestOrchestrator_AgentInjectionFailure_DispatchErrorFallback tests that if
 // handleAgent returns an error and the step is in running status, the dispatch
 // error handler in processWorkflow fails the step (defense-in-depth).
+// ===========================================================================
+// Bug Fix Tests: Timeout Persistence, Key Collision, Cleanup Mutex Safety
+// ===========================================================================
+
+// TestOrchestrator_TimeoutPersistence_SavesWhenReadyStepsSkipped tests that
+// processWorkflow saves workflow state when checkStepTimeouts modifies state
+// but all ready steps are skipped (e.g., busy agent).
+// Bug: meow-86fo - timeout state changes dropped when readySteps > 0 but none dispatch.
+func TestOrchestrator_TimeoutPersistence_SavesWhenReadyStepsSkipped(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow with two agent steps targeting the same agent:
+	// - Step A: running and timed out (will trigger timeout handling)
+	// - Step B: pending, ready (no needs), targets same busy agent (will be skipped)
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
+
+	// Step A: running, started 2 seconds ago, 1s timeout → already timed out
+	startedAt := time.Now().Add(-2 * time.Second)
+	wf.Steps["step-a"] = &types.Step{
+		ID:        "step-a",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent: &types.AgentConfig{
+			Agent:   "test-agent",
+			Prompt:  "Do work A",
+			Timeout: "1s",
+		},
+	}
+
+	// Step B: pending, ready (no needs), targets same agent → will be skipped because agent is busy
+	wf.Steps["step-b"] = &types.Step{
+		ID:       "step-b",
+		Executor: types.ExecutorAgent,
+		Status:   types.StepStatusPending,
+		Agent: &types.AgentConfig{
+			Agent:  "test-agent",
+			Prompt: "Do work B",
+		},
+	}
+
+	store.workflows[wf.ID] = wf
+
+	// Mark agent as running so it's "busy" (step A is running on it)
+	agents.running["test-agent"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.processWorkflow(ctx, wf)
+	if err != nil {
+		t.Fatalf("processWorkflow error = %v", err)
+	}
+
+	// Step A should have InterruptedAt set (timeout handling modified state)
+	if wf.Steps["step-a"].InterruptedAt == nil {
+		t.Fatal("Step A InterruptedAt should be set by timeout check")
+	}
+
+	// The critical assertion: state MUST be saved even though no steps were dispatched.
+	// Currently (buggy): readySteps=[step-b] is non-empty, dispatchedSteps={} is empty,
+	// so the code falls through to `return nil` without saving the timeout state.
+	store.mu.Lock()
+	saveCalls := 0
+	for _, call := range store.calls {
+		if strings.HasPrefix(call, "Save:") {
+			saveCalls++
+		}
+	}
+	store.mu.Unlock()
+
+	if saveCalls == 0 {
+		t.Error("processWorkflow did not save workflow state; timeout modifications " +
+			"(InterruptedAt) were dropped because readySteps was non-empty but none dispatched")
+	}
+}
+
+// TestOrchestrator_PendingCommandsKeyCollision verifies that two concurrent
+// workflows with the same step ID do not collide in pendingCommands.
+// Bug: meow-0c8l - pendingCommands keyed by stepID alone causes overwrites.
+func TestOrchestrator_PendingCommandsKeyCollision(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create two workflows, each with a branch step named "monitor"
+	wfA := types.NewRun("workflow-a", "template-a", nil)
+	wfA.Status = types.RunStatusRunning
+	wfA.Steps["monitor"] = &types.Step{
+		ID:       "monitor",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 2", // Moderate sleep (leaked goroutine won't block long)
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wfA.ID] = wfA
+
+	wfB := types.NewRun("workflow-b", "template-b", nil)
+	wfB.Status = types.RunStatusRunning
+	wfB.Steps["monitor"] = &types.Step{
+		ID:       "monitor",
+		Executor: types.ExecutorBranch,
+		Status:   types.StepStatusPending,
+		Branch: &types.BranchConfig{
+			Condition: "sleep 2",
+			OnTrue:    &types.BranchTarget{Template: ".on-true"},
+		},
+	}
+	store.workflows[wfB.ID] = wfB
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+
+	// Launch branch step for workflow A
+	err := orch.handleBranch(ctx, wfA, wfA.Steps["monitor"])
+	if err != nil {
+		t.Fatalf("handleBranch for wfA error = %v", err)
+	}
+
+	// Launch branch step for workflow B (same step ID "monitor")
+	err = orch.handleBranch(ctx, wfB, wfB.Steps["monitor"])
+	if err != nil {
+		t.Fatalf("handleBranch for wfB error = %v", err)
+	}
+
+	// Count entries in pendingCommands - should be 2 (one per workflow)
+	// Currently (buggy): both store under key "monitor", so wfB overwrites wfA's cancel
+	entryCount := 0
+	orch.pendingCommands.Range(func(key, value any) bool {
+		entryCount++
+		return true
+	})
+
+	if entryCount != 2 {
+		t.Errorf("pendingCommands has %d entries, want 2 (one per workflow); "+
+			"step ID collision caused overwrite", entryCount)
+	}
+
+	// Cleanup: cancel all pending commands and wait
+	orch.cancelPendingCommands()
+	orch.wg.Wait()
+}
+
+// TestOrchestrator_HandleStepDone_IgnoredDuringCleanup verifies that
+// HandleStepDone returns early when the workflow is in cleaning_up state.
+// Bug: meow-rywz - HandleStepDone can mutate workflow during RunCleanup.
+func TestOrchestrator_HandleStepDone_IgnoredDuringCleanup(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow in cleaning_up state with a running agent step
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusCleaningUp
+	wf.PriorStatus = types.RunStatusDone
+
+	startedAt := time.Now().Add(-1 * time.Second)
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.HandleStepDone(ctx, &ipc.StepDoneMessage{
+		Workflow: wf.ID,
+		Step:     "agent-step",
+		Agent:    "test-agent",
+		Outputs:  map[string]any{},
+	})
+
+	// Currently (buggy): HandleStepDone succeeds and mutates the step to complete,
+	// racing with RunCleanup which is concurrently saving the workflow.
+	// After fix: should return nil (ignored) without modifying step state.
+	if err != nil {
+		t.Fatalf("HandleStepDone error = %v (should succeed silently when cleaning up)", err)
+	}
+
+	// Step should NOT be completed - it should remain running
+	step := wf.Steps["agent-step"]
+	if step.Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want %v; HandleStepDone should not mutate "+
+			"workflow during cleanup", step.Status, types.StepStatusRunning)
+	}
+}
+
+// TestOrchestrator_HandleStepDone_IgnoredWhenTerminal verifies that
+// HandleStepDone returns early when the workflow is in a terminal state.
+// Bug: meow-rywz - late step-done messages after cleanup can cause issues.
+func TestOrchestrator_HandleStepDone_IgnoredWhenTerminal(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	// Create workflow in terminal (done) state with a step still marked running
+	// (this can happen if cleanup killed the agent before it completed)
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusDone
+	now := time.Now()
+	wf.DoneAt = &now
+
+	startedAt := time.Now().Add(-1 * time.Second)
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+	err := orch.HandleStepDone(ctx, &ipc.StepDoneMessage{
+		Workflow: wf.ID,
+		Step:     "agent-step",
+		Agent:    "test-agent",
+		Outputs:  map[string]any{},
+	})
+
+	// After fix: should return nil (ignored) without modifying step state
+	if err != nil {
+		t.Fatalf("HandleStepDone error = %v (should succeed silently when terminal)", err)
+	}
+
+	// Step should NOT be completed
+	step := wf.Steps["agent-step"]
+	if step.Status != types.StepStatusRunning {
+		t.Errorf("Step status = %v, want %v; HandleStepDone should not mutate "+
+			"workflow in terminal state", step.Status, types.StepStatusRunning)
+	}
+}
+
+// TestOrchestrator_RunCleanup_MutexSafety verifies that RunCleanup persists
+// the cleaning_up status so concurrent HandleStepDone calls see it.
+// Bug: meow-rywz - RunCleanup doesn't hold mutex, allowing concurrent mutations.
+func TestOrchestrator_RunCleanup_MutexSafety(t *testing.T) {
+	store := newMockRunStore()
+	agents := newMockAgentManager()
+	shell := newMockShellRunner()
+	expander := &mockTemplateExpander{}
+	logger := testLogger()
+
+	wf := types.NewRun("test-wf", "test-template", nil)
+	wf.Status = types.RunStatusRunning
+	wf.CleanupOnSuccess = "echo cleanup"
+
+	startedAt := time.Now().Add(-1 * time.Second)
+	wf.Steps["agent-step"] = &types.Step{
+		ID:        "agent-step",
+		Executor:  types.ExecutorAgent,
+		Status:    types.StepStatusRunning,
+		StartedAt: &startedAt,
+		Agent:     &types.AgentConfig{Agent: "test-agent", Prompt: "Do work"},
+	}
+	store.workflows[wf.ID] = wf
+	agents.running["test-agent"] = true
+
+	orch := New(testConfig(), store, agents, shell, expander, logger)
+
+	ctx := context.Background()
+
+	// Run cleanup in a goroutine (simulating processWorkflow calling it)
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.RunCleanup(ctx, wf, types.RunStatusDone)
+	}()
+
+	// Give RunCleanup a moment to start, then try HandleStepDone
+	time.Sleep(50 * time.Millisecond)
+
+	// The workflow in the store should now show cleaning_up status
+	// (RunCleanup should have persisted it under the mutex before continuing to I/O)
+	storedWf, _ := store.Get(ctx, wf.ID)
+	if storedWf.Status != types.RunStatusCleaningUp && storedWf.Status != types.RunStatusDone {
+		t.Errorf("Workflow status during cleanup = %v, want cleaning_up or done", storedWf.Status)
+	}
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("RunCleanup error = %v", err)
+	}
+
+	// Final state should be terminal
+	if !wf.Status.IsTerminal() {
+		t.Errorf("Final workflow status = %v, want terminal", wf.Status)
+	}
+}
+
 func TestOrchestrator_AgentInjectionFailure_DispatchErrorFallback(t *testing.T) {
 	store := newMockRunStore()
 	agents := newMockAgentManager()
