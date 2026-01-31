@@ -123,16 +123,6 @@ func runDone(cmd *cobra.Command, args []string) error {
 		if verbose {
 			fmt.Printf("Step %s completed\n", stepID)
 		}
-		// Write marker file to signal expected stop to RW monitor
-		// This prevents the persistence monitor from treating the subsequent
-		// Stop hook event as an "unexpected stop" and sending unnecessary nudges
-		markerPath := fmt.Sprintf("/tmp/meow-expected-stop-%s", agentID)
-		if err := os.WriteFile(markerPath, []byte(stepID), 0644); err != nil {
-			// Non-fatal - just log if verbose
-			if verbose {
-				fmt.Printf("Warning: could not write expected-stop marker: %v\n", err)
-			}
-		}
 	case *ipc.ErrorMessage:
 		return fmt.Errorf("orchestrator error: %s", r.Message)
 	default:
